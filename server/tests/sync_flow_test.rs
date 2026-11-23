@@ -53,7 +53,7 @@ async fn test_full_upload_flow() {
 
     let file_data = FsFileData {
         block_ids: vec![file_block.clone()],
-        size: 100,
+        size: block_data.len() as i64,
         obj_type: 1,
         version: 1,
     };
@@ -69,7 +69,7 @@ async fn test_full_upload_flow() {
             modifier: "test@example.com".to_string(),
             mtime: chrono::Utc::now().timestamp(),
             name: "test.txt".to_string(),
-            size: 100,
+            size: block_data.len() as i64,
         }],
         obj_type: 3,
         version: 1,
@@ -238,7 +238,7 @@ async fn test_incremental_upload() {
 
     let file_data = FsFileData {
         block_ids: vec![block_id.clone()],
-        size: 100,
+        size: block_data.len() as i64,
         obj_type: 1,
         version: 1,
     };
@@ -254,7 +254,7 @@ async fn test_incremental_upload() {
             modifier: "test@example.com".to_string(),
             mtime: chrono::Utc::now().timestamp(),
             name: "file.txt".to_string(),
-            size: 100,
+            size: block_data.len() as i64,
         }],
         obj_type: 3,
         version: 1,
@@ -343,7 +343,7 @@ async fn test_incremental_upload_second_commit() {
 
     let a_file = FsFileData {
         block_ids: vec![a_block_id],
-        size: 100,
+        size: a_block_data.len() as i64,
         obj_type: 1,
         version: 1,
     };
@@ -357,7 +357,7 @@ async fn test_incremental_upload_second_commit() {
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "a.txt".to_string(),
-        size: 100,
+        size: a_block_data.len() as i64,
     };
     let root1 = FsDirData {
         dirents: vec![a_entry.clone()],
@@ -425,7 +425,7 @@ async fn test_incremental_upload_second_commit() {
 
     let b_file = FsFileData {
         block_ids: vec![b_block_id],
-        size: 100,
+        size: b_block_data.len() as i64,
         obj_type: 1,
         version: 1,
     };
@@ -439,7 +439,7 @@ async fn test_incremental_upload_second_commit() {
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "b.txt".to_string(),
-        size: 100,
+        size: b_block_data.len() as i64,
     };
     let root2 = FsDirData {
         dirents: vec![a_entry.clone(), b_entry.clone()],

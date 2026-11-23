@@ -197,7 +197,7 @@ async fn test_recv_fs_binary_format() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    let file_data = make_file_fs_data(vec![block_id.clone()], 512);
+    let file_data = make_file_fs_data(vec![block_id.clone()], block_data.len() as i64);
     let (fs_id, _compressed) = make_fs_entry(&file_data);
     upload_fs_objects(
         &client,
@@ -213,7 +213,7 @@ async fn test_recv_fs_binary_format() {
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "test.txt".to_string(),
-        size: 512,
+        size: block_data.len() as i64,
     }]);
     let (root_fs_id, _root_compressed) = make_fs_entry(&root_dir);
     upload_fs_objects(
@@ -963,7 +963,7 @@ async fn test_resolve_fs_id_root_path() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    let file_data = make_file_fs_data(vec![block_id.clone()], 64);
+    let file_data = make_file_fs_data(vec![block_id.clone()], block_data.len() as i64);
     let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
     let root_dir = make_dir_fs_data(vec![DirEntryData {
@@ -972,7 +972,7 @@ async fn test_resolve_fs_id_root_path() {
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "f.txt".to_string(),
-        size: 64,
+        size: block_data.len() as i64,
     }]);
     let (root_fs_id, _rc) = make_fs_entry(&root_dir);
 
@@ -1015,7 +1015,7 @@ async fn test_resolve_fs_id_deep_path() {
         .await;
     assert_eq!(resp.status(), 200);
 
-    let file_data = make_file_fs_data(vec![block_id.clone()], 32);
+    let file_data = make_file_fs_data(vec![block_id.clone()], block_data.len() as i64);
     let (file_fs_id, _fc) = make_fs_entry(&file_data);
 
     let sub_dir = make_dir_fs_data(vec![DirEntryData {
@@ -1024,7 +1024,7 @@ async fn test_resolve_fs_id_deep_path() {
         modifier: "test@example.com".to_string(),
         mtime: chrono::Utc::now().timestamp(),
         name: "nested.txt".to_string(),
-        size: 32,
+        size: block_data.len() as i64,
     }]);
     let (sub_fs_id, _sc) = make_fs_entry(&sub_dir);
 

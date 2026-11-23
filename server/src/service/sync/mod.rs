@@ -12,7 +12,7 @@ use base::common::{
     EMPTY_SHA1, FsDirData, FsFileData, S_IFDIR, SEAF_METADATA_TYPE_DIR, SEAF_METADATA_TYPE_FILE,
 };
 use base::error::AppError;
-use base::sanitize::validate_filename;
+use base::sanitize::validate_legacy_filename;
 use infra::crypto::fs_id::sha1_hex;
 use infra::serialization::pack_fs;
 use infra::storage::DynBlockStorage;
@@ -75,6 +75,34 @@ fn join_sync_path(prefix: &str, name: &str) -> String {
         format!("/{name}")
     } else {
         format!("{prefix}/{name}")
+    }
+}
+
+/// PKCS7 pads every client-encrypted block to a 16-byte boundary, so one block
+/// stores between 1 and 16 bytes more than the plaintext it holds. `repo.size` is
+/// plaintext bytes, so this is the per-block bound the accounting may drift by.
+const CLIENT_BLOCK_PADDING: i128 = 16;
+
+/// Whether a regular file's declared size (the plaintext `file_data.size`) agrees
+/// with the *logical* sizes of the blocks it references.
+///
+/// An unencrypted library stores a file's bytes verbatim, so the totals must be
+/// equal. A client-side-encrypted library stores PKCS7 ciphertext blocks: the
+/// stored total is the plaintext total rounded up per block, i.e. between the
+/// declared size and that size plus [`CLIENT_BLOCK_PADDING`] per block. A check
+/// that only enforced the lower bound would still let a client declare far fewer
+/// bytes than it stores (the quota bypass); the padding bound is what closes it.
+fn declared_size_matches_blocks(
+    declared: i64,
+    stored: i128,
+    block_count: usize,
+    encrypted: bool,
+) -> bool {
+    let declared = i128::from(declared);
+    if encrypted {
+        stored >= declared && stored - declared <= CLIENT_BLOCK_PADDING * block_count as i128
+    } else {
+        stored == declared
     }
 }
 
@@ -440,8 +468,12 @@ impl SyncService {
     }
 
     /// Batch insert FS objects (ON CONFLICT DO NOTHING). Dirent names are
-    /// validated with [`validate_filename`] to stop Zip Slip and other injection
-    /// via names synced from a rogue client.
+    /// validated with the legacy filename rule to stop Zip Slip and other
+    /// injection via names synced from a rogue client. The Windows-only tightening
+    /// is deliberately *not* applied here: a re-sent directory object may contain
+    /// names created before it, and rejecting the object would wedge that library's
+    /// sync. New entries are held to the stricter rule by the interactive
+    /// creation surfaces.
     pub async fn insert_fs_objects(
         &self,
         repo_id: &str,
@@ -534,7 +566,11 @@ impl SyncService {
                                 )));
                             }
                             for dirent in &dir_data.dirents {
-                                validate_filename(&dirent.name).map_err(|e| {
+                                // The legacy rule: a re-sent directory object may
+                                // contain entries created before the Windows-only
+                                // tightening, and rejecting it would wedge a
+                                // library that still has one.
+                                validate_legacy_filename(&dirent.name).map_err(|e| {
                                     AppError::BadRequest(format!(
                                         "invalid dirent name {:?}: {}",
                                         dirent.name, e
@@ -716,6 +752,7 @@ impl SyncService {
             repo_id,
             &outcome.merged_root,
             Some(&head_commit.root_id),
+            repo_model.encrypted != 0,
             &mut missing,
             &mut delta,
             &mut referenced_blocks,
@@ -826,11 +863,21 @@ impl SyncService {
     /// `size_delta` is `size(new_root) - size(base_root)` over a two-sided diff, so
     /// a deletion subtracts its bytes; missing blocks are reported for the new tree
     /// only. `base_root_id == None` sums the whole new tree.
+    ///
+    /// Every added or changed regular file is additionally checked for a consistent
+    /// size: its dirent must agree with its file object, and the object's declared
+    /// size must account for the bytes its blocks hold ([`declared_size_matches_blocks`]).
+    /// The charged delta then uses the validated object size, never the dirent's
+    /// unverified claim — otherwise a commit could store arbitrary bytes while
+    /// declaring a tiny file and never be charged for them. `encrypted` is the
+    /// library's client-side-encryption flag (`repo.encrypted != 0`); blocks of such
+    /// a library are PKCS7 ciphertext and are allowed the cipher's padding overhead.
     pub async fn check_commit_blocks(
         &self,
         repo_id: &str,
         new_root_id: &str,
         base_root_id: Option<&str>,
+        encrypted: bool,
         missing: &mut Vec<String>,
         size_delta: &mut i64,
         referenced_blocks: &mut std::collections::HashSet<String>,
@@ -852,6 +899,19 @@ impl SyncService {
             new_fs_id: Option<String>,
             /// Path under the new root, reported for a file whose blocks are missing.
             prefix: String,
+        }
+
+        /// An added or changed regular file: its blocks and declared size still have
+        /// to be checked, and its delta charged from the validated object size.
+        struct PendingFile {
+            fs_id: String,
+            /// Path under the new root, reported for a file whose blocks are missing.
+            path: String,
+            /// The size the base tree had for this path, for a modified file
+            /// (`None` for a new one).
+            base_size: Option<i64>,
+            /// The size this commit's dirent claims for the file.
+            declared_size: i64,
         }
 
         if let Some(base_root) = base_root_id {
@@ -889,7 +949,7 @@ impl SyncService {
                 };
 
                 // File objects needing block checks are batched into one fetch per level.
-                let mut pending_files: Vec<(String, String)> = Vec::new();
+                let mut pending_files: Vec<PendingFile> = Vec::new();
                 let mut next: Vec<DiffFrame> = Vec::new();
 
                 for frame in &frontier {
@@ -945,7 +1005,7 @@ impl SyncService {
                                         prefix: child_of(&entry.name),
                                     });
                                 } else {
-                                    *size_delta -= entry.size;
+                                    *size_delta = size_delta.saturating_sub(entry.size);
                                 }
                             }
                         }
@@ -962,8 +1022,12 @@ impl SyncService {
                                     prefix: child,
                                 });
                             } else {
-                                *size_delta += entry.size;
-                                pending_files.push((entry.id.clone(), child));
+                                pending_files.push(PendingFile {
+                                    fs_id: entry.id.clone(),
+                                    path: child,
+                                    base_size: None,
+                                    declared_size: entry.size,
+                                });
                             }
                         }
                         continue;
@@ -991,8 +1055,12 @@ impl SyncService {
                                         prefix: child,
                                     });
                                 } else {
-                                    *size_delta += new_entry.size;
-                                    pending_files.push((new_entry.id.clone(), child));
+                                    pending_files.push(PendingFile {
+                                        fs_id: new_entry.id.clone(),
+                                        path: child,
+                                        base_size: None,
+                                        declared_size: new_entry.size,
+                                    });
                                 }
                             }
                             Some(base_entry) => {
@@ -1012,7 +1080,7 @@ impl SyncService {
                                     // File → directory: drop the file's bytes, add
                                     // the subtree's.
                                     (false, true) => {
-                                        *size_delta -= base_entry.size;
+                                        *size_delta = size_delta.saturating_sub(base_entry.size);
                                         next.push(DiffFrame {
                                             base_fs_id: None,
                                             new_fs_id: stored_dir(&new_entry.id),
@@ -1027,12 +1095,20 @@ impl SyncService {
                                             new_fs_id: None,
                                             prefix: child.clone(),
                                         });
-                                        *size_delta += new_entry.size;
-                                        pending_files.push((new_entry.id.clone(), child));
+                                        pending_files.push(PendingFile {
+                                            fs_id: new_entry.id.clone(),
+                                            path: child,
+                                            base_size: None,
+                                            declared_size: new_entry.size,
+                                        });
                                     }
                                     (false, false) => {
-                                        *size_delta += new_entry.size - base_entry.size;
-                                        pending_files.push((new_entry.id.clone(), child));
+                                        pending_files.push(PendingFile {
+                                            fs_id: new_entry.id.clone(),
+                                            path: child,
+                                            base_size: Some(base_entry.size),
+                                            declared_size: new_entry.size,
+                                        });
                                     }
                                 }
                             }
@@ -1050,14 +1126,16 @@ impl SyncService {
                                 prefix: child_of(&base_entry.name),
                             });
                         } else {
-                            *size_delta -= base_entry.size;
+                            *size_delta = size_delta.saturating_sub(base_entry.size);
                         }
                     }
                 }
 
                 if !pending_files.is_empty() {
-                    let file_ids: Vec<String> =
-                        pending_files.iter().map(|(id, _)| id.clone()).collect();
+                    let file_ids: Vec<String> = pending_files
+                        .iter()
+                        .map(|file| file.fs_id.clone())
+                        .collect();
                     let file_map =
                         crate::fs::core::read_fs_file_data_batch(&self.repos, repo_id, &file_ids)
                             .await?;
@@ -1077,49 +1155,109 @@ impl SyncService {
                     // exactly these reservations. Blocks uploaded but never
                     // referenced stay reserved until the TTL reaper.
                     referenced_blocks.extend(unique_ids.iter().cloned());
-                    let missing_ids: std::collections::HashSet<String> = {
+                    // One logical-size stat per unique block serves both jobs the old
+                    // boolean presence check did: a failed lookup is a *missing* block
+                    // (446, unchanged), an answer is what the size invariant compares.
+                    let mut missing_ids: std::collections::HashSet<&str> =
+                        std::collections::HashSet::new();
+                    let mut block_sizes: HashMap<&str, i64> =
+                        HashMap::with_capacity(unique_ids.len());
+                    {
                         const BATCH_SIZE: usize = 8;
                         let store = self.block_store.clone();
-                        let mut missing_set = std::collections::HashSet::new();
                         for chunk in unique_ids.chunks(BATCH_SIZE) {
                             let futures: Vec<_> = chunk
                                 .iter()
                                 .map(|id| {
                                     let store = store.clone();
                                     let id = id.clone();
-                                    async move { !store.has_block(repo_id, &id).await }
+                                    async move { store.block_size(repo_id, &id).await }
                                 })
                                 .collect();
-                            let missing_flags: Vec<bool> = futures::future::join_all(futures).await;
-                            for (id, missing) in chunk.iter().zip(missing_flags) {
-                                if missing {
-                                    missing_set.insert(id.clone());
+                            let results = futures::future::join_all(futures).await;
+                            for (id, result) in chunk.iter().zip(results) {
+                                match result {
+                                    Ok(size) => {
+                                        block_sizes.insert(id.as_str(), size);
+                                    }
+                                    Err(_) => {
+                                        missing_ids.insert(id.as_str());
+                                    }
                                 }
                             }
                         }
-                        missing_set
-                    };
+                    }
 
-                    for (fs_id, path) in &pending_files {
-                        let Some(file_data) = file_map.get(fs_id) else {
-                            // `EMPTY_SHA1` is a zero-byte file's id and has no object. Every
-                            // other id was added or changed by this upload, so a missing
-                            // object means it did not land: reject with 446.
-                            if fs_id != EMPTY_SHA1 {
-                                tracing::warn!(
-                                    "sync: upload for {repo_id} references a missing file object at \
-                                     {path} ({fs_id})"
-                                );
-                                return Err(AppError::BlockMissing);
-                            }
-                            continue;
+                    for file in &pending_files {
+                        // A negative size cannot be charged and would not match any
+                        // object; reject it before the equality check can mask it.
+                        if file.declared_size < 0 {
+                            return Err(AppError::BadRequest(format!(
+                                "file {} declares a negative size ({})",
+                                file.path, file.declared_size
+                            )));
+                        }
+                        let Some(file_data) = file_map.get(&file.fs_id) else {
+                            // `EMPTY_SHA1` (a zero-byte file) is synthesised by the batch
+                            // reader, so this is a real hole in the upload: 446 and
+                            // re-send, exactly as before.
+                            tracing::warn!(
+                                "sync: upload for {repo_id} references a missing file object at \
+                                 {} ({})",
+                                file.path,
+                                file.fs_id
+                            );
+                            return Err(AppError::BlockMissing);
                         };
-                        if file_data
-                            .block_ids
-                            .iter()
-                            .any(|bid| missing_ids.contains(bid.as_str()))
-                        {
-                            missing.push(path.clone());
+                        // The dirent is what clients display and the old accounting
+                        // charged; it has to describe the very object it points at.
+                        if file.declared_size != file_data.size {
+                            return Err(AppError::BadRequest(format!(
+                                "file {} declares {} bytes but its file object says {}",
+                                file.path, file.declared_size, file_data.size
+                            )));
+                        }
+                        let mut stored: i128 = 0;
+                        let mut has_missing_block = false;
+                        for block_id in &file_data.block_ids {
+                            match block_sizes.get(block_id.as_str()) {
+                                Some(size) => stored += i128::from(*size),
+                                None => {
+                                    has_missing_block = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if has_missing_block {
+                            // Keep the 446 contract: a re-send fixes a hole in an upload,
+                            // while a size mismatch is the client's permanent error.
+                            debug_assert!(
+                                file_data
+                                    .block_ids
+                                    .iter()
+                                    .any(|id| missing_ids.contains(id.as_str()))
+                            );
+                            missing.push(file.path.clone());
+                            continue;
+                        }
+                        if !declared_size_matches_blocks(
+                            file_data.size,
+                            stored,
+                            file_data.block_ids.len(),
+                            encrypted,
+                        ) {
+                            return Err(AppError::BadRequest(format!(
+                                "file {} declares {} bytes but its {} blocks hold {}",
+                                file.path,
+                                file_data.size,
+                                file_data.block_ids.len(),
+                                stored
+                            )));
+                        }
+                        // Charge the validated object size, never the dirent's claim.
+                        *size_delta = size_delta.saturating_add(file_data.size);
+                        if let Some(base_size) = file.base_size {
+                            *size_delta = size_delta.saturating_sub(base_size);
                         }
                     }
                 }
@@ -1127,29 +1265,44 @@ impl SyncService {
                 frontier = next;
             }
         } else {
-            self.full_check_blocks(repo_id, new_root_id, missing, size_delta)
+            self.full_check_blocks(repo_id, new_root_id, encrypted, missing, size_delta)
                 .await?;
         }
 
         Ok(())
     }
 
+    /// Validate every object of a tree that has no base to diff against: the first
+    /// upload of a library walks the whole new tree.
+    ///
+    /// File entries get the same size invariant as [`SyncService::check_commit_blocks`]:
+    /// the dirent size must match the file object, and the object's declared size must
+    /// account for its blocks, with `encrypted` selecting the padding bound.
     async fn full_check_blocks(
         &self,
         repo_id: &str,
         root_id: &str,
+        encrypted: bool,
         missing: &mut Vec<String>,
         size_total: &mut i64,
     ) -> Result<(), AppError> {
         struct Frame {
             fs_id: String,
             path: String,
+            /// `dirent.size` from the parent folder; `None` for the commit root,
+            /// which no dirent describes.
+            declared_size: Option<i64>,
+            /// Whether the parent dirent says this entry is a regular file. Only such
+            /// entries carry a size that can be compared with a file object.
+            is_file: bool,
         }
 
         // Level frontier: each level fetches all its fs_objects in one batched IN.
         let mut frontier: Vec<Frame> = vec![Frame {
             fs_id: root_id.to_string(),
             path: String::new(),
+            declared_size: None,
+            is_file: false,
         }];
 
         let mut guard = crate::fs::core::traversal::TreeGuard::new();
@@ -1169,11 +1322,11 @@ impl SyncService {
             let obj_map: HashMap<String, infra::entity::fs_object::Model> =
                 objects.into_iter().map(|o| (o.fs_id.clone(), o)).collect();
             let mut next: Vec<Frame> = Vec::new();
-            // Files at this level, with the block ids each one references. Their
-            // existence is checked in one deduplicated batch after the level has been
-            // walked: the per-file loop below would otherwise wait on one batch of 16
-            // stats per file, which is a round trip per file on a cold block cache.
-            let mut level_files: Vec<(String, Vec<String>)> = Vec::new();
+            // Files at this level, each with its declared size and block ids. Their
+            // block existence is checked in one deduplicated batch after the level has
+            // been walked: the per-file loop below would otherwise wait on one batch of
+            // 16 stats per file, which is a round trip per file on a cold block cache.
+            let mut level_files: Vec<(String, i64, Vec<String>)> = Vec::new();
 
             for frame in &frontier {
                 let Some(obj) = obj_map.get(&frame.fs_id) else {
@@ -1190,13 +1343,40 @@ impl SyncService {
                         );
                         return Err(AppError::BlockMissing);
                     }
+                    // The sentinel stands for a zero-byte file (or an empty directory):
+                    // a file entry claiming bytes for it would never be backed by a block.
+                    if frame.is_file && frame.declared_size != Some(0) {
+                        return Err(AppError::BadRequest(format!(
+                            "file {} is the empty sentinel but declares {} bytes",
+                            frame.path,
+                            frame.declared_size.unwrap_or_default()
+                        )));
+                    }
                     continue;
                 };
                 if obj.obj_type == 1 {
                     let file_data: FsFileData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::Internal(format!("invalid file object: {e}")))?;
-                    *size_total += file_data.size;
-                    level_files.push((frame.path.clone(), file_data.block_ids));
+                    // A regular-file entry's dirent and object must agree. The root is
+                    // validated as a directory object before this walk, so it has none.
+                    if frame.is_file
+                        && let Some(declared) = frame.declared_size
+                    {
+                        if declared < 0 {
+                            return Err(AppError::BadRequest(format!(
+                                "file {} declares a negative size ({declared})",
+                                frame.path
+                            )));
+                        }
+                        if declared != file_data.size {
+                            return Err(AppError::BadRequest(format!(
+                                "file {} declares {declared} bytes but its file object says {}",
+                                frame.path, file_data.size
+                            )));
+                        }
+                    }
+                    *size_total = size_total.saturating_add(file_data.size);
+                    level_files.push((frame.path.clone(), file_data.size, file_data.block_ids));
                 } else if obj.obj_type == 3 {
                     let dir_data: FsDirData = serde_json::from_str(&obj.data)
                         .map_err(|e| AppError::Internal(format!("invalid dir object: {e}")))?;
@@ -1209,6 +1389,8 @@ impl SyncService {
                         next.push(Frame {
                             fs_id: entry.id.clone(),
                             path: child_path,
+                            declared_size: Some(entry.size),
+                            is_file: entry.mode & infra::serialization::S_IFDIR == 0,
                         });
                     }
                 }
@@ -1218,7 +1400,7 @@ impl SyncService {
                 // Deduplicate across the level: a block shared by many files is stat'ed once.
                 let mut unique: Vec<String> = Vec::new();
                 let mut seen: HashSet<&str> = HashSet::new();
-                for (_, block_ids) in &level_files {
+                for (_, _, block_ids) in &level_files {
                     for block_id in block_ids {
                         if seen.insert(block_id.as_str()) {
                             unique.push(block_id.clone());
@@ -1226,30 +1408,53 @@ impl SyncService {
                     }
                 }
 
+                // A failed stat is a missing block (446, as the old presence check
+                // reported); an answer is the logical length the size invariant needs.
                 const BLOCK_CHECK_BATCH: usize = 16;
-                let mut missing_ids: HashSet<String> = HashSet::new();
+                let mut block_sizes: HashMap<&str, i64> = HashMap::with_capacity(unique.len());
                 for chunk in unique.chunks(BLOCK_CHECK_BATCH) {
                     let futures: Vec<_> = chunk
                         .iter()
                         .map(|block_id| {
                             let store = self.block_store.clone();
-                            async move { !store.has_block(repo_id, block_id).await }
+                            async move { store.block_size(repo_id, block_id).await }
                         })
                         .collect();
                     let results = futures::future::join_all(futures).await;
-                    for (block_id, is_missing) in chunk.iter().zip(results) {
-                        if is_missing {
-                            missing_ids.insert(block_id.clone());
+                    for (block_id, result) in chunk.iter().zip(results) {
+                        if let Ok(size) = result {
+                            block_sizes.insert(block_id.as_str(), size);
                         }
                     }
                 }
 
-                for (path, block_ids) in &level_files {
-                    if block_ids
-                        .iter()
-                        .any(|block_id| missing_ids.contains(block_id))
-                    {
+                for (path, declared_size, block_ids) in &level_files {
+                    let mut stored: i128 = 0;
+                    let mut has_missing_block = false;
+                    for block_id in block_ids {
+                        match block_sizes.get(block_id.as_str()) {
+                            Some(size) => stored += i128::from(*size),
+                            None => {
+                                has_missing_block = true;
+                                break;
+                            }
+                        }
+                    }
+                    if has_missing_block {
                         missing.push(path.clone());
+                        continue;
+                    }
+                    if !declared_size_matches_blocks(
+                        *declared_size,
+                        stored,
+                        block_ids.len(),
+                        encrypted,
+                    ) {
+                        return Err(AppError::BadRequest(format!(
+                            "file {path} declares {declared_size} bytes but its {} blocks hold \
+                             {stored}",
+                            block_ids.len()
+                        )));
                     }
                 }
             }
@@ -1318,6 +1523,16 @@ impl SyncService {
             None
         };
 
+        // Client-side-encrypted libraries store PKCS7 ciphertext blocks, so the size
+        // invariant below needs to know which rule applies. The `repo_model` in the CAS
+        // loop below is fetched per attempt for its HEAD; this read is not a reuse of it.
+        let encrypted = self
+            .find_repo(repo_id)
+            .await?
+            .ok_or_else(|| AppError::Internal("repo not found".into()))?
+            .encrypted
+            != 0;
+
         let mut missing = Vec::new();
         let mut size_delta: i64 = 0;
         let mut referenced_blocks = std::collections::HashSet::new();
@@ -1325,6 +1540,7 @@ impl SyncService {
             repo_id,
             &new_commit.root_id,
             base_root_id.as_deref(),
+            encrypted,
             &mut missing,
             &mut size_delta,
             &mut referenced_blocks,
