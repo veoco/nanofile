@@ -378,7 +378,7 @@ impl SyncService {
 
             for frame in &frontier {
                 let Some(server_dir) = server_map.get(&frame.server_fs_id) else {
-                    continue; // missing/empty server dir → nothing to sync
+                    continue; // missing/empty server dir 鈫?nothing to sync
                 };
                 // A present client id that fails to resolve (missing or not a
                 // directory) is treated as absent.
@@ -389,7 +389,7 @@ impl SyncService {
 
                 match client_dir {
                     None => {
-                        // Client lacks this directory → send the whole subtree.
+                        // Client lacks this directory 鈫?send the whole subtree.
                         for entry in &server_dir.dirents {
                             // An empty directory is the `EMPTY_SHA1` sentinel with no
                             // stored fs object; the client materialises it from the
@@ -425,7 +425,7 @@ impl SyncService {
                             }
                             let path = join_sync_path(&frame.prefix, &entry.name);
                             let is_dir = entry.mode & S_IFDIR != 0;
-                            // Identical id → identical subtree, skip it entirely.
+                            // Identical id 鈫?identical subtree, skip it entirely.
                             if client_entries
                                 .get(entry.name.as_str())
                                 .is_some_and(|c| c.id == entry.id)
@@ -866,9 +866,9 @@ impl SyncService {
     ///
     /// Every added or changed regular file is additionally checked for a consistent
     /// size: its dirent must agree with its file object, and the object's declared
-    /// size must account for the bytes its blocks hold ([`declared_size_matches_blocks`]).
+    /// size must account for the bytes its blocks hold (`declared_size_matches_blocks`).
     /// The charged delta then uses the validated object size, never the dirent's
-    /// unverified claim — otherwise a commit could store arbitrary bytes while
+    /// unverified claim 鈥?otherwise a commit could store arbitrary bytes while
     /// declaring a tiny file and never be charged for them. `encrypted` is the
     /// library's client-side-encryption flag (`repo.encrypted != 0`); blocks of such
     /// a library are PKCS7 ciphertext and are allowed the cipher's padding overhead.
@@ -966,7 +966,7 @@ impl SyncService {
                     //
                     // An object only the *new* side references is different: this
                     // upload introduced it, so a missing row means the client's upload
-                    // did not land — accepting the commit would leave every client with
+                    // did not land 鈥?accepting the commit would leave every client with
                     // a tree it cannot check out, so reject with 446 and re-send. (A
                     // base-side object may have been pruned by GC: stays unknown.)
                     if (frame.base_fs_id.is_some() && base_dir.is_none())
@@ -1071,13 +1071,13 @@ impl SyncService {
                                 let base_is_dir =
                                     base_entry.mode & infra::serialization::S_IFDIR != 0;
                                 match (base_is_dir, is_dir) {
-                                    // Directory → directory: diff both subtrees.
+                                    // Directory 鈫?directory: diff both subtrees.
                                     (true, true) => next.push(DiffFrame {
                                         base_fs_id: stored_dir(&base_entry.id),
                                         new_fs_id: stored_dir(&new_entry.id),
                                         prefix: child,
                                     }),
-                                    // File → directory: drop the file's bytes, add
+                                    // File 鈫?directory: drop the file's bytes, add
                                     // the subtree's.
                                     (false, true) => {
                                         *size_delta = size_delta.saturating_sub(base_entry.size);
@@ -1087,7 +1087,7 @@ impl SyncService {
                                             prefix: child,
                                         });
                                     }
-                                    // Directory → file: a directory entry carries no
+                                    // Directory 鈫?file: a directory entry carries no
                                     // size, so the deletion frame subtracts the subtree.
                                     (true, false) => {
                                         next.push(DiffFrame {
@@ -1492,8 +1492,7 @@ impl SyncService {
 
         // Root validation must happen here, not at `PUT /commit/{id}`: seaf-daemon
         // uploads the commit object *before* the FS objects it references
-        // (daemon/http-tx-mgr.c: send_commit_object → recv-fs → blocks →
-        // update_branch), so rejecting a dangling root at commit-write time would
+        // (daemon/http-tx-mgr.c: send_commit_object 鈫?recv-fs 鈫?blocks 鈫?        // update_branch), so rejecting a dangling root at commit-write time would
         // break every official client. By now a dangling root is corruption or an
         // attack: 446 when missing, 400 on a wrong type.
         if new_commit.root_id != EMPTY_SHA1 {
@@ -1588,7 +1587,7 @@ impl SyncService {
 
             // Re-check on every CAS attempt: a lock acquired between attempts must
             // still reject the commit. The diff is against this commit's own parent,
-            // so only the paths the device changes are considered — an unrelated or
+            // so only the paths the device changes are considered 鈥?an unrelated or
             // stale lock cannot freeze the rest of the library.
             crate::fs::core::check_commit_file_locks(
                 &self.repos,
@@ -1641,7 +1640,7 @@ impl SyncService {
             };
 
             // The library's modification time is the new head commit's `ctime`, matching
-            // upstream's `on_branch_updated()` → `seaf_repo_manager_update_repo_info()`.
+            // upstream's `on_branch_updated()` 鈫?`seaf_repo_manager_update_repo_info()`.
             // A fast-forward reuses the uploaded commit; a merge reads the commit the
             // server just created, whose ctime is its own creation time.
             let target_updated_at = if is_merge {
@@ -1673,7 +1672,7 @@ impl SyncService {
             {
                 // Another writer advanced HEAD between the read above and the swap
                 // (a merge can lose a second race too): re-read and, for a merge,
-                // re-merge — upstream's `goto retry`. Its only 409 is a GC conflict.
+                // re-merge 鈥?upstream's `goto retry`. Its only 409 is a GC conflict.
                 if attempt > MAX_BRANCH_RETRY {
                     return Err(AppError::Internal(format!(
                         "repository {repo_id} HEAD was updated concurrently more than \
@@ -1773,7 +1772,7 @@ impl SyncService {
 
                     // diff_trees keeps the old-path delete of a rename/move (the
                     // indexer needs it) but marks it superseded. seafevents reports a
-                    // rename as one record, so skip it — before the prefix filter, so an
+                    // rename as one record, so skip it 鈥?before the prefix filter, so an
                     // excluded path cannot leave the delete behind without its rename.
                     if c.superseded {
                         return None;
