@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod sandbox;
+pub mod web;
 
 use axum::Router;
 use sea_orm::{ActiveModelTrait, DatabaseConnection};

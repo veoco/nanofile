@@ -40,8 +40,54 @@ impl TestClient {
         }
     }
 
+    /// Create a test client for the Web UI: cookie store, no proxy, and no
+    /// redirect following so a login's `302` stays visible to the assertion.
+    ///
+    /// Eighteen test files used to build this by hand (some without `no_proxy`),
+    /// then repeat the login POST and the 302 assertion.
+    pub fn new_ui_session(base_url: &str) -> Self {
+        Self {
+            client: Client::builder()
+                .no_proxy()
+                .cookie_store(true)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .unwrap(),
+            base_url: base_url.to_string(),
+        }
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
+    }
+
+    /// Log in through the Web UI form and keep the session cookie.
+    ///
+    /// Returns the client (already carrying the cookie) after asserting the
+    /// `302`; a failed login panics with the response body, which is what every
+    /// hand-written helper ended up doing.
+    pub async fn ui_login(base_url: &str, email: &str, password: &str) -> Self {
+        let client = Self::new_ui_session(base_url);
+        let resp = client
+            .post_ui_form(
+                "/accounts/login/",
+                &[("email", email), ("password", password)],
+            )
+            .await;
+        assert_eq!(
+            resp.status(),
+            302,
+            "web login failed for {email}: {}",
+            resp.text().await.unwrap_or_default()
+        );
+        client
+    }
+
+    /// Fetch a page and return its CSRF token, panicking when the marker is absent.
+    pub async fn csrf_from(&self, path: &str) -> String {
+        let html = self.get_ui(path).await.text().await.unwrap();
+        csrf_token(&html)
+            .unwrap_or_else(|| panic!("no csrf_token hidden field on {path}"))
     }
 
     pub async fn get(&self, path: &str, token: Option<&str>) -> reqwest::Response {
@@ -1513,4 +1559,17 @@ pub fn response_or_early_close(
             None
         }
     }
+}
+
+/// The hidden field every rendered web form carries; the browser posts its value
+/// back as the `csrf_token` form field.
+pub const CSRF_MARKER: &str = "name=\"csrf_token\" value=\"";
+
+/// Extract the CSRF token from a rendered page, or `None` when the form is absent.
+pub fn csrf_token(html: &str) -> Option<String> {
+    html.split(CSRF_MARKER)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
 }

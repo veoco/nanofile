@@ -8,6 +8,7 @@
 use crate::common;
 
 use common::TestServer;
+use common::web::{csrf_of, page, page_content, ui_login};
 use infra::settings::Section;
 use server::i18n::I18n;
 use server::repository::job_run::NewJobRun;
@@ -19,55 +20,9 @@ const REGISTRY: &str = "/sysadmin/tasks/registered/";
 
 /// Sign in through the Web UI form and keep the session cookies. Redirects are
 /// not followed, so a page that turns a request away reports its own status.
-async fn ui_login(server: &TestServer, email: &str, password: &str) -> reqwest::Client {
-    let client = reqwest::Client::builder()
-        .cookie_store(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-    let resp = client
-        .post(format!("{}/accounts/login/", server.base_url))
-        .form(&[("email", email), ("password", password)])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 302, "login should redirect");
-    let _ = client
-        .get(format!("{}/libraries/", server.base_url))
-        .send()
-        .await;
-    client
-}
-
-async fn page(server: &TestServer, client: &reqwest::Client, path: &str) -> (u16, String) {
-    let resp = client
-        .get(format!(
-            "{}/{}",
-            server.base_url,
-            path.trim_start_matches('/')
-        ))
-        .send()
-        .await
-        .unwrap();
-    let status = resp.status().as_u16();
-    (status, resp.text().await.unwrap())
-}
-
 /// Everything the page renders, without the translation dictionary and the
 /// bundle script that follow it. The dictionary ships every key with its
 /// translation, so a raw key there is normal; a raw key in the body is not.
-fn page_content(html: &str) -> &str {
-    html.split("id=\"__i18n\"").next().unwrap_or(html)
-}
-
-fn csrf_of(html: &str) -> String {
-    html.split(r#"name="csrf_token" value=""#)
-        .nth(1)
-        .and_then(|rest| rest.split('"').next())
-        .expect("the registry must embed a csrf_token")
-        .to_string()
-}
-
 fn row_of<'h>(html: &'h str, marker: &str, next: &str) -> &'h str {
     let at = html
         .find(marker)
