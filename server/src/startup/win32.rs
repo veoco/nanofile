@@ -8,6 +8,74 @@ pub(crate) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Resolve an account name to its SID bytes.
+///
+/// The two-call `LookupAccountNameW` dance (size query, then fill) is the same
+/// unsafe sequence whichever caller needs the SID; the service-logon grant and the
+/// directory ACL both used to inline it. A context-specific error is the caller's
+/// to add.
+pub(crate) fn lookup_account_sid(name: &str) -> anyhow::Result<Vec<u8>> {
+    use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
+
+    let name_w = wide(name);
+    let mut sid_len = 0u32;
+    let mut domain_len = 0u32;
+    let mut use_: SID_NAME_USE = 0;
+    unsafe {
+        LookupAccountNameW(
+            std::ptr::null(),
+            name_w.as_ptr(),
+            std::ptr::null_mut(),
+            &mut sid_len,
+            std::ptr::null_mut(),
+            &mut domain_len,
+            &mut use_,
+        );
+    }
+    if sid_len == 0 {
+        anyhow::bail!("the account {name:?} has no SID on this machine");
+    }
+    let mut sid = vec![0u8; sid_len as usize];
+    let mut domain = vec![0u16; domain_len.max(1) as usize];
+    let found = unsafe {
+        LookupAccountNameW(
+            std::ptr::null(),
+            name_w.as_ptr(),
+            sid.as_mut_ptr() as *mut core::ffi::c_void,
+            &mut sid_len,
+            domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut use_,
+        )
+    };
+    if found == 0 {
+        anyhow::bail!("the account {name:?} has no SID on this machine");
+    }
+    Ok(sid)
+}
+
+/// Printable `S-1-5-…` form of a SID, or `None` when Windows cannot format it.
+pub(crate) fn sid_to_string(sid: &[u8]) -> Option<String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+
+    let mut text: *mut u16 = std::ptr::null_mut();
+    let mut sid = sid.to_vec();
+    if unsafe { ConvertSidToStringSidW(sid.as_mut_ptr() as *mut core::ffi::c_void, &mut text) } == 0
+    {
+        return None;
+    }
+    let mut len = 0usize;
+    unsafe {
+        while *text.add(len) != 0 {
+            len += 1;
+        }
+    }
+    let rendered = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, len)) };
+    unsafe { LocalFree(text as *mut core::ffi::c_void) };
+    Some(rendered)
+}
+
 /// True when the current process token is elevated ("Run as administrator").
 #[cfg(feature = "tray")]
 pub(crate) fn is_elevated() -> bool {
@@ -125,4 +193,24 @@ pub(crate) unsafe fn name_of_sid(sid: *mut core::ffi::c_void) -> Option<String> 
     } else {
         format!("{domain}\\{name}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The SID a service install writes into `icacls *<SID>` must render in the
+    /// canonical form; `LocalFree` is part of the helper's contract.
+    #[test]
+    fn a_well_known_sid_renders_canonically() {
+        // S-1-5-18 (LocalSystem): revision 1, one sub-authority, NT authority, 18.
+        let mut sid = vec![1u8, 1, 0, 0, 0, 0, 0, 5];
+        sid.extend_from_slice(&18u32.to_le_bytes());
+        assert_eq!(sid_to_string(&sid).as_deref(), Some("S-1-5-18"));
+    }
+
+    #[test]
+    fn an_invalid_sid_has_no_string_form() {
+        assert_eq!(sid_to_string(&[]), None);
+    }
 }

@@ -170,44 +170,11 @@ pub(crate) fn grant_service_logon_right(name: &str) -> anyhow::Result<()> {
         LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose, LsaOpenPolicy,
         POLICY_LOOKUP_NAMES,
     };
-    use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
-
-    let name_w = crate::startup::win32::wide(name);
 
     // The account has to exist: resolving it also produces the SID the right goes to.
-    let mut sid_len = 0u32;
-    let mut domain_len = 0u32;
-    let mut use_: SID_NAME_USE = 0;
-    unsafe {
-        LookupAccountNameW(
-            std::ptr::null(),
-            name_w.as_ptr(),
-            std::ptr::null_mut(),
-            &mut sid_len,
-            std::ptr::null_mut(),
-            &mut domain_len,
-            &mut use_,
-        );
-    }
-    if sid_len == 0 {
-        anyhow::bail!("the account '{name}' could not be resolved on this machine");
-    }
-    let mut sid = vec![0u8; sid_len as usize];
-    let mut domain = vec![0u16; domain_len.max(1) as usize];
-    let found = unsafe {
-        LookupAccountNameW(
-            std::ptr::null(),
-            name_w.as_ptr(),
-            sid.as_mut_ptr() as *mut core::ffi::c_void,
-            &mut sid_len,
-            domain.as_mut_ptr(),
-            &mut domain_len,
-            &mut use_,
-        )
-    };
-    if found == 0 {
-        anyhow::bail!("the account '{name}' could not be resolved on this machine");
-    }
+    let mut sid = crate::startup::win32::lookup_account_sid(name).map_err(|_| {
+        anyhow::anyhow!("the account '{name}' could not be resolved on this machine")
+    })?;
 
     // "SeServiceLogonRight" as the LSA expects it: counted, not NUL-terminated.
     let mut right_name = crate::startup::win32::wide("SeServiceLogonRight");
