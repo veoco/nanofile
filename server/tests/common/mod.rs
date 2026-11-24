@@ -984,6 +984,18 @@ pub fn fs_object_id(data: &[u8]) -> String {
     infra::crypto::fs_id::sha1_hex(data)
 }
 
+/// A fresh 40-hex id for tests that only need uniqueness (a commit id, an
+/// object name in a fake pack). It is not a content-addressed id.
+pub fn random_hex_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    fs_object_id(format!("test-id:{nanos}:{seq}").as_bytes())
+}
 /// Create an empty *file* fs object with a random id and return it.
 /// `recv_fs` stores objects under the id the client sends, so a random id is accepted.
 pub async fn sync_put_file(
@@ -1226,6 +1238,57 @@ impl TestFixture {
         assert_eq!(resp.status(), 200, "get repo for mtime failed");
         let body: serde_json::Value = resp.json().await.unwrap();
         body["mtime"].as_i64().expect("repo mtime is an integer")
+    }
+
+    /// The `repos.size` column the incremental accounting maintains.
+    pub async fn repo_size(&self) -> i64 {
+        use sea_orm::EntityTrait;
+
+        infra::entity::repo::Entity::find_by_id(self.repo_id.clone())
+            .one(&*self.server.db)
+            .await
+            .unwrap()
+            .expect("repo row")
+            .size
+    }
+
+    /// The usage a client is shown (`GET /api2/account/info/`).
+    pub async fn account_usage(&self) -> i64 {
+        let resp = self
+            .client
+            .get("/api2/account/info/", Some(&self.api_token))
+            .await;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["usage"].as_i64().expect("usage is an integer")
+    }
+
+    /// The library's HEAD commit id, as the sync endpoint reports it.
+    pub async fn head_commit_id(&self) -> String {
+        let resp = self
+            .client
+            .get_head_commit(&self.sync_token, &self.repo_id)
+            .await;
+        assert_eq!(resp.status(), 200);
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["head_commit_id"]
+            .as_str()
+            .expect("head_commit_id")
+            .to_string()
+    }
+
+    /// Set the owner's storage quota directly; `None` means unlimited.
+    pub async fn set_storage_quota(&self, quota: Option<i64>) {
+        use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+
+        let user_record = infra::entity::user::Entity::find_by_id(self.user_id)
+            .one(&*self.server.db)
+            .await
+            .unwrap()
+            .expect("user row");
+        let mut active: infra::entity::user::ActiveModel = user_record.into();
+        active.storage_quota = Set(quota);
+        active.update(&*self.server.db).await.unwrap();
     }
 
     /// Create a share link through the v2.1 API and return its token.

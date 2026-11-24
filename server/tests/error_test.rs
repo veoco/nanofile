@@ -1,13 +1,6 @@
 use crate::common;
 
-use common::{TestServer, create_test_user, get_sync_token};
-
-fn random_hex_id() -> String {
-    use sha1::{Digest, Sha1};
-    let mut hasher = Sha1::new();
-    hasher.update(rand::random::<[u8; 32]>());
-    hex::encode(hasher.finalize())
-}
+use common::{TestServer, create_test_user, get_sync_token, random_hex_id};
 
 #[tokio::test]
 async fn test_update_branch_invalid_commit() {
