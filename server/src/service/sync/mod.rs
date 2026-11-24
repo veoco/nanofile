@@ -92,7 +92,10 @@ const CLIENT_BLOCK_PADDING: i128 = 16;
 /// declared size and that size plus [`CLIENT_BLOCK_PADDING`] per block. A check
 /// that only enforced the lower bound would still let a client declare far fewer
 /// bytes than it stores (the quota bypass); the padding bound is what closes it.
-fn declared_size_matches_blocks(
+///
+/// `pub(crate)` so `verify-blocks` applies the same rule; it used to compare the
+/// raw block total and therefore reported every encrypted library as damaged.
+pub(crate) fn declared_size_matches_blocks(
     declared: i64,
     stored: i128,
     block_count: usize,

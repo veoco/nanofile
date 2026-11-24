@@ -163,6 +163,18 @@ impl BlockVerify {
             None => store.repo_ids().await?,
         };
 
+        // The block-size rule differs for client-side-encrypted libraries, so the
+        // flag is read once per scan rather than per file object. A repository with
+        // no row (a stale block directory) is treated as unencrypted, which is the
+        // same answer the reader would give.
+        let encrypted_repos: HashMap<String, bool> = repo::Entity::find()
+            .filter(repo::Column::Id.is_in(repo_ids.clone()))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row.encrypted != 0))
+            .collect();
+
         let mut report = VerifyReport {
             repos_scanned: repo_ids.len(),
             ..Default::default()
@@ -223,7 +235,14 @@ impl BlockVerify {
                 if non_official {
                     report.non_official_chunking_files += 1;
                 }
-                if stored_size != file.size || missing > 0 {
+                let repo_encrypted = encrypted_repos.get(repo_id).copied().unwrap_or(false);
+                let size_matches = crate::service::sync::declared_size_matches_blocks(
+                    file.size,
+                    i128::from(stored_size),
+                    file.block_ids.len(),
+                    repo_encrypted,
+                );
+                if !size_matches || missing > 0 {
                     report.size_mismatch_files.push(FileFinding {
                         repo_id: repo_id.clone(),
                         fs_id: row.fs_id.clone(),
@@ -427,7 +446,7 @@ pub fn quarantine_root(block_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use migration::MigratorTrait;
-    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Set, Statement};
 
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";
 
@@ -476,6 +495,38 @@ mod tests {
         .await
         .expect("insert fs_object");
         fs_id
+    }
+
+    /// Insert the repository row so the size check can see its `encrypted` flag.
+    /// The fixture writes no user row and FK enforcement is off, so `owner_id` can
+    /// be a placeholder.
+    async fn add_repo(db: &DatabaseConnection, encrypted: bool) {
+        repo::Entity::insert(repo::ActiveModel {
+            id: Set(REPO.to_string()),
+            name: Set("compat-repo".to_string()),
+            description: Set(String::new()),
+            owner_id: Set(1),
+            encrypted: Set(if encrypted { 1 } else { 0 }),
+            enc_version: Set(0),
+            magic: Set(None),
+            random_key: Set(None),
+            salt: Set(String::new()),
+            pwd_hash: Set(None),
+            pwd_hash_algo: Set(None),
+            pwd_hash_params: Set(None),
+            head_commit_id: Set(None),
+            permission: Set("rw".to_string()),
+            created_at: Set(0),
+            updated_at: Set(0),
+            size: Set(0),
+            repo_version: Set(1),
+            history_limit: Set(0),
+            history_ttl_days: Set(0),
+            r#type: Set("repo".to_string()),
+        })
+        .exec(db)
+        .await
+        .expect("insert repo");
     }
 
     #[test]
@@ -578,5 +629,57 @@ mod tests {
             .unwrap();
         assert_eq!(report.file_objects_checked, 2);
         assert_eq!(report.size_mismatch_files.len(), 1);
+    }
+
+    /// A client-side-encrypted library stores PKCS7 ciphertext blocks: the stored
+    /// total may exceed the declared plaintext size by up to 16 bytes per block.
+    /// The verification pass must accept that instead of calling every encrypted
+    /// file damaged.
+    #[tokio::test]
+    async fn encrypted_library_padding_is_not_a_size_mismatch() {
+        let db = temp_db().await;
+        add_repo(&db, true).await;
+        let (_dir, block_dir) = temp_block_dir();
+        let store: DynBlockStorage = infra::storage::new_block_store(&block_dir);
+
+        // 16 plaintext bytes pad to a 32-byte ciphertext block.
+        let block_id = store.write_block(REPO, &[0xABu8; 32]).await.unwrap();
+        let _ = add_file_object(&db, std::slice::from_ref(&block_id), 16).await;
+
+        let report = BlockVerify::run(&db, &store, &block_dir, None, false)
+            .await
+            .unwrap();
+        assert_eq!(report.file_objects_checked, 1);
+        assert!(
+            report.size_mismatch_files.is_empty(),
+            "encrypted padding must not be reported: {:?}",
+            report.size_mismatch_files
+        );
+    }
+
+    /// The padding allowance is bounded: a ciphertext block far beyond one padding
+    /// quantum still fails, so a client cannot declare fewer bytes than it stored
+    /// to dodge the quota.
+    #[tokio::test]
+    async fn encrypted_library_still_flags_excess_padding() {
+        let db = temp_db().await;
+        add_repo(&db, true).await;
+        let (_dir, block_dir) = temp_block_dir();
+        let store: DynBlockStorage = infra::storage::new_block_store(&block_dir);
+
+        // 16 declared bytes, 48 stored: 32 bytes of padding is more than one block
+        // can legitimately add.
+        let block_id = store.write_block(REPO, &[0xCDu8; 48]).await.unwrap();
+        let _ = add_file_object(&db, std::slice::from_ref(&block_id), 16).await;
+
+        let report = BlockVerify::run(&db, &store, &block_dir, None, false)
+            .await
+            .unwrap();
+        assert_eq!(report.file_objects_checked, 1);
+        assert_eq!(
+            report.size_mismatch_files.len(),
+            1,
+            "excess encrypted padding must still be reported"
+        );
     }
 }
