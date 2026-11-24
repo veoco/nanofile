@@ -155,7 +155,7 @@ pub async fn load_links(
             repo_id: u.repo_id.clone(),
             repo_name: repo_names.get(&u.repo_id).cloned().unwrap_or_default(),
             path: u.path.clone(),
-            name: entry_name(u.path.trim_end_matches('/')),
+            name: upload_link_name(&u.path),
             creator_email: creator_emails
                 .get(&u.creator_id)
                 .cloned()
@@ -173,6 +173,17 @@ pub async fn load_links(
         share_links,
         upload_links,
     })
+}
+
+/// The name shown for an upload link: the final path segment, or the original
+/// path for a whole-library link (which used to render as an empty label).
+fn upload_link_name(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() {
+        path.to_string()
+    } else {
+        entry_name(trimmed)
+    }
 }
 
 /// The displayed name of the shared entry: the last path segment, or the whole
@@ -240,4 +251,22 @@ pub async fn delete_upload(
         }
     }
     Ok(result.rows_affected > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_root_upload_link_keeps_its_path_as_the_name() {
+        assert_eq!(upload_link_name("/"), "/");
+        assert_eq!(upload_link_name("/subdir"), "subdir");
+        assert_eq!(upload_link_name("/subdir/"), "subdir");
+    }
+
+    #[test]
+    fn share_entries_use_their_last_segment() {
+        assert_eq!(entry_name("/dir/file.txt"), "file.txt");
+        assert_eq!(entry_name("file.txt"), "file.txt");
+    }
 }
