@@ -50,7 +50,9 @@ export const fileRow = (page: Page, name: string) =>
 
 /** Click the row's icon area rather than the file-name link (selection vs open). */
 export const fileRowIcon = (page: Page, name: string) =>
-  fileRow(page, name).locator("> div:first-child");
+  page.locator(
+    `.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"] > div:first-child`,
+  );
 
 export async function selectRow(page: Page, name: string): Promise<void> {
   await fileRowIcon(page, name).click();
