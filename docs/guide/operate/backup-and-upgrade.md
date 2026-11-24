@@ -9,7 +9,7 @@ description: Back up the database and blocks, restore them, and upgrade safely.
 
 | Item | Required | Notes |
 |---|---|---|
-| The configuration file (or wherever your env vars come from) | **Yes** | It holds the master secret `server.secret_key`. Lose it and sync clients stop working, and TOTP seeds, queued mail and saved setting secrets cannot be decrypted; browser sessions are stored as SHA-256 digests and survive. With at-rest encryption the block key is `storage.encryption_key`: it is never written to the file and comes only from `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE` (back that source up separately), or, when unset, is derived from `server.secret_key`. |
+| The configuration file (or wherever your env vars come from) | **Yes** | It holds the master secret `server.secret_key`. Lose it and sync clients stop working, and TOTP seeds, queued mail and saved setting secrets cannot be decrypted; a changed secret also signs every session out at the next start. With at-rest encryption the block key is `storage.encryption_key`: it is never written to the file and comes only from `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE` (back that source up separately), or, when unset, is derived from `server.secret_key`. |
 | `nanofile.db` | **Yes** | Accounts, the library structure, share links, saved settings. |
 | `blocks/` | **Yes** | The only copy of the file blocks; without it there is no file content at all. |
 | `index/` | Optional | The full-text index; it can be rebuilt from `blocks/`. |
@@ -62,9 +62,10 @@ Backing up while the server runs, two things matter:
 
 1. **Stop the service.**
 2. **Put the configuration file back**, with the same master secret as when the
-   backup was taken. A rotated secret breaks sync clients and makes TOTP seeds,
-   queued mail, saved setting secrets and — when the block key was derived from it
-   — encrypted blocks unusable; browser sessions keep working.
+   backup was taken. A rotated secret signs every session out at the next start
+   (the server records a fingerprint of the key), breaks sync clients and makes
+   TOTP seeds, queued mail, saved setting secrets and — when the block key was
+   derived from it — encrypted blocks unusable.
 3. **Put the database back** (the file you backed up; the server handles its
    journal on startup).
 4. **Put `blocks/` back.**

@@ -32,7 +32,7 @@ printf '%s\n' 'secret123' | docker exec -i nanofile /nanofile adduser --email ad
 
 ## 主密钥
 
-主密钥生成一次并长期保存。它派生 CSRF 签名密钥、同步令牌/TOTP/邮件队列的加密密钥、通知 JWT 密钥（未显式配置时）以及静态块密钥（未设置 `storage.encryption_key` 时）。会话不由它派生（会话 token 是随机值、库里只存 SHA-256 摘要），所以轮换不会让浏览器登出；但同步客户端会失效，上述数据在换回旧密钥前无法读出。
+主密钥生成一次并长期保存。它派生 CSRF 签名密钥、同步令牌/TOTP/邮件队列的加密密钥、通知 JWT 密钥（未显式配置时）以及静态块密钥（未设置 `storage.encryption_key` 时）。会话 token 是随机值、库里只存 SHA-256 摘要，但服务端会在启动时记录密钥指纹，指纹变化就清掉所有会话：轮换会让所有浏览器与 API 会话退出登录，同步客户端失效，上述数据在换回旧密钥前无法读出。
 
 ```bash
 mkdir -p data

@@ -53,11 +53,11 @@ cargo build --bin nanofile        # the binary is target/debug/nanofile
 
 The two profiles differ at startup: a release build **refuses to start** without
 a strong `server.secret_key`, while a debug build generates an ephemeral one. The
-ephemeral key is regenerated on every start, so everything derived from it
-becomes unreadable after a restart: the encrypted sync tokens, TOTP seeds, queued
-mail bodies and saved secrets. Browser sessions are not derived from the master
-key — the database stores only a SHA-256 digest of the random session token — so
-they survive. See [Security](/guide/admin/security).
+ephemeral key is regenerated on every start, so everything derived from it becomes
+unreadable after a restart — the encrypted sync tokens, TOTP seeds, queued mail
+bodies and saved secrets — and the start-up fingerprint check clears every stored
+session, so sessions do not survive the restart. See
+[Security](/guide/admin/security).
 
 ## Binary size and the performance probe
 

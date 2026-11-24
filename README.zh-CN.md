@@ -65,7 +65,7 @@ docker run -d --name nanofile \
   ghcr.io/veoco/nanofile:latest
 ```
 
-主密钥生成一次并长期保存：更换后同步客户端失效、已加密块无法解密，用该密钥加密的其他数据（如 TOTP 种子、队列中的邮件）也会失效；但已登录的浏览器会话不会随之登出，需要显式吊销。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/deploy/docker)。
+主密钥生成一次并长期保存：更换后下次启动时所有会话都会退出登录，同步客户端失效，已加密块无法解密，用该密钥加密的其他数据（如 TOTP 种子、队列中的邮件）也会失效；若怀疑密钥泄露，请单独吊销 API key。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/deploy/docker)。
 
 ## 文档
 

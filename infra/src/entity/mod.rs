@@ -16,6 +16,7 @@ pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
 pub mod gc_state;
+pub mod instance_meta;
 pub mod invitation_code;
 pub mod job_run;
 pub mod locked_file;

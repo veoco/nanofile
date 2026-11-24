@@ -78,10 +78,10 @@ docker run -d --name nanofile \
   ghcr.io/veoco/nanofile:latest
 ```
 
-The master secret is generated once and reused: rotating it breaks sync clients,
-makes encrypted blocks unreadable and invalidates other data encrypted with it,
-such as TOTP secrets and queued mail. It does not sign out browser sessions that
-are already logged in; revoke those explicitly. See the
+The master secret is generated once and reused: rotating it signs out every
+session at the next start, breaks sync clients, makes encrypted blocks unreadable
+and invalidates other data encrypted with it, such as TOTP secrets and queued
+mail. Revoke API keys explicitly if the key leaked. See the
 [Docker guide](https://veoco.github.io/nanofile/guide/deploy/docker) for the config-file
 variant, the first-run caveat and upgrade permissions.
 

@@ -97,21 +97,24 @@ which generates a strong key and persists it.
 
 Debug builds with an explicit config that omits the key still generate an
 ephemeral one: every start makes a new key, so the data encrypted under it (sync
-tokens, TOTP seeds, queued mail and saved secrets) becomes unreadable. Browser
-sessions keep working. With at-rest block encryption enabled the server refuses to
-start instead of generating one, because the ephemeral key would make every stored
+tokens, TOTP seeds, queued mail and saved secrets) becomes unreadable, and the
+start-up fingerprint check clears every stored session — sessions do not survive
+the restart. With at-rest block encryption enabled the server refuses to start
+instead of generating one, because the ephemeral key would make every stored
 block permanently unreadable. `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` does
 the same for a zero-config start and covers local and CI use.
 
 The key derives the CSRF signing secret, the sync-token encryption key, the TOTP
 encryption key, the queued-mail key, the notification JWT key (unless configured)
-and the at-rest block key (unless `storage.encryption_key` is set). Browser
-sessions are not derived from it: session tokens are random and stored only as a
-SHA-256 digest, so rotating the secret does not sign existing sessions out —
-revoke them under **Settings → Sessions & Credentials**, with a password change or
-by deactivating the account. Rotating it does break sync clients and makes TOTP
-seeds, queued mail and saved secrets undecryptable; encrypted blocks are affected
-only when the block key was derived from it.
+and the at-rest block key (unless `storage.encryption_key` is set). Session and
+account tokens are random and stored only as SHA-256 digests, so they are not
+encrypted with this key; the server records a fingerprint of the key at start-up
+and deletes every stored session when it changes. Rotating the secret therefore
+signs every browser and API session out. API keys are hashed the same way but are
+not tied to the fingerprint: revoke them explicitly if the key leaked. Rotation
+also breaks sync clients and makes TOTP seeds, queued mail and saved secrets
+undecryptable; encrypted blocks are affected only when the block key was derived
+from it.
 
 Keep it out of the image and out of the repository; see
 [Docker](/guide/deploy/docker) for generating and mounting it.

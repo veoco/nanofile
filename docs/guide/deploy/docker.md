@@ -50,9 +50,10 @@ with a version tag; the `latest` tag moves to every new release.
 Generate the master secret once and reuse it. It derives the CSRF signing secret,
 the sync-token, TOTP and queued-mail keys, the notification JWT key (unless
 configured) and the at-rest block key (unless `storage.encryption_key` is set).
-Sessions are not derived from it — session tokens are random and stored as a
-SHA-256 digest — so rotating it does not sign browsers out; it does break sync
-clients and makes that data unreadable until the old secret is back.
+Session tokens are random and stored as a SHA-256 digest, but the server
+fingerprints the key at start-up and clears every session when it changes:
+rotating it signs everyone out, breaks sync clients and makes that data unreadable
+until the old secret is back.
 
 ```bash
 mkdir -p data

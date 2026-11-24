@@ -35,7 +35,7 @@ cargo build --release -p server   # 产物是 target/release/nanofile
 cargo build --bin nanofile        # 产物是 target/debug/nanofile
 ```
 
-两种 profile 在启动行为上有差别：release 构建在没有强 `server.secret_key` 时**拒绝启动**，debug 构建则会临时生成一个。临时密钥每次启动都重新生成，因此由它派生的数据在重启后不可读：加密的同步令牌、TOTP 种子、队列邮件正文与已保存的 secret。浏览器会话不由主密钥派生——数据库里只存随机会话令牌的 SHA-256 摘要——因此能跨重启保留。见[安全](/zh/guide/admin/security)。
+两种 profile 在启动行为上有差别：release 构建在没有强 `server.secret_key` 时**拒绝启动**，debug 构建则会临时生成一个。临时密钥每次启动都重新生成，因此由它派生的数据在重启后不可读：加密的同步令牌、TOTP 种子、队列邮件正文与已保存的 secret；启动时的指纹校验还会清掉所有已存会话，因此会话不会跨重启保留。见[安全](/zh/guide/admin/security)。
 
 ## 二进制体积与性能探针
 

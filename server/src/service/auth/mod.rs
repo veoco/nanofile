@@ -14,6 +14,7 @@ pub mod pow;
 pub mod rate_limit;
 pub mod registration;
 pub mod s2fa;
+pub mod session_fingerprint;
 pub mod sso;
 pub mod token;
 pub mod totp;

@@ -833,3 +833,56 @@ async fn deactivation_revokes_credentials_and_reset_links() {
         "re-enabling the account must not restore the reset link"
     );
 }
+
+/// A changed master secret revokes every stored session at the next start. The
+/// first start on an existing database only records the fingerprint, so upgrading
+/// does not log everybody out.
+#[tokio::test]
+async fn a_changed_master_secret_revokes_sessions_at_startup() {
+    let f = TestFixture::new().await;
+    let db = f.server.db.as_ref();
+
+    assert_eq!(
+        server::service::auth::session_fingerprint::enforce(db, "secret-one")
+            .await
+            .unwrap(),
+        0,
+        "the first start must only record the fingerprint"
+    );
+    let after_first = server::repository::Repositories::without_secrets(f.server.db.clone());
+    assert!(
+        after_first
+            .api_token
+            .find_by_token(&f.api_token)
+            .await
+            .unwrap()
+            .is_some(),
+        "recording the fingerprint must not revoke an existing session"
+    );
+
+    let revoked = server::service::auth::session_fingerprint::enforce(db, "secret-two")
+        .await
+        .unwrap();
+    assert!(
+        revoked >= 1,
+        "a changed secret must delete the session rows"
+    );
+    let after_change = server::repository::Repositories::without_secrets(f.server.db.clone());
+    assert!(
+        after_change
+            .api_token
+            .find_by_token(&f.api_token)
+            .await
+            .unwrap()
+            .is_none(),
+        "the old session token must be gone from the database"
+    );
+
+    assert_eq!(
+        server::service::auth::session_fingerprint::enforce(db, "secret-two")
+            .await
+            .unwrap(),
+        0,
+        "the same secret must not revoke the sessions again"
+    );
+}

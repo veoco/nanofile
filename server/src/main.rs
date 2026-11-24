@@ -932,6 +932,18 @@ async fn run_server_flow(
         tracing::info!(generation, "starting a server generation");
         let db = establish_connection(&config.database).await?;
         migration::Migrator::up(&db, None).await?;
+        // The stored sessions belong to the master secret that was current when
+        // they were minted. A changed key must revoke them before the listener
+        // opens; the first start only records the fingerprint.
+        let revoked =
+            server::service::auth::session_fingerprint::enforce(&db, &config.server.secret_key)
+                .await?;
+        if revoked > 0 {
+            tracing::warn!(
+                revoked,
+                "server.secret_key changed since the last start; revoked every account session"
+            );
+        }
         let reason = run_server(
             db,
             config.clone(),
