@@ -843,8 +843,6 @@ impl FileService {
                 entry_policy: crate::service::fs::delete::EntryPolicy::Ok,
                 trash: crate::service::fs::delete::TrashMode::Single,
                 activity_detail: false,
-                parent_fs_id: None,
-                ancestor_chain: Vec::new(),
             },
         )
         .await

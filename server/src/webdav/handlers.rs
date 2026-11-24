@@ -340,7 +340,13 @@ async fn delete_handler(
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Err(e) => match e {
+            AppError::NotFound(_) => StatusCode::NOT_FOUND.into_response(),
+            AppError::Forbidden => StatusCode::FORBIDDEN.into_response(),
+            AppError::LockedDelete(_) => StatusCode::LOCKED.into_response(),
+            AppError::BadRequest(_) => StatusCode::BAD_REQUEST.into_response(),
+            _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
     }
 }
 

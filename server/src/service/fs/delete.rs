@@ -14,7 +14,7 @@ use std::collections::HashSet;
 use crate::fs::core::RepoHead;
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash::{TrashItem, add_batch_to_trash, add_to_trash};
-use crate::fs::core::{compute_tree_size_and_files, repo_head, resolve_dir_fs_id};
+use crate::fs::core::{compute_tree_size_and_files, repo_head};
 use crate::repository::Repositories;
 use crate::service::fs::quota::QuotaGuard;
 use base::error::AppError;
@@ -67,9 +67,6 @@ pub(crate) struct DeleteRequest<'a> {
     pub trash: TrashMode,
     /// Batch logging records the deleted size and object id; single deletes did not.
     pub activity_detail: bool,
-    /// Pre-resolved by batch deletes, which need the ancestor chain for an O(d) commit.
-    pub parent_fs_id: Option<String>,
-    pub ancestor_chain: Vec<(String, String)>,
 }
 
 struct Victim {
@@ -105,22 +102,35 @@ pub(crate) async fn delete_entries(
     }
     let root_id = head.root_id.clone();
 
-    let parent_fs_id = match request.parent_fs_id.clone() {
-        Some(id) => id,
-        None => match resolve_dir_fs_id(deps.repos, request.repo_id, &root_id, request.parent_dir)
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                return match request.parent_policy {
-                    ParentPolicy::Ok => Ok(()),
-                    ParentPolicy::NotFound => Err(crate::service::fs::resolve_parent_error(
-                        e,
+    // Resolve the parent and its ancestor chain in one walk: the chain keeps the
+    // commit's ancestor rewrite O(d), and resolving it here (against the captured
+    // head root) avoids a second tree walk per level.
+    let (parent_fs_id, ancestor_chain) = match FileOps::resolve_fs_id_chain_from_root(
+        deps.repos,
+        request.repo_id,
+        &root_id,
+        request.parent_dir,
+    )
+    .await
+    {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            return match request.parent_policy {
+                // A file delete is idempotent only for "not found": a database
+                // or corrupt-object failure must stay a 500, not a fake success.
+                ParentPolicy::Ok => match e {
+                    AppError::NotFound(_) => Ok(()),
+                    other => Err(crate::service::fs::resolve_parent_error(
+                        other,
                         "resolve parent failed",
                     )),
-                };
-            }
-        },
+                },
+                ParentPolicy::NotFound => Err(crate::service::fs::resolve_parent_error(
+                    e,
+                    "resolve parent failed",
+                )),
+            };
+        }
     };
 
     let parent_data =
@@ -128,7 +138,12 @@ pub(crate) async fn delete_entries(
             Ok(data) => data,
             Err(e) => {
                 return match request.parent_policy {
-                    ParentPolicy::Ok => Ok(()),
+                    ParentPolicy::Ok => match e {
+                        AppError::NotFound(_) => Ok(()),
+                        other => Err(AppError::internal(format!(
+                            "read parent dir failed: {other}"
+                        ))),
+                    },
                     ParentPolicy::NotFound => {
                         Err(AppError::internal(format!("read parent dir failed: {e}")))
                     }
@@ -171,6 +186,21 @@ pub(crate) async fn delete_entries(
         return Ok(());
     }
 
+    // A file locked by another user cannot be deleted through the REST/WebDAV
+    // surfaces; the sync commit path enforces the same rule, and a lock on a file
+    // inside a deleted directory has to be caught as well.
+    let locked_paths: Vec<String> = victims
+        .iter()
+        .flat_map(|victim| victim.files.iter().cloned())
+        .collect();
+    crate::fs::core::lock::check_delete_locked_paths(
+        deps.repos,
+        request.repo_id,
+        &locked_paths,
+        request.user_id,
+    )
+    .await?;
+
     record_trash(deps, &request, &head, &victims).await;
 
     let total_deleted: i64 = victims.iter().map(|v| v.total_size).sum();
@@ -185,7 +215,7 @@ pub(crate) async fn delete_entries(
         &parent_fs_id,
         request.email,
         &request.description,
-        &request.ancestor_chain,
+        &ancestor_chain,
         |dirents| {
             dirents.retain(|d| !names.contains(d.name.as_str()));
             Ok(())

@@ -90,8 +90,6 @@ impl FileOpsService {
                 entry_policy: crate::service::fs::delete::EntryPolicy::Ok,
                 trash: crate::service::fs::delete::TrashMode::Batch,
                 activity_detail: true,
-                parent_fs_id: None,
-                ancestor_chain: Vec::new(),
             },
         )
         .await

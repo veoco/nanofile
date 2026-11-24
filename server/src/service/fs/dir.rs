@@ -573,8 +573,6 @@ impl DirService {
                 entry_policy: crate::service::fs::delete::EntryPolicy::NotFound,
                 trash: crate::service::fs::delete::TrashMode::Single,
                 activity_detail: false,
-                parent_fs_id: None,
-                ancestor_chain: Vec::new(),
             },
         )
         .await
@@ -805,8 +803,6 @@ impl DirService {
                 entry_policy: crate::service::fs::delete::EntryPolicy::NotFound,
                 trash: crate::service::fs::delete::TrashMode::Single,
                 activity_detail: false,
-                parent_fs_id: None,
-                ancestor_chain: Vec::new(),
             },
         )
         .await

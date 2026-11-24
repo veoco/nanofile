@@ -105,6 +105,38 @@ async fn load_locks(
     Ok(locks)
 }
 
+/// Reject deleting a file locked by another user.
+///
+/// The sync commit path checks locks by diffing the tree; the REST and WebDAV
+/// delete paths have the concrete paths already, so they check them directly.
+/// A lock owned by the caller does not block their own delete, matching the sync
+/// check's owner rule.
+pub async fn check_delete_locked_paths(
+    repos: &Repositories,
+    repo_id: &str,
+    paths: &[String],
+    user_id: i32,
+) -> Result<(), AppError> {
+    let locks = load_locks(repos, repo_id).await?;
+    if locks.is_empty() {
+        return Ok(());
+    }
+    for path in paths {
+        let key = lock_path_key(path);
+        if key.is_empty() {
+            continue;
+        }
+        if let Some(owners) = locks.get(key)
+            && owners.iter().any(|owner| *owner != user_id)
+        {
+            // The REST/WebDAV delete shapes answer 423 (see `LockedDelete`); the
+            // sync path's 403 plain-text variant is only for its own endpoint.
+            return Err(AppError::LockedDelete(format!("/{key}")));
+        }
+    }
+    Ok(())
+}
+
 /// Delete lock rows whose path is absent from the library's current HEAD.
 ///
 /// A commit that deletes or renames a file leaves its row behind; such a row
