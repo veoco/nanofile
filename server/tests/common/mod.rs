@@ -1227,6 +1227,51 @@ impl TestFixture {
         body["mtime"].as_i64().expect("repo mtime is an integer")
     }
 
+    /// Create a share link through the v2.1 API and return its token.
+    pub async fn create_share_link(&self, path: &str) -> String {
+        self.create_share_link_with_password(path, None).await
+    }
+
+    /// Create a share link with an optional password and return its token.
+    pub async fn create_share_link_with_password(
+        &self,
+        path: &str,
+        password: Option<&str>,
+    ) -> String {
+        let mut body = serde_json::json!({"repo_id": self.repo_id, "path": path});
+        if let Some(password) = password {
+            body["password"] = serde_json::json!(password);
+        }
+        let resp = self
+            .client
+            .post_json("/api/v2.1/share-links/", Some(&self.api_token), &body)
+            .await;
+        assert_eq!(resp.status(), 200, "create share link failed for {path}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["token"]
+            .as_str()
+            .expect("share link token")
+            .to_string()
+    }
+
+    /// Create an upload link with an optional password and return its token.
+    pub async fn create_upload_link(&self, path: &str, password: Option<&str>) -> String {
+        let mut body = serde_json::json!({"repo_id": self.repo_id, "path": path});
+        if let Some(password) = password {
+            body["password"] = serde_json::json!(password);
+        }
+        let resp = self
+            .client
+            .post_json("/api/v2.1/upload-links/", Some(&self.api_token), &body)
+            .await;
+        assert_eq!(resp.status(), 200, "create upload link failed for {path}");
+        let body: serde_json::Value = resp.json().await.unwrap();
+        body["token"]
+            .as_str()
+            .expect("upload link token")
+            .to_string()
+    }
+
     /// Create a test environment with notification server enabled.
     pub async fn new_with_notification() -> Self {
         let server = TestServer::start_with_notification().await;

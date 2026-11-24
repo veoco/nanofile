@@ -7,6 +7,7 @@
 mod common;
 
 mod app_test;
+mod compat_contract_test;
 mod integration_test;
 mod repo_surface_matrix_test;
 mod repos_test;
