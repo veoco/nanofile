@@ -666,17 +666,26 @@ impl SyncAuth {
         let (sync_result, api_result, key_result) = tokio::join!(sync_fut, api_fut, key_fut);
 
         if let Some(record) = sync_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
-            if is_token_expired(record.expires_at) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-
-            if let Some(url_repo) = url_repo_id
-                && record.repo_id != url_repo
+            // The same validity rules the body-token endpoints use: unexpired,
+            // right library, active owner.
+            match crate::service::auth::token::validate_sync_token_record(
+                repos,
+                &record,
+                url_repo_id,
+            )
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
             {
-                return Err(StatusCode::FORBIDDEN);
+                crate::service::auth::token::SyncTokenValidity::Valid => {}
+                crate::service::auth::token::SyncTokenValidity::UserMissing => {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                crate::service::auth::token::SyncTokenValidity::Expired
+                | crate::service::auth::token::SyncTokenValidity::RepoMismatch
+                | crate::service::auth::token::SyncTokenValidity::Inactive => {
+                    return Err(StatusCode::FORBIDDEN);
+                }
             }
-
-            ensure_active_user(repos, record.user_id).await?;
 
             let device = device_from_token(&record);
             return Ok(SyncAuth {

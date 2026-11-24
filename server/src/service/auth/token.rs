@@ -11,6 +11,53 @@ use crate::repository::Repositories;
 
 const TOKEN_LEN: usize = 40;
 
+/// Why a sync token cannot be used, in the order the checks apply.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SyncTokenValidity {
+    Valid,
+    Expired,
+    /// The token belongs to a different library than the request.
+    RepoMismatch,
+    /// The owning account row no longer exists.
+    UserMissing,
+    /// The owning account is deactivated or unverified.
+    Inactive,
+}
+
+/// Apply the rules every sync-token consumer shares: the token is unexpired, the
+/// library matches the request, and the owner account is still active.
+///
+/// The header extractor (`SyncAuth`) and the body-token endpoints
+/// (`folder-perm`, `locked-files`) used to spell this out separately; a rule added
+/// to one was invisible to the other, which is how expired/deactivated tokens kept
+/// working on the body endpoints until cleanup.
+pub(crate) async fn validate_sync_token_record(
+    repos: &Repositories,
+    record: &sync_token::Model,
+    expected_repo: Option<&str>,
+) -> Result<SyncTokenValidity, AppError> {
+    if expected_repo.is_some_and(|repo_id| record.repo_id != repo_id) {
+        return Ok(SyncTokenValidity::RepoMismatch);
+    }
+    if crate::middleware::auth::is_token_expired(record.expires_at) {
+        return Ok(SyncTokenValidity::Expired);
+    }
+    Ok(
+        match crate::service::auth::account_state::load_account_state(repos, record.user_id).await?
+        {
+            crate::service::auth::account_state::AccountState::Active(_) => {
+                SyncTokenValidity::Valid
+            }
+            crate::service::auth::account_state::AccountState::Missing => {
+                SyncTokenValidity::UserMissing
+            }
+            crate::service::auth::account_state::AccountState::Inactive => {
+                SyncTokenValidity::Inactive
+            }
+        },
+    )
+}
+
 /// Verify a sync token that the client supplied in the request **body**.
 ///
 /// `folder-perm` and `locked-files` carry the token in JSON rather than a header,
@@ -23,19 +70,13 @@ pub async fn verify_body_sync_token(
     repo_id: &str,
     token: &str,
 ) -> Result<bool, AppError> {
-    let Some(record) = repos
-        .sync_token
-        .find_by_token_and_repo(token, repo_id)
-        .await?
-    else {
+    let Some(record) = repos.sync_token.find_by_token(token).await? else {
         return Ok(false);
     };
-
-    if matches!(record.expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp) {
-        return Ok(false);
-    }
-
-    crate::service::auth::account_state::is_active_account(repos, record.user_id).await
+    Ok(
+        validate_sync_token_record(repos, &record, Some(repo_id)).await?
+            == SyncTokenValidity::Valid,
+    )
 }
 
 /// Return the sync token the caller should use for one repository, or create it.
