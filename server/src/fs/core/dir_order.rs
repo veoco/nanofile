@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
-use base::common::{CommitData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
+use base::common::{EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::entity::{commit, fs_object, repo};
 
@@ -354,50 +354,21 @@ async fn append_normalizing_commit(
 ) -> Result<Option<String>, AppError> {
     upload_activity::touch(&repo_row.id);
     let ctime = chrono::Utc::now().timestamp();
-    let data = CommitData {
-        commit_id: String::new(),
-        repo_id: repo_row.id.clone(),
-        root_id: new_root.to_string(),
-        creator_name: head_commit.creator_name.clone(),
-        creator: EMPTY_SHA1.to_string(),
-        description: NORMALIZE_DESCRIPTION.to_string(),
+    // The offline repair tool deliberately keeps its own head swap (it does not
+    // change the library size or emit a repo-update event), but the commit record
+    // itself is the online path's builder, so a schema change cannot make the two
+    // produce different ids.
+    let (commit_id, commit_model) = crate::fs::core::FileOps::build_commit_model(
+        &repo_row.id,
+        new_root,
+        &head_commit.creator_name,
+        NORMALIZE_DESCRIPTION,
+        Some(&head_commit.commit_id),
+        repo_row.repo_version,
         ctime,
-        parent_id: Some(head_commit.commit_id.clone()),
-        second_parent_id: None,
-        repo_name: None,
-        repo_desc: None,
-        repo_category: None,
-        encrypted: None,
-        enc_version: None,
-        magic: None,
-        salt: None,
-        pwd_hash: None,
-        pwd_hash_algo: None,
-        pwd_hash_params: None,
-        key: None,
-        version: repo_row.repo_version,
-        conflict: None,
-        new_merge: None,
-    };
-    let commit_id = domain::commit::compute_commit_id(&data);
+    );
 
-    commit::Entity::insert(commit::ActiveModel {
-        id: sea_orm::NotSet,
-        repo_id: Set(repo_row.id.clone()),
-        commit_id: Set(commit_id.clone()),
-        root_id: Set(new_root.to_string()),
-        parent_id: Set(Some(head_commit.commit_id.clone())),
-        second_parent_id: Set(None),
-        creator_name: Set(head_commit.creator_name.clone()),
-        creator: Set(EMPTY_SHA1.to_string()),
-        description: Set(NORMALIZE_DESCRIPTION.to_string()),
-        ctime: Set(ctime),
-        version: Set(repo_row.repo_version as i8),
-        new_merge: Set(None),
-        conflict: Set(None),
-    })
-    .exec(db)
-    .await?;
+    commit::Entity::insert(commit_model).exec(db).await?;
 
     let updated = repo::Entity::update_many()
         .filter(repo::Column::Id.eq(repo_row.id.as_str()))

@@ -851,6 +851,66 @@ impl FileOps {
         .await
     }
 
+    /// Build the commit row for one tree update.
+    ///
+    /// The commit id is the SHA-1 of the serialized [`CommitData`](base::common::CommitData),
+    /// so every writer must construct this exact record; the online commit path
+    /// and the offline `verify-dir-order --repair` tool both call this builder
+    /// instead of each spelling out the 24 fields.
+    pub(crate) fn build_commit_model(
+        repo_id: &str,
+        root_fs_id: &str,
+        creator_name: &str,
+        description: &str,
+        parent_id: Option<&str>,
+        repo_version: i32,
+        ctime: i64,
+    ) -> (String, commit::ActiveModel) {
+        let commit_data = base::common::CommitData {
+            commit_id: String::new(),
+            repo_id: repo_id.to_string(),
+            root_id: root_fs_id.to_string(),
+            creator_name: creator_name.to_string(),
+            creator: EMPTY_SHA1.to_string(),
+            description: description.to_string(),
+            ctime,
+            parent_id: parent_id.map(str::to_string),
+            second_parent_id: None,
+            repo_name: None,
+            repo_desc: None,
+            repo_category: None,
+            encrypted: None,
+            enc_version: None,
+            magic: None,
+            salt: None,
+            pwd_hash: None,
+            pwd_hash_algo: None,
+            pwd_hash_params: None,
+            key: None,
+            version: repo_version,
+            conflict: None,
+            new_merge: None,
+        };
+        let commit_id = domain::commit::compute_commit_id(&commit_data);
+
+        let model = commit::ActiveModel {
+            id: sea_orm::NotSet,
+            repo_id: sea_orm::Set(repo_id.to_string()),
+            commit_id: sea_orm::Set(commit_id.clone()),
+            root_id: sea_orm::Set(root_fs_id.to_string()),
+            parent_id: sea_orm::Set(parent_id.map(str::to_string)),
+            second_parent_id: sea_orm::NotSet,
+            creator_name: sea_orm::Set(creator_name.to_string()),
+            creator: sea_orm::Set(EMPTY_SHA1.to_string()),
+            description: sea_orm::Set(description.to_string()),
+            ctime: sea_orm::Set(ctime),
+            version: sea_orm::Set(repo_version as i8),
+            new_merge: sea_orm::NotSet,
+            conflict: sea_orm::NotSet,
+        };
+        (commit_id, model)
+    }
+
     async fn create_commit_inner(
         repos: &Repositories,
         repo_id: &str,
@@ -915,48 +975,15 @@ impl FileOps {
                 .await?;
         }
 
-        let commit_data = base::common::CommitData {
-            commit_id: String::new(),
-            repo_id: repo_id.to_string(),
-            root_id: root_fs_id.to_string(),
-            creator_name: creator_name.to_string(),
-            creator: EMPTY_SHA1.to_string(),
-            description: description.to_string(),
-            ctime: now,
-            parent_id: parent_commit_id.clone(),
-            second_parent_id: None,
-            repo_name: None,
-            repo_desc: None,
-            repo_category: None,
-            encrypted: None,
-            enc_version: None,
-            magic: None,
-            salt: None,
-            pwd_hash: None,
-            pwd_hash_algo: None,
-            pwd_hash_params: None,
-            key: None,
-            version: 1,
-            conflict: None,
-            new_merge: None,
-        };
-        let commit_id = domain::commit::compute_commit_id(&commit_data);
-
-        let commit_model = commit::ActiveModel {
-            id: sea_orm::NotSet,
-            repo_id: sea_orm::Set(repo_id.to_string()),
-            commit_id: sea_orm::Set(commit_id.clone()),
-            root_id: sea_orm::Set(root_fs_id.to_string()),
-            parent_id: sea_orm::Set(parent_commit_id.clone()),
-            second_parent_id: sea_orm::NotSet,
-            creator_name: sea_orm::Set(creator_name.to_string()),
-            creator: sea_orm::Set(EMPTY_SHA1.to_string()),
-            description: sea_orm::Set(description.to_string()),
-            ctime: sea_orm::Set(now),
-            version: sea_orm::Set(1i8),
-            new_merge: sea_orm::NotSet,
-            conflict: sea_orm::NotSet,
-        };
+        let (commit_id, commit_model) = Self::build_commit_model(
+            repo_id,
+            root_fs_id,
+            creator_name,
+            description,
+            parent_commit_id.as_deref(),
+            1,
+            now,
+        );
         repos.commit.insert(commit_model).await?;
 
         let commit_id_clone = commit_id.clone();
