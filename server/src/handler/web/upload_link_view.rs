@@ -1,17 +1,16 @@
 use askama::Template;
 use axum::{
     extract::{ConnectInfo, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{Html, IntoResponse, Response},
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use super::share_view::switched_off_link_page;
+use super::link_gate::{Gate, GateMode, LinkKind, LinkModel};
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::sharing::share::{UPLOAD_LINK_EXPIRED, UPLOAD_LINK_NOT_FOUND};
 use base::error::AppError;
 
 #[derive(Template)]
@@ -26,104 +25,6 @@ struct UploadLinkViewTemplate {
     pub description: Option<String>,
 }
 
-use super::share_view::{ShareAccessValidationTemplate, wrong_password_error};
-
-/// Marks this browser session as having supplied the correct upload-link
-/// password. Delegates to the shared link-unlock helper so the upload-link and
-/// share-link paths cannot drift: both sign an HMAC over the token and the
-/// link's current password version (a plaintext `1` is rejected, and a password
-/// change invalidates the cookie), and both set `Secure` when `server.site_url`
-/// is HTTPS.
-fn upload_link_cookie(state: &AppState, token: &str, password_version: &str) -> String {
-    use crate::service::auth::csrf::{link_unlock_cookie, upload_link_cookie_name};
-    link_unlock_cookie(
-        &upload_link_cookie_name(token),
-        token,
-        password_version,
-        &state.csrf_secret,
-        state.config().server.secure_cookies(),
-    )
-}
-
-/// Validate the upload link: check it exists, not expired, repo exists.
-async fn validate_upload_link(
-    state: &Arc<AppState>,
-    token: &str,
-) -> Result<infra::entity::upload_link::Model, AppError> {
-    let link = state
-        .repos
-        .upload_link
-        .find_by_token(token)
-        .await?
-        .ok_or_else(|| AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()))?;
-
-    if let Some(exp) = link.expires_at
-        && chrono::Utc::now().timestamp() > exp
-    {
-        return Err(AppError::NotFound(UPLOAD_LINK_EXPIRED.into()));
-    }
-
-    if !state.sync_service().repo_exists(&link.repo_id).await? {
-        return Err(AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()));
-    }
-
-    // The link acts as its creator, so it must stop resolving once the creator
-    // loses access to the library (member removed, account deactivated); the
-    // view page lists directory entries and must not outlive that access.
-    if !crate::service::sharing::share::link_creator_may_access(
-        &state.repos,
-        link.creator_id,
-        &link.repo_id,
-        false,
-    )
-    .await
-    {
-        return Err(AppError::NotFound(UPLOAD_LINK_NOT_FOUND.into()));
-    }
-
-    Ok(link)
-}
-
-/// Turn a link lookup failure into the page the visitor sees, as the share view does.
-fn link_error_page(
-    state: &AppState,
-    err: AppError,
-    headers: &HeaderMap,
-) -> Result<Response, AppError> {
-    match crate::service::sharing::share::classify_link_failure(&err) {
-        Some(failure) => Ok(crate::ui::error_page::link_page(failure, state, headers)),
-        None => Err(err),
-    }
-}
-
-/// Check the supplied password against the stored hash.
-///
-/// The password arrives in the `X-Seafile-Sharelink-Password` header or as a
-/// form field on the POST; never in the query string, which would put it into
-/// browser history, referrers and request logs.
-async fn check_password(
-    link: &infra::entity::upload_link::Model,
-    provided: Option<&str>,
-    password_hash_iterations: u32,
-) -> bool {
-    let stored_hash = match link.password {
-        Some(ref h) => h,
-        None => return true, // no password required
-    };
-
-    match provided {
-        Some(pwd) => {
-            crate::service::auth::password::verify_password_async(
-                pwd.to_string(),
-                stored_hash.clone(),
-                password_hash_iterations,
-            )
-            .await
-        }
-        None => false,
-    }
-}
-
 /// GET /u/{token}/ — show the public upload page.
 ///
 /// Query parameters are deliberately not extracted: the password arrives via
@@ -134,53 +35,24 @@ pub async fn upload_link_view(
     headers: HeaderMap,
     Path(token): Path<String>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_upload_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match validate_upload_link(&state, &token).await {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
-    };
-
-    // Password check: header or signed cookie only, never the query string.
-    let provided_pwd = headers
-        .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok());
-    let pw_ok = check_password(
-        &link,
-        provided_pwd,
-        state.config().auth.password_hash_iterations,
+    let (link, unlock_cookie) = match super::link_gate::gate_get(
+        &state,
+        &headers,
+        &token,
+        LinkKind::Upload,
+        GateMode::Page,
     )
-    .await;
-    // The password form POST sets `visited_ufs_{token}`; accept that cookie as
-    // an unlock too, so the redirect back here is not bounced to the form.
-    let cookie_ok = link.password.is_some()
-        && crate::service::auth::csrf::has_valid_upload_link_cookie(
-            &headers,
-            &token,
-            link.password.as_deref().unwrap_or(""),
-            &state.csrf_secret,
-        );
-    let unlocked = pw_ok || cookie_ok;
-
-    if !unlocked {
-        // Throttle wrong-password attempts here too: the POST handler has an
-        // IP-keyed limiter, but this GET path can be handed a password directly.
-        if provided_pwd.is_some() {
-            super::share_view::record_link_password_failure(&state, &token)?;
+    .await?
+    {
+        Gate::Open {
+            link: LinkModel::Upload(link),
+            unlock_cookie,
+        } => (link, unlock_cookie),
+        Gate::Open { .. } => {
+            return Err(AppError::internal("wrong link kind behind an upload gate"));
         }
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: wrong_password_error(provided_pwd, t),
-            form_action: format!("/u/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
+        Gate::Password(response) => return Ok(response),
+    };
 
     let dir_name = link
         .path
@@ -202,26 +74,22 @@ pub async fn upload_link_view(
     let html = tpl
         .render()
         .map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut response = Html(html).into_response();
 
-    // Valid password (provided or previously verified) → mark the session authorized
-    // so the upload URL API grants a token.
-    let mut resp = Html(html).into_response();
-    if link.password.is_some()
-        && pw_ok
-        && let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(
-            &state,
-            &token,
-            link.password.as_deref().unwrap_or(""),
-        ))
-    {
-        resp.headers_mut()
-            .append(axum::http::header::SET_COOKIE, value);
+    // A password supplied through the header unlocks the one-shot upload URL too:
+    // that endpoint authorizes via the signed `visited_ufs_` cookie.
+    if let Some(cookie) = unlock_cookie {
+        response.headers_mut().append(
+            axum::http::header::SET_COOKIE,
+            axum::http::HeaderValue::from_str(&cookie)
+                .map_err(|e| AppError::internal(format!("invalid unlock cookie: {e}")))?,
+        );
     }
-    Ok(resp)
+    Ok(response)
 }
 
-/// POST /u/{token}/ — validate the password, set a session flag cookie, then
-/// redirect to the upload page (the password is NOT carried in the URL).
+/// POST /u/{token}/ — validate the password, set the unlock cookie, then redirect
+/// to the upload page (the password is NOT carried in the URL).
 pub async fn upload_link_view_post(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -229,61 +97,5 @@ pub async fn upload_link_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_upload_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match validate_upload_link(&state, &token).await {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
-    };
-
-    let password = form
-        .get("password")
-        .ok_or_else(|| AppError::BadRequest("password required".into()))?;
-
-    let client_ip = crate::middleware::effective_client_ip(
-        &addr,
-        &headers,
-        &state.config().server.trusted_proxies,
-    );
-    let rl_key = format!("link_password:{client_ip}");
-    if state.auth_limiters.link_password.is_limited(&rl_key) {
-        return Err(AppError::TooManyRequests);
-    }
-    state.auth_limiters.link_password.record_attempt(&rl_key);
-
-    let valid = crate::service::auth::password::verify_password_async(
-        password.clone(),
-        link.password.clone().unwrap_or_default(),
-        state.config().auth.password_hash_iterations,
-    )
-    .await;
-
-    if !valid {
-        // Same per-token cap as the share-link POST path: the IP limiter alone
-        // does not bound a distributed brute force against one token.
-        crate::handler::web::share_view::record_link_password_failure(&state, &token)?;
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: Some(t.tr("pub.incorrect_password").to_string()),
-            form_action: format!("/u/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    let mut resp = (StatusCode::FOUND, [("Location", format!("/u/{}/", token))]).into_response();
-    if let Ok(value) = axum::http::HeaderValue::from_str(&upload_link_cookie(
-        &state,
-        &token,
-        link.password.as_deref().unwrap_or(""),
-    )) {
-        resp.headers_mut()
-            .append(axum::http::header::SET_COOKIE, value);
-    }
-    Ok(resp)
+    super::link_gate::gate_post(&state, &headers, &addr, &token, LinkKind::Upload, &form).await
 }

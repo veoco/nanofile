@@ -553,26 +553,42 @@ pub async fn resolve_share_link(
     Ok(link)
 }
 
+/// Check whether the password in the request matches a link's stored hash.
+///
+/// One implementation for share links and upload links: a link without a stored
+/// password is open (upstream's `check_share_link_common` returns before reading
+/// the request), and a supplied password is verified against the hash.
+pub async fn verify_link_password(
+    stored: Option<&str>,
+    provided: Option<&str>,
+    password_hash_iterations: u32,
+) -> Result<bool, AppError> {
+    let Some(stored) = stored else {
+        return Ok(true);
+    };
+    let Some(provided) = provided else {
+        return Ok(false);
+    };
+    Ok(crate::service::auth::password::verify_password_async(
+        provided.to_string(),
+        stored.to_string(),
+        password_hash_iterations,
+    )
+    .await)
+}
+
 /// Check whether the password in the request matches the stored hash.
 pub async fn check_share_link_password(
     link: &infra::entity::share_link::Model,
     provided_password: Option<&str>,
     password_hash_iterations: u32,
 ) -> Result<bool, AppError> {
-    let stored_hash = match &link.password {
-        Some(h) => h,
-        None => return Ok(true),
-    };
-
-    match provided_password {
-        Some(pwd) => Ok(crate::service::auth::password::verify_password_async(
-            pwd.to_string(),
-            stored_hash.clone(),
-            password_hash_iterations,
-        )
-        .await),
-        None => Ok(false),
-    }
+    verify_link_password(
+        link.password.as_deref(),
+        provided_password,
+        password_hash_iterations,
+    )
+    .await
 }
 
 /// Fire-and-forget view count increment.

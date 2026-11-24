@@ -57,22 +57,6 @@ struct ShareViewTemplate {
     pub description: Option<String>,
 }
 
-/// The link password gate, shared by the file, folder and upload-link handlers.
-#[derive(Template)]
-#[template(path = "web/share_access_validation.html")]
-pub struct ShareAccessValidationTemplate {
-    pub t: &'static I18n,
-    pub urls: &'static crate::static_assets::TemplateUrls,
-    pub error: Option<String>,
-    pub form_action: String,
-}
-
-/// The gate's error value: the localized message when a password was supplied,
-/// `None` on the plain first render (no password is not a failure).
-pub(crate) fn wrong_password_error(provided_pwd: Option<&str>, t: &'static I18n) -> Option<String> {
-    provided_pwd.map(|_| t.tr("pub.incorrect_password").to_string())
-}
-
 /// Rate-limit anonymous share-link downloads per client IP.
 fn check_share_download_rate(
     state: &Arc<AppState>,
@@ -92,79 +76,10 @@ fn check_share_download_rate(
     Ok(())
 }
 
-/// Rate-limit failed share-link password attempts, keyed by the link token
-/// rather than client IP: an IP-based limiter is bypassed by spreading attempts
-/// across many addresses, while a per-token cap bounds brute force per link.
-///
-/// Every password-protected entry point must call this on a wrong password; it
-/// is shared with the upload-link view so switching endpoints cannot bypass the cap.
-pub(super) fn record_link_password_failure(
-    state: &Arc<AppState>,
-    token: &str,
-) -> Result<(), AppError> {
-    let key = format!("link_password_token:{token}");
-    if state.auth_limiters.link_password.is_limited(&key) {
-        return Err(AppError::TooManyRequests);
-    }
-    state.auth_limiters.link_password.record_attempt(&key);
-    Ok(())
-}
-
 /// Whether a password-protected share link is unlocked for this request.
 ///
-/// Accepts the password itself (via the `X-Seafile-Sharelink-Password` header or
-/// `?password=`, both of which predate the cookie) or the signed unlock cookie
-/// issued after a successful password POST, which keeps the password out of links.
-/// `password_version` is the link's stored password value, so a cookie minted
-/// before a password change no longer unlocks the link.
-fn share_link_unlocked(
-    state: &Arc<AppState>,
-    token: &str,
-    headers: &HeaderMap,
-    password_ok: bool,
-    password_version: &str,
-) -> bool {
-    if password_ok {
-        return true;
-    }
-    let cookie_name = crate::service::auth::csrf::share_link_cookie_name(token);
-    crate::service::auth::csrf::has_link_unlock_cookie(
-        headers,
-        &cookie_name,
-        token,
-        password_version,
-        &state.csrf_secret,
-    )
-}
-
-/// Turn a link lookup failure into the page the visitor sees.
-///
-/// "Turned off" and "expired" read differently to the link holder, while any
-/// other lookup failure stays a 500 rather than being dressed up as a dead link.
-fn link_error_page(
-    state: &AppState,
-    err: AppError,
-    headers: &HeaderMap,
-) -> Result<Response, AppError> {
-    match crate::service::sharing::share::classify_link_failure(&err) {
-        Some(failure) => Ok(crate::ui::error_page::link_page(failure, state, headers)),
-        None => Err(err),
-    }
-}
-
-/// The page a visitor gets when the link's direction has been switched off.
-///
-/// "Gone", not "forbidden": a retired feature must not advertise that the link
-/// ever existed, and the existing dead-link copy already says the owner may have
-/// turned it off.
-pub(super) fn switched_off_link_page(state: &AppState, headers: &HeaderMap) -> Response {
-    crate::ui::error_page::link_page(
-        crate::service::sharing::share::LinkFailure::Unknown,
-        state,
-        headers,
-    )
-}
-
+/// The gate module owns this decision now; the file endpoint's raw error shape
+/// is the only caller that passes `GateMode::Raw`.
 async fn resolve_file_meta(
     repos: &crate::repository::Repositories,
     repo_id: &str,
@@ -183,52 +98,23 @@ pub async fn shared_file_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_download_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
-    {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
-    };
-
-    // Password check: only the `X-Seafile-Sharelink-Password` header or the signed
-    // unlock cookie set by the password form — never `?password=`, which would put
-    // it into browser history, referrers and request logs.
-    let provided_pwd = headers
-        .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok());
-    let pw_ok = crate::service::sharing::share::check_share_link_password(
-        &link,
-        provided_pwd,
-        state.config().auth.password_hash_iterations,
-    )
-    .await?;
-
-    let unlocked = share_link_unlocked(
+    let link = match super::link_gate::gate_get(
         &state,
-        &token,
         &headers,
-        pw_ok,
-        link.password.as_deref().unwrap_or(""),
-    );
-    if link.password.is_some() && !unlocked {
-        // Only count genuine failures: a request without a password is the first render.
-        if provided_pwd.is_some() {
-            record_link_password_failure(&state, &token)?;
-        }
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: wrong_password_error(provided_pwd, t),
-            form_action: format!("/f/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
+        &token,
+        super::link_gate::LinkKind::ShareFile,
+        super::link_gate::GateMode::Page,
+    )
+    .await?
+    {
+        super::link_gate::Gate::Open { link, .. } => match link {
+            super::link_gate::LinkModel::Share(link) => link,
+            super::link_gate::LinkModel::Upload(_) => {
+                return Err(AppError::internal("wrong link kind behind a share gate"));
+            }
+        },
+        super::link_gate::Gate::Password(response) => return Ok(response),
+    };
 
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         check_share_download_rate(&state, &addr, &headers)?;
@@ -307,7 +193,7 @@ pub async fn shared_file_view(
     Ok(Html(html).into_response())
 }
 
-/// POST /f/{token}/ — validate password, redirect with password in URL.
+/// POST /f/{token}/ — validate the password and unlock the link with a cookie.
 pub async fn shared_file_view_post(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -315,70 +201,15 @@ pub async fn shared_file_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_download_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
-    {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
-    };
-
-    let password = form
-        .get("password")
-        .ok_or_else(|| AppError::BadRequest("password required".into()))?;
-
-    let client_ip = crate::middleware::effective_client_ip(
-        &addr,
+    super::link_gate::gate_post(
+        &state,
         &headers,
-        &state.config().server.trusted_proxies,
-    );
-    let rl_key = format!("link_password:{client_ip}");
-    if state.auth_limiters.link_password.is_limited(&rl_key) {
-        return Err(AppError::TooManyRequests);
-    }
-    state.auth_limiters.link_password.record_attempt(&rl_key);
-
-    let valid = crate::service::auth::password::verify_password_async(
-        password.clone(),
-        link.password.clone().unwrap_or_default(),
-        state.config().auth.password_hash_iterations,
-    )
-    .await;
-
-    if !valid {
-        // Token-dimension cap on top of the IP cap, so distributed brute force is bounded.
-        record_link_password_failure(&state, &token)?;
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: Some(t.tr("pub.incorrect_password").to_string()),
-            form_action: format!("/f/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    // Hand the browser a signed unlock cookie instead of echoing the password in the URL.
-    let cookie = crate::service::auth::csrf::link_unlock_cookie(
-        &crate::service::auth::csrf::share_link_cookie_name(&token),
+        &addr,
         &token,
-        link.password.as_deref().unwrap_or(""),
-        &state.csrf_secret,
-        state.config().server.secure_cookies(),
-    );
-    let redirect = format!("/f/{}/", token);
-    Ok((
-        StatusCode::FOUND,
-        [
-            ("Location", redirect.as_str()),
-            ("Set-Cookie", cookie.as_str()),
-        ],
+        super::link_gate::LinkKind::ShareFile,
+        &form,
     )
-        .into_response())
+    .await
 }
 
 #[derive(Template)]
@@ -420,53 +251,26 @@ pub async fn shared_dir_view(
     headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_download_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    let link = match super::link_gate::gate_get(
+        &state,
+        &headers,
+        &token,
+        super::link_gate::LinkKind::ShareDir,
+        super::link_gate::GateMode::Page,
+    )
+    .await?
     {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
+        super::link_gate::Gate::Open { link, .. } => match link {
+            super::link_gate::LinkModel::Share(link) => link,
+            super::link_gate::LinkModel::Upload(_) => {
+                return Err(AppError::internal("wrong link kind behind a share gate"));
+            }
+        },
+        super::link_gate::Gate::Password(response) => return Ok(response),
     };
 
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
-    }
-
-    // Password check as for file shares: header or signed cookie only, never the query.
-    let provided_pwd = headers
-        .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok());
-    let pw_ok = crate::service::sharing::share::check_share_link_password(
-        &link,
-        provided_pwd,
-        state.config().auth.password_hash_iterations,
-    )
-    .await?;
-
-    let unlocked = share_link_unlocked(
-        &state,
-        &token,
-        &headers,
-        pw_ok,
-        link.password.as_deref().unwrap_or(""),
-    );
-    if link.password.is_some() && !unlocked {
-        // Count only genuine failures: a request without a password is the first render.
-        if provided_pwd.is_some() {
-            record_link_password_failure(&state, &token)?;
-        }
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: wrong_password_error(provided_pwd, t),
-            form_action: format!("/d/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
     }
 
     let head = crate::fs::core::repo_head(&state.repos, &link.repo_id)
@@ -678,45 +482,28 @@ pub async fn shared_dir_file_view(
     Path((token, file_path)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_download_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
+    let link = match super::link_gate::gate_get(
+        &state,
+        &headers,
+        &token,
+        super::link_gate::LinkKind::ShareDir,
+        super::link_gate::GateMode::Raw,
+    )
+    .await?
     {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
+        super::link_gate::Gate::Open { link, .. } => match link {
+            super::link_gate::LinkModel::Share(link) => link,
+            super::link_gate::LinkModel::Upload(_) => {
+                return Err(AppError::internal("wrong link kind behind a share gate"));
+            }
+        },
+        super::link_gate::Gate::Password(_) => {
+            return Err(AppError::internal("raw gate returned a page"));
+        }
     };
 
     if link.s_type != "d" {
         return Err(AppError::NotFound("Not a directory share link".into()));
-    }
-
-    // Password check: header or signed cookie only, never the query string.
-    let provided_pwd = headers
-        .get("X-Seafile-Sharelink-Password")
-        .and_then(|v| v.to_str().ok());
-    let pw_ok = crate::service::sharing::share::check_share_link_password(
-        &link,
-        provided_pwd,
-        state.config().auth.password_hash_iterations,
-    )
-    .await?;
-    let unlocked = share_link_unlocked(
-        &state,
-        &token,
-        &headers,
-        pw_ok,
-        link.password.as_deref().unwrap_or(""),
-    );
-    if link.password.is_some() && !unlocked {
-        if provided_pwd.is_some() {
-            record_link_password_failure(&state, &token)?;
-        }
-        return if provided_pwd.is_some() {
-            Err(AppError::Forbidden)
-        } else {
-            Err(AppError::BadRequest("password required".into()))
-        };
     }
 
     check_share_download_rate(&state, &addr, &headers)?;
@@ -754,7 +541,7 @@ pub async fn shared_dir_file_view(
     ))
 }
 
-/// POST /d/{token}/ — validate password, redirect with password in URL.
+/// POST /d/{token}/ — validate the password and unlock the link with a cookie.
 pub async fn shared_dir_view_post(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -762,69 +549,13 @@ pub async fn shared_dir_view_post(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.config().server.share_download_enabled {
-        return Ok(switched_off_link_page(&state, &headers));
-    }
-    let link = match crate::service::sharing::share::resolve_share_link(&state.repos, &token).await
-    {
-        Ok(link) => link,
-        Err(err) => return link_error_page(&state, err, &headers),
-    };
-
-    let password = form
-        .get("password")
-        .ok_or_else(|| AppError::BadRequest("password required".into()))?;
-
-    let client_ip = crate::middleware::effective_client_ip(
-        &addr,
+    super::link_gate::gate_post(
+        &state,
         &headers,
-        &state.config().server.trusted_proxies,
-    );
-    let rl_key = format!("link_password:{client_ip}");
-    if state.auth_limiters.link_password.is_limited(&rl_key) {
-        return Err(AppError::TooManyRequests);
-    }
-    state.auth_limiters.link_password.record_attempt(&rl_key);
-
-    let valid = crate::service::auth::password::verify_password_async(
-        password.clone(),
-        link.password.clone().unwrap_or_default(),
-        state.config().auth.password_hash_iterations,
-    )
-    .await;
-
-    if !valid {
-        // The IP limiter above can be bypassed across many addresses, so the
-        // per-token cap is what actually bounds guessing against one link.
-        record_link_password_failure(&state, &token)?;
-        let t = I18n::from_headers(&headers, &state.config().ui.default_language);
-        let tpl = ShareAccessValidationTemplate {
-            t,
-            urls: crate::static_assets::template_urls(),
-            error: Some(t.tr("pub.incorrect_password").to_string()),
-            form_action: format!("/d/{}/", token),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-        return Ok(Html(html).into_response());
-    }
-
-    // Hand the browser a signed unlock cookie instead of echoing the password in the URL.
-    let cookie = crate::service::auth::csrf::link_unlock_cookie(
-        &crate::service::auth::csrf::share_link_cookie_name(&token),
+        &addr,
         &token,
-        link.password.as_deref().unwrap_or(""),
-        &state.csrf_secret,
-        state.config().server.secure_cookies(),
-    );
-    let redirect = format!("/d/{}/", token);
-    Ok((
-        StatusCode::FOUND,
-        [
-            ("Location", redirect.as_str()),
-            ("Set-Cookie", cookie.as_str()),
-        ],
+        super::link_gate::LinkKind::ShareDir,
+        &form,
     )
-        .into_response())
+    .await
 }

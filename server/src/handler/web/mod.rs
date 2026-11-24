@@ -5,6 +5,7 @@ use std::sync::Arc;
 use crate::AppState;
 
 pub mod download;
+pub mod link_gate;
 pub mod progress;
 pub mod share_view;
 pub mod temp_file;

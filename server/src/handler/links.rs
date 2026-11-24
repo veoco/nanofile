@@ -454,18 +454,7 @@ pub async fn get_upload_link_upload_url_v21(
     // holder can already exchange, and `public-upload.js` legitimately calls this
     // with `credentials: same-origin` and no CSRF header.
 
-    let link = state
-        .repos
-        .upload_link
-        .find_by_token(&token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Upload link not found".into()))?;
-
-    if let Some(exp) = link.expires_at
-        && chrono::Utc::now().timestamp() > exp
-    {
-        return Err(AppError::NotFound("Upload link has expired".into()));
-    }
+    let link = crate::handler::web::link_gate::resolve_upload_link(&state, &token).await?;
 
     // Password-protected links need the `visited_ufs_{token}` session flag set
     // by the web password form (matching seahub), or the password is bypassed.

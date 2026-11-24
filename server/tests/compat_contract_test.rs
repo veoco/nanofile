@@ -144,11 +144,10 @@ async fn upload_link_delete_by_a_non_owner_is_forbidden() {
 
 /// For a link without a password, seahub's `check_share_link_common` opens the
 /// link before looking at the request method
-/// (`seahub/share/models.py:119-124`). nanofile currently rejects a POST that
-/// carries no password field; the gate consolidation aligns this with upstream
-/// by redirecting the POST to the unlocked page.
+/// (`seahub/share/models.py:119-124`). The POST path must redirect without
+/// verifying anything or charging the password limiter.
 #[tokio::test]
-async fn passwordless_share_link_post_without_a_password_is_bad_request_today() {
+async fn passwordless_share_link_post_redirects_without_a_password() {
     let f = TestFixture::new().await;
     let upload = f
         .client
@@ -157,11 +156,60 @@ async fn passwordless_share_link_post_without_a_password_is_bad_request_today() 
     assert_eq!(upload.status(), 200, "upload failed");
 
     let token = f.create_share_link("/open.txt").await;
+    let browser = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .unwrap();
+    let resp = browser
+        .post(format!("{}/f/{token}/", f.server.base_url))
+        .form(&[] as &[(&str, &str)])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        302,
+        "a passwordless link POST is already open and redirects"
+    );
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(location.ends_with(&format!("/f/{token}/")));
+
+    // Repeated POSTs must not consume the per-IP password budget.
+    for _ in 0..15 {
+        let resp = f.client.post_form(&format!("/f/{token}/"), None, &[]).await;
+        assert_ne!(
+            resp.status(),
+            429,
+            "an open link must not consume the budget"
+        );
+    }
+}
+
+/// A protected link submitted with no password re-renders the form (200), like
+/// upstream's `check_share_link_common`, rather than answering a raw 400.
+#[tokio::test]
+async fn protected_share_link_post_without_a_password_re_renders_the_form() {
+    let f = TestFixture::new().await;
+    let upload = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "secret.txt", b"x")
+        .await;
+    assert_eq!(upload.status(), 200, "upload failed");
+
+    let token = f
+        .create_share_link_with_password("/secret.txt", Some("pw"))
+        .await;
     let resp = f.client.post_form(&format!("/f/{token}/"), None, &[]).await;
     assert_eq!(
         resp.status(),
-        400,
-        "today a POST without a password field is rejected"
+        200,
+        "an empty password submission re-renders the validation form"
     );
 }
 
