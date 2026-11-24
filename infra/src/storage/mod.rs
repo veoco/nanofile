@@ -16,6 +16,7 @@ pub mod encrypting_block_store;
 use std::sync::Arc;
 
 pub use block_store::BlockFlush;
+pub use block_store::{block_path, is_valid_block_id};
 
 /// Upper bound on how many leading bytes [`BlockStorageBackend::read_block_prefix`]
 /// returns; callers only need a format header.

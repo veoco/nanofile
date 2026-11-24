@@ -70,9 +70,13 @@ pub struct FsIdListQuery {
     pub dir_only: Option<String>,
 }
 
-/// True for a 40-character hex object id (commit / fs object).
+/// True for a 40-character lowercase hex object id (commit / fs object).
+///
+/// Seafile's `is_object_id_valid` (`seafile-server/lib/utils.c`) is the same rule;
+/// sharing the block-id predicate keeps the sync surfaces from accepting an
+/// uppercase spelling the content-addressed store cannot serve.
 fn is_object_id(s: &str) -> bool {
-    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+    infra::storage::is_valid_block_id(s)
 }
 
 pub fn fs_routes() -> Router<Arc<AppState>> {

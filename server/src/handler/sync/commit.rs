@@ -206,7 +206,7 @@ fn validate_commit_id(
     url_commit_id: &str,
     data: &base::common::CommitData,
 ) -> Result<(), AppError> {
-    if data.commit_id.len() != 40 || !data.commit_id.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !infra::storage::is_valid_block_id(&data.commit_id) {
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
     if data.commit_id != url_commit_id {
@@ -234,7 +234,7 @@ pub async fn update_branch(
         .get("head")
         .ok_or_else(|| AppError::BadRequest("missing head parameter".into()))?;
 
-    if new_head.len() != 40 || !new_head.chars().all(|c| c.is_ascii_hexdigit()) {
+    if !infra::storage::is_valid_block_id(new_head) {
         return Err(AppError::BadRequest("invalid commit id".into()));
     }
 

@@ -151,6 +151,32 @@ async fn passwordless_share_link_post_without_a_password_is_bad_request_today() 
     );
 }
 
+/// Object ids in the sync protocol are 40 lowercase hex (Seafile's
+/// `is_object_id_valid`, `seafile-server/lib/utils.c:1132-1158`). The sync
+/// entrypoints share the block-id predicate so an uppercase spelling cannot
+/// reach an id lookup that only the lower-case store can serve.
+#[tokio::test]
+async fn sync_fs_id_list_rejects_uppercase_object_ids() {
+    let f = TestFixture::new().await;
+    let server_head = "A".repeat(40);
+
+    let resp = f
+        .client
+        .get_sync(
+            &format!(
+                "/seafhttp/repo/{}/fs-id-list/?server-head={server_head}",
+                f.repo_id
+            ),
+            &f.sync_token,
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "an uppercase object id must be rejected"
+    );
+}
+
 /// `/api2/device-wiped/` accepts a form token when the Authorization header is
 /// unusable (the desktop Qt shape). Today a malformed header falls back to the
 /// body; the authorization-parser consolidation makes a present-but-malformed

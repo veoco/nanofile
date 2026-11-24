@@ -20,15 +20,11 @@ pub const MAX_BLOCK_UPLOAD_BYTES: usize = 12 * 1024 * 1024;
 
 /// Whether `block_id` is a Seafile block id: 40 lowercase hex characters.
 ///
-/// Block ids are `sha1` output, which is always lowercase. The sync block PUT and
-/// the block-upload commit both accept a client-supplied id, so they must agree:
-/// accepting `ABC…` here and then looking it up in the content-addressed store
-/// (which stores the lowercase name) turns a valid request into a missing block.
+/// Delegates to the storage layer: the sync block PUT, the block-upload commit and
+/// the store itself must agree on one rule, or an uppercase id is accepted here and
+/// then looked up under a name the writer never created.
 pub fn is_valid_block_id(block_id: &str) -> bool {
-    block_id.len() == 40
-        && block_id
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    infra::storage::is_valid_block_id(block_id)
 }
 
 /// Upper bound on dirent names accepted in one request.

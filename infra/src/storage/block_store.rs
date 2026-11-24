@@ -24,6 +24,32 @@ pub const LAYOUT_MARKER_FILE: &str = ".block_layout";
 /// Contents of [`LAYOUT_MARKER_FILE`].
 pub const LAYOUT_VERSION: &str = "v2";
 
+/// Block ids are content-addressed SHA-1 hashes: exactly 40 lowercase hex.
+///
+/// Seafile's own `is_object_id_valid` (`seafile-server/lib/utils.c`) uses the same
+/// rule; accepting uppercase here would let a writer create a second file name for
+/// the same bytes, which the lower-case reader would then call missing.
+pub fn is_valid_block_id(block_id: &str) -> bool {
+    block_id.len() == 40
+        && block_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// Path of one block under `base_dir`:
+/// `{base}/repos/{sha1(repo_id)}/{block_id[..2]}/{block_id}`.
+///
+/// Layout knowledge lives here so callers (GC, `verify-blocks`) do not rebuild it.
+pub fn block_path(base_dir: &Path, repo_id: &str, block_id: &str) -> PathBuf {
+    // Defensive: never index before checking length.
+    let prefix = block_id.get(..2).unwrap_or(block_id);
+    base_dir
+        .join(REPOS_DIR)
+        .join(sha1_hex(repo_id.as_bytes()))
+        .join(prefix)
+        .join(block_id)
+}
+
 /// Upper bound on cached block ids. Content-addressed blocks are immutable and a
 /// large common id set is expected; this bounds memory. The key is a fixed-size
 /// digest, so each entry is ~80 bytes rather than a `String` plus a heap
@@ -104,21 +130,16 @@ impl BlockStorage {
             .join(sha1_hex(repo_id.as_bytes()))
     }
 
-    /// Block IDs are content-addressed SHA-1 hashes: exactly 40 lowercase hex.
-    fn is_valid_block_id(block_id: &str) -> bool {
-        block_id.len() == 40 && block_id.bytes().all(|b| b.is_ascii_hexdigit())
-    }
-
+    /// Path of one block; the layout helper is shared with `verify-blocks`.
     fn block_path(&self, repo_id: &str, block_id: &str) -> PathBuf {
-        // Defensive: never index before checking length.
-        let prefix = block_id.get(..2).unwrap_or(block_id);
-        self.repo_dir(repo_id).join(prefix).join(block_id)
+        block_path(&self.base_dir, repo_id, block_id)
     }
 
     /// Composite cache key for the presence cache.
     fn cache_key(repo_id: &str, block_id: &str) -> BlockKey {
         let mut block = [0u8; 20];
-        let valid = block_id.len() == 40 && hex::decode_to_slice(block_id, &mut block).is_ok();
+        let valid =
+            is_valid_block_id(block_id) && hex::decode_to_slice(block_id, &mut block).is_ok();
         BlockKey {
             repo: sha1_bytes(repo_id.as_bytes()),
             block,
@@ -356,7 +377,7 @@ impl BlockStorage {
                 }
                 let name = entry.file_name();
                 let Some(name) = name.to_str() else { continue };
-                if name.len() == 40 && name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                if is_valid_block_id(name) {
                     let len = entry.metadata().await.map(|m| m.len()).unwrap_or(0);
                     out.push((name.to_string(), len));
                 }
@@ -374,7 +395,7 @@ impl BlockStorage {
         repo_id: &str,
         block_id: &str,
     ) -> io::Result<LegacyCopyOutcome> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -467,7 +488,7 @@ impl BlockStorage {
 #[async_trait]
 impl BlockStorageBackend for BlockStorage {
     async fn has_block(&self, repo_id: &str, block_id: &str) -> bool {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return false;
         }
         if self.exists_cache_contains(repo_id, block_id) {
@@ -485,7 +506,7 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn read_block(&self, repo_id: &str, block_id: &str) -> Result<Vec<u8>, io::Error> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -503,7 +524,7 @@ impl BlockStorageBackend for BlockStorage {
         block_id: &str,
         max: usize,
     ) -> io::Result<Vec<u8>> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -542,7 +563,7 @@ impl BlockStorageBackend for BlockStorage {
         // The caller already computed and verified `block_id`, so write under it directly.
         // Validate the shape anyway: `block_path` joins it onto `base_dir`, so an
         // unvalidated `../../x` would escape the block directory.
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -584,7 +605,7 @@ impl BlockStorageBackend for BlockStorage {
     ) -> Result<String, io::Error> {
         // Like `write_block_with_id` but never short-circuits on an existing block: the
         // caller overwrites a legacy plaintext block with its ciphertext under the same id.
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -602,7 +623,7 @@ impl BlockStorageBackend for BlockStorage {
     ) -> Result<(String, bool), io::Error> {
         // Race-free tracked write: the publish is exclusive, so only one concurrent call
         // sees `was_new = true` and quota cleanup deletes only blocks this upload created.
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -626,7 +647,7 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn remove_block(&self, repo_id: &str, block_id: &str) -> Result<(), io::Error> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Ok(());
         }
         let path = self.block_path(repo_id, block_id);
@@ -643,7 +664,7 @@ impl BlockStorageBackend for BlockStorage {
     }
 
     async fn block_size(&self, repo_id: &str, block_id: &str) -> Result<i64, io::Error> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "invalid block id",
@@ -660,7 +681,7 @@ impl BlockStorageBackend for BlockStorage {
         repo_id: &str,
         block_id: &str,
     ) -> Result<Option<i64>, io::Error> {
-        if !Self::is_valid_block_id(block_id) {
+        if !is_valid_block_id(block_id) {
             return Ok(None);
         }
         let path = self.block_path(repo_id, block_id);
@@ -1038,6 +1059,30 @@ mod tests {
             .join("ab")
             .join("abcdef");
         assert_eq!(p, expected);
+        // The shared helper is the same layout: callers must not rebuild it.
+        assert_eq!(
+            p,
+            block_path(
+                Path::new("/tmp"),
+                "11111111-2222-3333-4444-555555555555",
+                "abcdef"
+            )
+        );
+    }
+
+    /// Seafile's `is_object_id_valid` accepts only lowercase hex; the store must
+    /// reject uppercase so one content cannot be stored under two names.
+    #[test]
+    fn block_ids_must_be_lowercase_hex() {
+        assert!(is_valid_block_id(
+            "0123456789abcdef0123456789abcdef01234567"
+        ));
+        assert!(is_valid_block_id(&"a".repeat(40)));
+        assert!(!is_valid_block_id(&"A".repeat(40)));
+        assert!(!is_valid_block_id(&"g".repeat(40)));
+        assert!(!is_valid_block_id(&"a".repeat(39)));
+        assert!(!is_valid_block_id(&"a".repeat(41)));
+        assert!(!is_valid_block_id(""));
     }
 
     /// `remove_block` must invalidate the cached presence, not just delete the file.

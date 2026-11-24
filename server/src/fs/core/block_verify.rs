@@ -385,12 +385,7 @@ impl BlockVerify {
         block_id: &str,
     ) -> Result<(), AppError> {
         let repo_hash = sha1_hex(repo_id.as_bytes());
-        let prefix = block_id.get(..2).unwrap_or(block_id);
-        let source = block_dir
-            .join(infra::storage::block_store::REPOS_DIR)
-            .join(&repo_hash)
-            .join(prefix)
-            .join(block_id);
+        let source = infra::storage::block_path(block_dir, repo_id, block_id);
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
