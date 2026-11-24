@@ -36,11 +36,15 @@ Comments earn their place by saying something the code cannot. In particular:
   banners.
 - **Condense** a module document to its purpose, its key invariant and a link to
   the relevant page here. Multi-paragraph design notes belong in `docs/dev/`.
+- Write module documents with `//!`: a `///` block above an import is attached to
+  the import and never rendered. Keep comments valid UTF-8 — an encoding
+  round-trip that mangles an em dash or an arrow is a defect, not a cosmetic one.
 - Do not write local paths, author names or dates into comments.
 
 `cargo doc` with `-D warnings` runs in CI, so a broken intra-doc link or a doc
 comment that Markdown misparses fails the build. A change that removes a doctest
-must keep an equivalent test.
+must keep an equivalent test. `node tools/check-comments.mjs` rejects both the
+misplaced module documents and the known mojibake.
 
 ## Dependency rules
 

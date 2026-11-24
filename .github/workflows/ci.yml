@@ -70,6 +70,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust == 'true' || github.event.forced == true || inputs.force == true }}
       frontend: ${{ steps.filter.outputs.frontend == 'true' || github.event.forced == true || inputs.force == true }}
+      comments: ${{ steps.filter.outputs.comments == 'true' || github.event.forced == true || inputs.force == true }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
@@ -107,6 +108,16 @@ jobs:
               - 'server/templates/**'
               - 'package.json'
               - 'package-lock.json'
+            # Comment text is checked in every source and doc file, so an
+            # e2e-only or docs-only change has to run the hygiene job too.
+            comments:
+              - '**/*.rs'
+              - '**/*.js'
+              - '**/*.mjs'
+              - '**/*.ts'
+              - '**/*.toml'
+              - '**/*.md'
+              - '.github/workflows/**'
 
   # ── Formatting + linting (single job to reuse checkout/toolchain) ────
   lint:
@@ -209,6 +220,23 @@ jobs:
       # drift apart.
       - name: Generated inference plans are current
         run: python3 tools/models/export_plan.py --check
+
+  # ── Comment hygiene ─────────────────────────────────────────────────
+  # A comment that cannot render is a defect, not cosmetics: an encoding
+  # round-trip stored em dashes and arrows as mojibake twice, and a module
+  # document written as `///` above an import never renders at all. Neither is
+  # visible to rustc or to the tests.
+  comment-hygiene:
+    name: Comment hygiene
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.comments == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+      - run: node tools/check-comments.mjs
 
   # ── Linting off Linux ───────────────────────────────────────────────
   # `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` code is not compiled on

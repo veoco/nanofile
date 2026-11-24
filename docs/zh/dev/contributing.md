@@ -29,9 +29,10 @@ cargo audit
 - **保留**不变量、安全依据、`unsafe` 前置条件、并发与生命周期推理、错误/panic 契约、Seafile 客户端怪癖、迁移与线格式说明、`#[allow(...)]` 的理由以及 doctest。
 - **删除**复述名字或控制流的注释、历史叙述（"used to"、"before this existed"）、测试的逐步旁白与装饰横幅。
 - **压缩**模块文档到"目的 + 关键不变量 + 本站相关页面的链接"。多段设计说明放 `docs/dev/`。
+- 模块文档用 `//!`：写在 import 上方的 `///` 会挂到该 import 上，永远不渲染。注释必须保持合法 UTF-8——编码往返把破折号或箭头弄坏是缺陷，不是外观问题。
 - 不把本机路径、作者名或日期写进注释。
 
-CI 会跑带 `-D warnings` 的 `cargo doc`，因此失效的文档内链接或 Markdown 解析错误的注释会让构建失败。删掉一个 doctest 时必须保留等价测试。
+CI 会跑带 `-D warnings` 的 `cargo doc`，因此失效的文档内链接或 Markdown 解析错误的注释会让构建失败。删掉一个 doctest 时必须保留等价测试。`node tools/check-comments.mjs` 会拒绝错位的模块文档与已知的 mojibake。
 
 ## 依赖规则
 
