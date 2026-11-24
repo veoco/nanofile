@@ -420,13 +420,7 @@ pub async fn move_file(
             "repo_id does not match the path".into(),
         ));
     }
-    auth.ensure_repo_allowed(&req.repo_id, true)?;
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &req.repo_id,
-        auth.user_id,
-    )
-    .await?;
+    auth.require_repo_write(&state, &req.repo_id).await?;
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
@@ -462,13 +456,7 @@ pub async fn rename_file(
             "repo_id does not match the path".into(),
         ));
     }
-    auth.ensure_repo_allowed(&req.repo_id, true)?;
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &req.repo_id,
-        auth.user_id,
-    )
-    .await?;
+    auth.require_repo_write(&state, &req.repo_id).await?;
 
     let path = safe_normalize_path(&req.p)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;

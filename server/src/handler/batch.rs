@@ -27,15 +27,7 @@ pub async fn batch_move_items(
 
     let repo_id = &req.src_repo_id;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    // The repo id comes from the body, so the path-based key guard never sees it.
-    auth.ensure_repo_allowed(repo_id, true)?;
+    auth.require_repo_write(&state, repo_id).await?;
 
     if req.src_dirents.is_empty() {
         return Ok(ok_json());
@@ -79,15 +71,7 @@ pub async fn sync_batch_copy_item(
 
     let repo_id = &body.src_repo_id;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    // The repo id comes from the body, so the path-based key guard never sees it.
-    auth.ensure_repo_allowed(repo_id, true)?;
+    auth.require_repo_write(&state, repo_id).await?;
 
     let svc = state.fileops_service();
 
@@ -128,15 +112,7 @@ pub async fn batch_delete_item(
 
     let repo_id = &body.repo_id;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    // The repo id comes from the body, so the path-based key guard never sees it.
-    auth.ensure_repo_allowed(repo_id, true)?;
+    auth.require_repo_write(&state, repo_id).await?;
 
     let parent_dir = normalize_batch_dir(&body.parent_dir, "path")?;
 

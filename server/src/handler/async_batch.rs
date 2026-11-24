@@ -28,16 +28,7 @@ pub async fn async_batch_copy_item(
     // the wrong place. Fail closed exactly like the synchronous endpoint.
     ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "copy")?;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &body.src_repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    // The library id comes from the request body, so the path-based key guard
-    // never sees it.
-    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
+    auth.require_repo_write(&state, &body.src_repo_id).await?;
 
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
     // The description indexes `src_dirents[0]`, so an empty list must be rejected here
@@ -82,14 +73,7 @@ pub async fn async_batch_move_item(
     // destination library. Reject it the same way the synchronous endpoint does.
     ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "move")?;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &body.src_repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
+    auth.require_repo_write(&state, &body.src_repo_id).await?;
 
     crate::handler::sanitize_dirent_list(&mut body.src_dirents)?;
     if body.src_dirents.is_empty() {
@@ -141,14 +125,7 @@ pub async fn copy_move_task(
     // cross-library request must be rejected instead of running in the source.
     ensure_same_batch_repo(&body.src_repo_id, &body.dst_repo_id, "copy or move")?;
 
-    crate::domain::permission::check_repo_write_permission(
-        state.repos.member.as_ref(),
-        &body.src_repo_id,
-        auth.user_id,
-    )
-    .await?;
-
-    auth.ensure_repo_allowed(&body.src_repo_id, true)?;
+    auth.require_repo_write(&state, &body.src_repo_id).await?;
 
     let src_dir = normalize_batch_dir(&body.src_parent_dir, "source path")?;
     let dst_dir = normalize_batch_dir(&body.dst_parent_dir, "destination path")?;

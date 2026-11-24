@@ -43,6 +43,36 @@ impl AuthUser {
             Err(AppError::Forbidden)
         }
     }
+
+    /// Require read access to a library named outside the URL path.
+    ///
+    /// The key's library ceiling and the caller's membership are one check:
+    /// body/query handlers used to spell out one, the other, or both, so a
+    /// missing line was invisible to the route table and to review.
+    pub async fn require_repo_read(&self, state: &AppState, repo_id: &str) -> Result<(), AppError> {
+        self.ensure_repo_allowed(repo_id, false)?;
+        crate::domain::permission::check_repo_read_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            self.user_id,
+        )
+        .await
+    }
+
+    /// [`require_repo_read`] for a write on a library named outside the URL path.
+    pub async fn require_repo_write(
+        &self,
+        state: &AppState,
+        repo_id: &str,
+    ) -> Result<(), AppError> {
+        self.ensure_repo_allowed(repo_id, true)?;
+        crate::domain::permission::check_repo_write_permission(
+            state.repos.member.as_ref(),
+            repo_id,
+            self.user_id,
+        )
+        .await
+    }
 }
 
 #[derive(Debug, Clone)]

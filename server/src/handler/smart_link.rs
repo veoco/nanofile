@@ -27,13 +27,7 @@ pub async fn get_smart_link(
 ) -> Result<Json<serde_json::Value>, AppError> {
     // The library id is a query parameter, so neither the route-table scope
     // check nor membership is implicit here.
-    auth.ensure_repo_allowed(&query.repo_id, false)?;
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &query.repo_id,
-        auth.user_id,
-    )
-    .await?;
+    auth.require_repo_read(&state, &query.repo_id).await?;
 
     let base_url = state.config().server.site_url_origin();
     let url = link::get_smart_link(&base_url, &query.repo_id, &query.path);

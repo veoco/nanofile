@@ -54,9 +54,7 @@ pub async fn search_file(
 
     // The repo id arrives in the query string, so the path-based key guard
     // never sees it: enforce the key's library scope here.
-    if !auth.repo_scope().allows(&query.repo_id) {
-        return Err(AppError::Forbidden);
-    }
+    auth.ensure_repo_allowed(&query.repo_id, false)?;
 
     let svc = state.search_service();
     // Filename-only, single-repo: collect the whole (budgeted) match set and shape it below,

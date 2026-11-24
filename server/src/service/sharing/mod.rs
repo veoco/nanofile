@@ -57,8 +57,9 @@ pub(crate) async fn resolve_owned_upload_link(
 /// The share link named by `token` when the caller may delete it.
 ///
 /// `Ok(None)` means the token no longer resolves: seahub's delete is idempotent,
-/// so the caller reports success. A different owner (or a library outside the
-/// key's scope) is 403, as in `ShareLink.delete`.
+/// so the caller reports success. A different owner is 403, as in
+/// `ShareLink.delete`; a link outside the presented key's library scope is hidden
+/// as 404, because the key must not learn that the token exists.
 pub(crate) async fn owned_share_link_for_delete(
     repos: &Repositories,
     token: &str,
@@ -68,8 +69,11 @@ pub(crate) async fn owned_share_link_for_delete(
     let Some(link) = repos.share_link.find_by_token(token).await? else {
         return Ok(None);
     };
-    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
+    if link.creator_id != user_id {
         return Err(AppError::Forbidden);
+    }
+    if !scope.allows(&link.repo_id) {
+        return Err(AppError::NotFound("Share link not found".into()));
     }
     Ok(Some(link))
 }
@@ -84,8 +88,11 @@ pub(crate) async fn owned_upload_link_for_delete(
     let Some(link) = repos.upload_link.find_by_token(token).await? else {
         return Ok(None);
     };
-    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
+    if link.creator_id != user_id {
         return Err(AppError::Forbidden);
+    }
+    if !scope.allows(&link.repo_id) {
+        return Err(AppError::NotFound("Upload link not found".into()));
     }
     Ok(Some(link))
 }

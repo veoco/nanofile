@@ -178,12 +178,7 @@ pub async fn get_tag_files(
     Path((repo_id, tag_id)): Path<(String, String)>,
     Query(query): Query<TagsQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::domain::permission::check_repo_read_permission(
-        state.repos.member.as_ref(),
-        &repo_id,
-        auth.user_id,
-    )
-    .await?;
+    auth.require_repo_read(&state, &repo_id).await?;
     let tag_id = tag_id
         .parse::<i32>()
         .map_err(|_| AppError::BadRequest("invalid tag id".into()))?;

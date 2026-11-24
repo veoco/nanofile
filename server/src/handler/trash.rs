@@ -271,7 +271,9 @@ pub async fn restore_deleted_repo(
     let repo_id = parse_repo_id_body(req).await?;
 
     // The repo id is in the request body, not the URI, so the route-table
-    // library ceiling did not see it.
+    // library ceiling did not see it. A trashed library is not a normal member
+    // repo: the usual membership check rejects it, and the restore service
+    // checks that the caller is its owner, so only the key ceiling belongs here.
     auth.ensure_repo_allowed(&repo_id, true)?;
 
     trash::restore_deleted_repo(
