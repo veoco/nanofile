@@ -313,7 +313,142 @@ for (const [from, to] of MOVED) {
   }
 }
 
-// 7. Report.
+// 7. The compatibility page's Summary must agree with its operation rows.
+//
+// Both tables are hand-maintained, and a status change in the body has already
+// drifted from the Summary once. Count the status cells per official section and
+// compare them with the Summary row (and the Total with the section sums); the
+// two language versions must agree as well.
+const COMPAT_SECTIONS = [
+  'authentication',
+  'Via Repo-Token',
+  'Account Operations - User',
+  'Account Operations - System Admin',
+  'Metadata Operations - User'
+]
+const COMPAT_STATUSES = new Map([
+  ['Same', 'Same'],
+  ['一致', 'Same'],
+  ['Differs', 'Differs'],
+  ['有差异', 'Differs'],
+  ['Missing', 'Missing'],
+  ['未实现', 'Missing'],
+  ['N/A', 'N/A'],
+  ['不适用', 'N/A']
+])
+
+function compatSummary(text) {
+  const rows = new Map()
+  let inSummary = false
+  for (const line of text.split('\n')) {
+    if (/^##\s+(?:Summary|汇总)/.test(line)) {
+      inSummary = true
+      continue
+    }
+    if (inSummary && /^##\s+/.test(line)) break
+    if (!inSummary || !line.startsWith('|')) continue
+    const cells = line
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim().replace(/^\*\*|\*\*$/g, ''))
+    if (cells.length !== 6 || !/^\d+$/.test(cells[1])) continue
+    rows.set(cells[0], cells.slice(1).map(Number))
+  }
+  return rows
+}
+
+function compatBodyCounts(text) {
+  const counts = new Map(
+    COMPAT_SECTIONS.map((name) => [
+      name,
+      { total: 0, Same: 0, Differs: 0, Missing: 0, 'N/A': 0 }
+    ])
+  )
+  let current = null
+  for (const line of text.split('\n')) {
+    const heading = /^##\s+(.+?)\s*$/.exec(line)
+    if (heading) {
+      const name = heading[1].replace(/\s*\{#[^}]*\}\s*$/, '').trim()
+      current = counts.get(name) ?? null
+      continue
+    }
+    if (!current || !line.startsWith('|')) continue
+    const cells = line.split('|').slice(1, -1).map((cell) => cell.trim())
+    if (cells.length < 2) continue
+    const status = COMPAT_STATUSES.get(cells[1])
+    if (!status) continue
+    current.total += 1
+    current[status] += 1
+  }
+  return counts
+}
+
+const compatSummaries = new Map()
+for (const [language, file] of [
+  ['English', path.join(docsDir, 'reference/api/compatibility.md')],
+  ['Chinese', path.join(docsDir, 'zh/reference/api/compatibility.md')]
+]) {
+  if (!fs.existsSync(file)) {
+    report(path.relative(repoRoot, file), 'compatibility page is missing')
+    continue
+  }
+  const location = path.relative(repoRoot, file).split(path.sep).join('/')
+  const text = read(file)
+  const summary = compatSummary(text)
+  compatSummaries.set(language, summary)
+  const counts = compatBodyCounts(text)
+  for (const section of COMPAT_SECTIONS) {
+    const expected = summary.get(section)
+    if (!expected) {
+      report(location, `Summary has no "${section}" row`)
+      continue
+    }
+    const got = counts.get(section)
+    const actual = [got.total, got.Same, got.Differs, got.Missing, got['N/A']]
+    if (expected.join(',') !== actual.join(',')) {
+      report(
+        location,
+        `Summary "${section}" is ${expected.join('/')} but its rows are ${actual.join('/')} ` +
+          '(operations/Same/Differs/Missing/N/A)'
+      )
+    }
+  }
+  const total = summary.get('Total')
+  if (!total) {
+    report(location, 'Summary has no Total row')
+  } else {
+    for (let column = 0; column < 5; column += 1) {
+      const sum = COMPAT_SECTIONS.reduce(
+        (acc, section) => acc + (summary.get(section)?.[column] ?? 0),
+        0
+      )
+      if (total[column] !== sum) {
+        report(
+          location,
+          `Summary Total column ${column + 1} is ${total[column]} but the sections add up to ${sum}`
+        )
+      }
+    }
+  }
+}
+
+const enSummary = compatSummaries.get('English')
+const zhSummary = compatSummaries.get('Chinese')
+if (enSummary && zhSummary) {
+  for (const row of ['Total', ...COMPAT_SECTIONS]) {
+    const en = enSummary.get(row)
+    const zh = zhSummary.get(row)
+    if (!en || !zh) continue
+    if (en.join(',') !== zh.join(',')) {
+      report(
+        'docs/reference/api/compatibility.md',
+        `Summary "${row}" differs between the English and Chinese pages`
+      )
+    }
+  }
+}
+
+// 8. Report.
 for (const warning of warnings) console.warn(`warning: ${warning}`)
 for (const error of errors) console.error(`error: ${error}`)
 const summary = `${errors.length} error(s), ${warnings.length} warning(s)`

@@ -71,7 +71,8 @@ secret_key = ""
 
 # [admin_init]
 # file-only — create the first administrator on a start that finds no accounts
-# (`nanofile adduser` is the alternative). Prefer the *_FILE variables
+# (`nanofile adduser` is the alternative). Both keys are required: with only one
+# of them set, no account is created. Prefer the *_FILE variables
 # (NANOFILE_ADMIN_INIT_PASSWORD_FILE) over these; they are not in a process list.
 #email = "admin@example.com"
 #password = "secret123"
@@ -82,9 +83,10 @@ secret_key = ""
 
 [logging]
 # file-only — send logs to a size-capped rotating file instead of stdout. Unset
-# chooses automatically: desktop (tray) runs log to a file, headless to stdout.
-# This is the one section the server writes to: when it resolves the path itself
-# (desktop runs) the result lands here, so every later run uses the same file.
+# chooses automatically: a tray run, a Windows service run, or a Windows
+# GUI-subsystem build running headless logs to a file; a plain headless server
+# logs to stdout. This is the one section the server writes to: when it resolves
+# the path itself, the result lands here, so every later run uses the same file.
 #file_enabled = true
 #file = "nanofile.log"
 
