@@ -172,6 +172,16 @@ pub async fn create_user(
     let is_admin = form.is_admin.is_some();
     let is_active = form.is_active.is_some();
 
+    // Same policy as every other account-creation path; the banner re-renders the
+    // page, so the administrator sees the reason instead of a generic failure.
+    if let Err(message) = crate::service::auth::password::validate_password(
+        &form.password,
+        state.config().auth.password_min_length,
+        state.config().auth.require_strong_password,
+    ) {
+        return render_sysadmin_error(&state, &user, AppError::BadRequest(message)).await;
+    }
+
     let iterations = state.config().auth.password_hash_iterations;
     let password_hash =
         crate::service::auth::password::hash_password_async(form.password.clone(), iterations)

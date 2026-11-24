@@ -94,6 +94,16 @@ async fn create_user(
 ) -> Result<Json<UserAdminView>, AppError> {
     require_admin(&state, &auth).await?;
 
+    // The admin console is not an exception to the configured password policy:
+    // `/api2/accounts/` and the web forms enforce it, and an operator who set a
+    // policy expects every creation path to follow it.
+    crate::service::auth::password::validate_password(
+        &payload.password,
+        state.config().auth.password_min_length,
+        state.config().auth.require_strong_password,
+    )
+    .map_err(AppError::BadRequest)?;
+
     let iterations = state.config().auth.password_hash_iterations;
     let password_hash =
         crate::service::auth::password::hash_password_async(payload.password.clone(), iterations)

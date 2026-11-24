@@ -6,6 +6,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
+mod admin_users_test;
 mod admintasks_test;
 mod settings_test;
 mod switches_test;

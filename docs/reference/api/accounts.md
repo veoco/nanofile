@@ -156,7 +156,7 @@ Administrator only.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `email` | yes | Login address. |
-| `password` | yes | Hashed as sent. This legacy administrator endpoint does not apply `auth.password_min_length` or `require_strong_password`; `/api2/accounts/` (same handler as `/api2/account/`) and the web forms do. |
+| `password` | yes | Must satisfy `auth.password_min_length` and `require_strong_password`, like every other account-creation path. |
 | `is_admin` | no | Default `false`. |
 | `is_active` | no | Default `true`. |
 | `storage_quota` | no | Bytes; `null` uses the server default. |

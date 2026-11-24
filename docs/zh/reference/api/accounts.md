@@ -131,7 +131,7 @@
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `email` | 是 | 登录地址。 |
-| `password` | 是 | 按传入值哈希。该旧版管理员端点不套用 `auth.password_min_length` 与 `require_strong_password`；`/api2/accounts/`（与 `/api2/account/` 是同一 handler）与网页表单才套用。 |
+| `password` | 是 | 必须满足 `auth.password_min_length` 与 `require_strong_password`，与其他建号路径一致。 |
 | `is_admin` | 否 | 默认 `false`。 |
 | `is_active` | 否 | 默认 `true`。 |
 | `storage_quota` | 否 | 字节数；`null` 用服务器默认值。 |
