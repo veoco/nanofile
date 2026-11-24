@@ -268,10 +268,6 @@ pub async fn shared_dir_view(
         super::link_gate::Gate::Password(response) => return Ok(response),
     };
 
-    if link.s_type != "d" {
-        return Err(AppError::NotFound("Not a directory share link".into()));
-    }
-
     let head = crate::fs::core::repo_head(&state.repos, &link.repo_id)
         .await
         .map_err(|e| match e {
@@ -500,10 +496,6 @@ pub async fn shared_dir_file_view(
             return Err(AppError::internal("raw gate returned a page"));
         }
     };
-
-    if link.s_type != "d" {
-        return Err(AppError::NotFound("Not a directory share link".into()));
-    }
 
     check_share_download_rate(&state, &addr, &headers)?;
 

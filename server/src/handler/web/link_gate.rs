@@ -197,6 +197,28 @@ pub(crate) async fn resolve_upload_link(
     Ok(link)
 }
 
+/// Reject a share link whose stored type does not belong to this page.
+///
+/// The password gate runs after this check: a file token requested on `/d/` used
+/// to be treated as a directory link long enough to render the password form and
+/// charge the per-token limiter, where it should simply be 404.
+fn validate_link_kind(link: &LinkModel, kind: LinkKind) -> Result<(), AppError> {
+    let expected = match kind {
+        LinkKind::ShareFile => "f",
+        LinkKind::ShareDir => "d",
+        LinkKind::Upload => return Ok(()),
+    };
+    if let LinkModel::Share(share) = link
+        && share.s_type != expected
+    {
+        return Err(AppError::NotFound(match kind {
+            LinkKind::ShareDir => "Not a directory share link".to_string(),
+            _ => "Not a file share link".to_string(),
+        }));
+    }
+    Ok(())
+}
+
 async fn resolve_link(
     state: &Arc<AppState>,
     token: &str,
@@ -284,6 +306,7 @@ pub(crate) async fn gate_get(
         Ok(link) => link,
         Err(err) => return Ok(Gate::Password(link_error_page(state, err, headers)?)),
     };
+    validate_link_kind(&link, kind)?;
 
     let provided_pwd = headers
         .get("X-Seafile-Sharelink-Password")
@@ -367,6 +390,7 @@ pub(crate) async fn gate_post(
         Ok(link) => link,
         Err(err) => return link_error_page(state, err, headers),
     };
+    validate_link_kind(&link, kind)?;
 
     // No stored password: the link is open. Upstream never verifies a password
     // here, so do not charge the limiter for the redirect either.
