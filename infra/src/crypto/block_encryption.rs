@@ -11,9 +11,7 @@
 //! a nonce only leaks whether two plaintexts are equal, which content addressing
 //! already makes public.
 
-use aes_gcm_siv::aead::{Aead, KeyInit};
-use aes_gcm_siv::{Aes256GcmSiv, Nonce};
-use zeroize::Zeroize;
+use super::aead::{AeadKey, domains};
 
 /// Number of bytes appended to a ciphertext as the authentication tag.
 pub const TAG_LEN: usize = 16;
@@ -28,24 +26,10 @@ pub const HEADER_LEN: usize = 6;
 /// Fixed, all-zero GCM-SIV nonce. Deterministic encryption (see module docs).
 const NONCE: [u8; 12] = [0u8; 12];
 
-/// HKDF salt used for domain separation from the raw master key.
-const HKDF_SALT: &[u8] = b"nanofile-v1";
-/// HKDF info string selecting the block-data-encryption key.
-const HKDF_INFO_BLOCK_DEK: &[u8] = b"nanofile/block-dek/v1";
-/// Length of the derived block data-encryption key (AES-256).
-const DEK_LEN: usize = 32;
-
 /// Authenticated-encryption handle for block at-rest encryption; cheap to clone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockCipher {
-    cipher: Aes256GcmSiv,
-}
-
-impl std::fmt::Debug for BlockCipher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the key material.
-        f.debug_struct("BlockCipher").finish_non_exhaustive()
-    }
+    cipher: AeadKey,
 }
 
 impl BlockCipher {
@@ -53,25 +37,15 @@ impl BlockCipher {
     /// high-entropy and held out-of-band; no random salt is mixed in, keeping
     /// encryption deterministic so dedup is preserved.
     pub fn from_master_key(master_key: &[u8]) -> Self {
-        let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(HKDF_SALT), master_key);
-        let mut dek = [0u8; DEK_LEN];
-        hkdf.expand(HKDF_INFO_BLOCK_DEK, &mut dek)
-            .expect("DEK length is within HKDF output bound");
-        let cipher =
-            Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
-        dek.zeroize();
-        Self { cipher }
+        Self {
+            cipher: AeadKey::from_master_key(master_key, domains::BLOCK_SALT, domains::BLOCK_INFO),
+        }
     }
 
     /// Encrypt `plaintext` into `NFE1 || key_id || ciphertext || tag`; the header lets a
     /// future rotation identify the key, while `decrypt` still accepts legacy ciphertext.
     pub fn encrypt(&self, plaintext: &[u8]) -> Vec<u8> {
-        let nonce = Nonce::from(NONCE);
-        let body = self
-            .cipher
-            .encrypt(&nonce, plaintext)
-            .expect("GCM-SIV encryption never fails for a fixed nonce");
+        let body = self.cipher.encrypt(NONCE, plaintext);
         let mut out = Vec::with_capacity(HEADER_LEN + body.len());
         out.extend_from_slice(MAGIC);
         out.extend_from_slice(&ACTIVE_KEY_ID.to_be_bytes());
@@ -124,16 +98,15 @@ impl BlockCipher {
     /// header-less legacy formats. `Err` on tag mismatch (tampered, wrong key) or an
     /// unknown key id.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, aes_gcm_siv::aead::Error> {
-        let nonce = Nonce::from(NONCE);
         if Self::looks_encrypted(ciphertext) {
             let key_id = u16::from_be_bytes([ciphertext[4], ciphertext[5]]);
             if key_id != ACTIVE_KEY_ID {
                 return Err(aes_gcm_siv::aead::Error);
             }
-            self.cipher.decrypt(&nonce, &ciphertext[HEADER_LEN..])
+            self.cipher.decrypt(NONCE, &ciphertext[HEADER_LEN..])
         } else {
             // Legacy ciphertext written before the versioned header existed.
-            self.cipher.decrypt(&nonce, ciphertext)
+            self.cipher.decrypt(NONCE, ciphertext)
         }
     }
 }
@@ -269,8 +242,7 @@ mod tests {
         assert_eq!(c.decrypt(&ct).unwrap(), data);
 
         // Header-less legacy ciphertext (raw GCM-SIV output) still decrypts.
-        let nonce = Nonce::from(NONCE);
-        let legacy = c.cipher.encrypt(&nonce, data.as_slice()).unwrap();
+        let legacy = c.cipher.encrypt(NONCE, data);
         assert_ne!(&legacy[..4], MAGIC);
         assert_eq!(c.decrypt(&legacy).unwrap(), data);
 

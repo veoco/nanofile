@@ -1,3 +1,4 @@
+mod aead;
 pub mod block_encryption;
 pub mod fs_id;
 pub mod key_derivation;

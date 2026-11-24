@@ -9,59 +9,34 @@
 //! database alone is not enough. A [`TOTP_CIPHER_PREFIX`] marker separates legacy
 //! plaintext rows, which are returned unchanged.
 
-use aes_gcm_siv::aead::{Aead, KeyInit};
-use aes_gcm_siv::{Aes256GcmSiv, Nonce};
+use super::aead::{AeadKey, domains};
 use rand::Rng;
-use zeroize::Zeroize;
 
 /// Marker prepended to encrypted TOTP seeds.
 pub const TOTP_CIPHER_PREFIX: &str = "totp1:";
 
-/// HKDF salt, distinct from the sync-token salt.
-const HKDF_SALT: &[u8] = b"nanofile-totp-v1";
-/// HKDF info string selecting the TOTP data-encryption key.
-const HKDF_INFO_TOTP_DEK: &[u8] = b"nanofile/totp-seed-dek/v1";
-/// Length of the derived data-encryption key (AES-256).
-const DEK_LEN: usize = 32;
 /// Per-value random nonce length (GCM-SIV accepts any length).
 const NONCE_LEN: usize = 12;
 
 /// Authenticated-encryption handle for TOTP seeds; cheap to construct and clone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TotpCipher {
-    cipher: Aes256GcmSiv,
-}
-
-impl std::fmt::Debug for TotpCipher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the key material.
-        f.debug_struct("TotpCipher").finish_non_exhaustive()
-    }
+    cipher: AeadKey,
 }
 
 impl TotpCipher {
     /// Derive a [`TotpCipher`] from the server master key via HKDF-SHA256.
     pub fn from_master_key(master_key: &[u8]) -> Self {
-        let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(HKDF_SALT), master_key);
-        let mut dek = [0u8; DEK_LEN];
-        hkdf.expand(HKDF_INFO_TOTP_DEK, &mut dek)
-            .expect("DEK length is within HKDF output bound");
-        let cipher =
-            Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
-        dek.zeroize();
-        Self { cipher }
+        Self {
+            cipher: AeadKey::from_master_key(master_key, domains::TOTP_SALT, domains::TOTP_INFO),
+        }
     }
 
     /// Encrypt a base32 seed into its stored form.
     pub fn encrypt(&self, plaintext: &str) -> String {
         let mut nonce_bytes = [0u8; NONCE_LEN];
         rand::rng().fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from(nonce_bytes);
-        let ciphertext = self
-            .cipher
-            .encrypt(&nonce, plaintext.as_bytes())
-            .expect("GCM-SIV encryption never fails for a fresh nonce");
+        let ciphertext = self.cipher.encrypt(nonce_bytes, plaintext.as_bytes());
         format!(
             "{TOTP_CIPHER_PREFIX}{}:{}",
             hex::encode(nonce_bytes),
@@ -81,8 +56,7 @@ impl TotpCipher {
         let (nonce_hex, ct_hex) = rest.split_once(':')?;
         let nonce_bytes: [u8; NONCE_LEN] = hex::decode(nonce_hex).ok()?.try_into().ok()?;
         let ciphertext = hex::decode(ct_hex).ok()?;
-        let nonce = Nonce::from(nonce_bytes);
-        let plaintext = self.cipher.decrypt(&nonce, ciphertext.as_ref()).ok()?;
+        let plaintext = self.cipher.decrypt(nonce_bytes, ciphertext.as_ref()).ok()?;
         String::from_utf8(plaintext).ok()
     }
 

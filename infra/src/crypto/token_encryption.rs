@@ -9,57 +9,35 @@
 //! Encryption is deterministic (all-zero nonce), so the stored value doubles as the
 //! equality-lookup key; tokens are 160-bit random values, so equality is already
 //! public. A [`TOKEN_CIPHER_PREFIX`] marker separates legacy plaintext rows.
+//!
+//! The key derivation and cipher live in [`super::aead`]; only the salt/info pair,
+//! the prefix and the nonce policy are token-specific.
 
-use aes_gcm_siv::aead::{Aead, KeyInit};
-use aes_gcm_siv::{Aes256GcmSiv, Nonce};
-use zeroize::Zeroize;
+use super::aead::{AeadKey, domains};
 
 /// Marker prepended to encrypted token values.
 pub const TOKEN_CIPHER_PREFIX: &str = "enc1:";
 
-/// HKDF salt used for domain separation from the raw master key.
-const HKDF_SALT: &[u8] = b"nanofile-token-v1";
-/// HKDF info string selecting the sync-token data-encryption key.
-const HKDF_INFO_TOKEN_DEK: &[u8] = b"nanofile/sync-token-dek/v1";
-/// Length of the derived data-encryption key (AES-256).
-const DEK_LEN: usize = 32;
 /// Fixed, all-zero GCM-SIV nonce (deterministic encryption, see module docs).
 const NONCE: [u8; 12] = [0u8; 12];
 
 /// Authenticated-encryption handle for sync tokens; cheap to construct and clone.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct TokenCipher {
-    cipher: Aes256GcmSiv,
-}
-
-impl std::fmt::Debug for TokenCipher {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the key material.
-        f.debug_struct("TokenCipher").finish_non_exhaustive()
-    }
+    cipher: AeadKey,
 }
 
 impl TokenCipher {
     /// Derive a [`TokenCipher`] from the server master key via HKDF-SHA256.
     pub fn from_master_key(master_key: &[u8]) -> Self {
-        let hkdf = hkdf::Hkdf::<sha2::Sha256>::new(Some(HKDF_SALT), master_key);
-        let mut dek = [0u8; DEK_LEN];
-        hkdf.expand(HKDF_INFO_TOKEN_DEK, &mut dek)
-            .expect("DEK length is within HKDF output bound");
-        let cipher =
-            Aes256GcmSiv::new_from_slice(&dek).expect("32-byte key is valid for AES-256-GCM-SIV");
-        // The cipher's key schedule cannot be scrubbed, but clear the raw DEK buffer.
-        dek.zeroize();
-        Self { cipher }
+        Self {
+            cipher: AeadKey::from_master_key(master_key, domains::TOKEN_SALT, domains::TOKEN_INFO),
+        }
     }
 
     /// Deterministically encrypt a raw token into its stored form.
     pub fn encrypt(&self, plaintext: &str) -> String {
-        let nonce = Nonce::from(NONCE);
-        let ciphertext = self
-            .cipher
-            .encrypt(&nonce, plaintext.as_bytes())
-            .expect("GCM-SIV encryption never fails for a fixed nonce");
+        let ciphertext = self.cipher.encrypt(NONCE, plaintext.as_bytes());
         format!("{TOKEN_CIPHER_PREFIX}{}", hex::encode(ciphertext))
     }
 
@@ -73,8 +51,7 @@ impl TokenCipher {
             return Some(stored.to_string());
         };
         let ciphertext = hex::decode(hex_ct).ok()?;
-        let nonce = Nonce::from(NONCE);
-        let plaintext = self.cipher.decrypt(&nonce, ciphertext.as_ref()).ok()?;
+        let plaintext = self.cipher.decrypt(NONCE, ciphertext.as_ref()).ok()?;
         String::from_utf8(plaintext).ok()
     }
 
