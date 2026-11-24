@@ -595,6 +595,12 @@ pub fn bearer_token(headers: &HeaderMap) -> BearerToken<'_> {
     let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
         return BearerToken::Missing;
     };
+    // A header that was present but blanked by a proxy carries no credentials;
+    // falling through to the session cookie is what the pre-parser code did and
+    // what a browser session needs.
+    if raw.trim().is_empty() {
+        return BearerToken::Missing;
+    }
     let mut parts = raw.split_whitespace();
     let Some(scheme) = parts.next() else {
         return BearerToken::Malformed;
@@ -824,10 +830,11 @@ pub fn extract_sync_token(
 }
 #[cfg(test)]
 mod tests {
-    use super::{AuthRejection, extract_url_repo_id, route_decision};
+    use super::{AuthRejection, BearerToken, bearer_token, extract_url_repo_id, route_decision};
     use crate::domain::api_key::{KeyAuthority, RepoCeiling};
     use crate::domain::capability::{Capability, CapabilitySet};
     use crate::domain::credential::Credential;
+    use axum::http::HeaderMap;
     use axum::http::{Method, StatusCode};
     use axum::response::IntoResponse;
     use std::collections::HashMap;
@@ -1118,5 +1125,23 @@ mod tests {
             extract_url_repo_id(&format!("/seafhttp/repo/{upper}/commit/HEAD")),
             Ok(Some(upper))
         );
+    }
+
+    #[test]
+    fn a_blank_authorization_header_is_no_credential() {
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "".parse().unwrap());
+        assert!(matches!(bearer_token(&headers), BearerToken::Missing));
+
+        headers.insert("authorization", "   ".parse().unwrap());
+        assert!(matches!(bearer_token(&headers), BearerToken::Missing));
+
+        // A scheme without a token is still malformed (and must not fall through
+        // to the cookie session, which would silently switch credentials).
+        headers.insert("authorization", "Bearer".parse().unwrap());
+        assert!(matches!(bearer_token(&headers), BearerToken::Malformed));
+
+        headers.insert("authorization", "Bearer abc".parse().unwrap());
+        assert!(matches!(bearer_token(&headers), BearerToken::Token("abc")));
     }
 }
