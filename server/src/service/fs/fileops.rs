@@ -68,145 +68,33 @@ impl FileOpsService {
 
         // A repeated name must not subtract its bytes twice (nor add two trash
         // rows for the same deletion).
-        let mut unique_names = file_names.to_vec();
-        unique_names.sort();
-        unique_names.dedup();
-        let file_names = unique_names.as_slice();
+        let mut names = file_names.to_vec();
+        names.sort();
+        names.dedup();
 
-        let db = self.db();
-        // Capture the base before resolving the parent, so a concurrent commit
-        // makes the base check fail instead of letting the update land on a newer
-        // HEAD with a delta computed from an older tree.
-        let base_root_id = get_head_root_id(db, repo_id).await?;
-
-        // Resolve the parent dir and its ancestor chain once, so the tree update
-        // below walks ancestors in O(d). NotFound propagates as 404.
-        let (parent_fs_id, ancestor_chain) =
-            FileOps::resolve_fs_id_chain(&self.repos, repo_id, parent_dir).await?;
-
-        let parent_data = crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-            .await
-            .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
-
-        // Sum sizes from the parent dirents: files are O(1), directories walk
-        // their subtree once.
-        let mut total_deleted: i64 = 0;
-        for entry in file_names
-            .iter()
-            .filter_map(|name| parent_data.dirents.iter().find(|d| d.name == *name))
-        {
-            if entry.mode & S_IFDIR != 0 {
-                total_deleted +=
-                    crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id).await?;
-            } else {
-                total_deleted += entry.size;
-            }
-        }
-
-        let names_to_delete = file_names.to_vec();
-        // O(1) membership set for the retain filter below, not an O(n) Vec scan.
-        let names_to_delete_set: std::collections::HashSet<&str> =
-            names_to_delete.iter().map(String::as_str).collect();
-
-        let trash_head_commit_id: Option<String> = self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|r| r.head_commit_id);
-        if let Some(ref parent_commit_id) = trash_head_commit_id {
-            let trash_items: Vec<_> = file_names
-                .iter()
-                .filter_map(|name| {
-                    let entry = parent_data.dirents.iter().find(|d| d.name == *name)?;
-                    let fp = join_path(parent_dir, name);
-                    Some(crate::fs::core::trash::TrashItem {
-                        path: fp,
-                        obj_type: if entry.mode & S_IFDIR != 0 {
-                            "dir".to_string()
-                        } else {
-                            "file".to_string()
-                        },
-                        obj_id: entry.id.clone(),
-                        obj_name: entry.name.clone(),
-                        size: entry.size,
-                    })
-                })
-                .collect();
-            if !trash_items.is_empty()
-                && let Err(e) = crate::fs::core::trash::add_batch_to_trash(
-                    &self.repos,
-                    repo_id,
-                    trash_items,
-                    parent_commit_id,
-                    email,
-                )
-                .await
-            {
-                tracing::warn!("Failed to record batch trash: {e}");
-            }
-        }
-
-        let quota = QuotaGuard::begin(
-            &self.repos,
-            repo_id,
-            self.config.get().storage.default_user_quota_bytes,
-        )
-        .await?;
-        FileOps::update_dir_tree_and_commit_sized(
-            db,
-            &self.repos,
-            repo_id,
-            &base_root_id,
-            parent_dir,
-            &parent_fs_id,
-            email,
-            &format!("Deleted {} items", names_to_delete.len()),
-            &ancestor_chain,
-            |dirents| {
-                dirents.retain(|d| !names_to_delete_set.contains(d.name.as_str()));
-                Ok(())
+        crate::service::fs::delete::delete_entries(
+            &crate::service::fs::delete::DeleteDeps {
+                db: self.db(),
+                repos: &self.repos,
+                indexer: self.indexer.as_ref(),
+                default_quota: self.config.get().storage.default_user_quota_bytes,
             },
-            -total_deleted,
-            quota.scope(),
-            quota.default_quota(),
+            crate::service::fs::delete::DeleteRequest {
+                repo_id,
+                parent_dir,
+                names: &names,
+                email,
+                user_id,
+                description: format!("Deleted {} items", names.len()),
+                parent_policy: crate::service::fs::delete::ParentPolicy::NotFound,
+                entry_policy: crate::service::fs::delete::EntryPolicy::Ok,
+                trash: crate::service::fs::delete::TrashMode::Batch,
+                activity_detail: true,
+                parent_fs_id: None,
+                ancestor_chain: Vec::new(),
+            },
         )
         .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
-        drop(quota);
-
-        for name in file_names {
-            let fp = join_path(parent_dir, name);
-            let entry = parent_data.dirents.iter().find(|d| d.name == *name);
-            let is_dir = entry.is_some_and(|d| d.mode & S_IFDIR != 0);
-            activity_log::log_activity(
-                db,
-                repo_id,
-                "delete",
-                if is_dir { "dir" } else { "file" },
-                &fp,
-                user_id,
-                None,
-                entry.map(|d| d.size),
-                entry.map(|d| d.id.as_str()),
-                None,
-                None,
-            )
-            .await;
-        }
-
-        if let Some(indexer) = &self.indexer {
-            for name in file_names {
-                let fp = join_path(parent_dir, name);
-                if let Err(e) = indexer.delete_file_async(repo_id, &fp).await {
-                    tracing::warn!("Failed to delete index for {fp}: {e}");
-                }
-            }
-        }
-
-        Ok(())
     }
 
     /// Batch copy files/directories within the same repo; returns the

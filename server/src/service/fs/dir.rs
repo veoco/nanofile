@@ -6,7 +6,6 @@ use sea_orm::DatabaseConnection;
 use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::upload_activity;
 use crate::repository::Repositories;
-use crate::service::fs::quota::QuotaGuard;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
@@ -562,86 +561,32 @@ impl DirService {
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        let db = self.db();
         let name = basename(path);
         let parent_path = parent_path_from(path);
-
-        let deleted_size = crate::fs::core::get_entry_total_size(&self.repos, repo_id, path)
-            .await
-            .ok()
-            .unwrap_or(0);
-
-        let head_root_id = get_head_root_id(db, repo_id).await?;
-        let parent_fs_id =
-            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, parent_path)
-                .await
-                .map_err(|e| {
-                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
-                })?;
-
-        // Record the trash entry before the tree update.
-        crate::fs::core::trash::record_deleted_entry(
-            db,
-            &self.repos,
-            repo_id,
-            path,
-            name,
-            email,
-            &parent_fs_id,
-        )
-        .await;
-
-        let quota = QuotaGuard::begin(
-            &self.repos,
-            repo_id,
-            self.config.get().storage.default_user_quota_bytes,
-        )
-        .await?;
-        FileOps::update_dir_tree_and_commit_sized(
-            db,
-            &self.repos,
-            repo_id,
-            &head_root_id,
-            parent_path,
-            &parent_fs_id,
-            email,
-            &format!("Deleted directory {name}"),
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
-            |dirents| {
-                dirents.retain(|d| d.name != name);
-                Ok(())
+        let names = [name.to_string()];
+        crate::service::fs::delete::delete_entries(
+            &crate::service::fs::delete::DeleteDeps {
+                db: self.db(),
+                repos: &self.repos,
+                indexer: self.indexer.as_ref(),
+                default_quota: self.config.get().storage.default_user_quota_bytes,
             },
-            -deleted_size,
-            quota.scope(),
-            quota.default_quota(),
+            crate::service::fs::delete::DeleteRequest {
+                repo_id,
+                parent_dir: parent_path,
+                names: &names,
+                email,
+                user_id,
+                description: format!("Deleted directory {name}"),
+                parent_policy: crate::service::fs::delete::ParentPolicy::NotFound,
+                entry_policy: crate::service::fs::delete::EntryPolicy::NotFound,
+                trash: crate::service::fs::delete::TrashMode::Single,
+                activity_detail: false,
+                parent_fs_id: None,
+                ancestor_chain: Vec::new(),
+            },
         )
-        .await?;
-        drop(quota);
-
-        activity_log::log_activity(
-            db, repo_id, "delete", "dir", path, user_id, None, None, None, None, None,
-        )
-        .await;
-
-        if let Err(e) = self
-            .repos
-            .file_tag
-            .delete_by_path_prefix(repo_id, path)
-            .await
-        {
-            tracing::warn!("Failed to delete file tags for {path}: {e}");
-        }
-
-        if let Err(e) = self
-            .repos
-            .face_tags
-            .delete_by_path_prefix(repo_id, path)
-            .await
-        {
-            tracing::warn!("Failed to delete face-tag rows for {path}: {e}");
-        }
-
-        Ok(())
+        .await
     }
 
     pub async fn move_dir(
@@ -842,107 +787,37 @@ impl DirService {
     pub async fn delete_dirent(
         &self,
         repo_id: &str,
-        obj: &str,
+        _obj: &str,
         path: &str,
         email: &str,
         user_id: i32,
     ) -> Result<(), AppError> {
-        let db = self.db();
         let name = basename(path);
         let parent_path = parent_path_from(path);
-
-        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
-        if head.head_commit_id.is_none() {
-            return Err(AppError::NotFound("no commits".into()));
-        }
-
-        let parent_fs_id =
-            crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head.root_id, parent_path)
-                .await
-                .map_err(|e| {
-                    crate::service::fs::resolve_parent_error(e, "resolve parent failed")
-                })?;
-
-        let parent_dir_data =
-            crate::fs::core::read_fs_dir_data(&self.repos, repo_id, &parent_fs_id)
-                .await
-                .map_err(|e| AppError::Internal(format!("read parent dir failed: {e}")))?;
-
-        // Resolve the entry size from the parent dirents (files O(1); directories walk their subtree
-        // once) instead of re-resolving the path.
-        let deleted_size: i64 = match parent_dir_data.dirents.iter().find(|d| d.name == name) {
-            Some(entry) if entry.mode & S_IFDIR != 0 => {
-                crate::fs::core::compute_tree_size(&self.repos, repo_id, &entry.id)
-                    .await
-                    .unwrap_or_default()
-            }
-            Some(entry) => entry.size,
-            None => 0,
-        };
-
-        // Trash first: the tree update below removes the dirent.
-        if let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) {
-            let obj_type = if entry.mode & S_IFDIR != 0 {
-                "dir"
-            } else {
-                "file"
-            };
-            if let Err(e) = crate::fs::core::trash::add_to_trash(
-                &self.repos,
-                repo_id,
-                path,
-                obj_type,
-                &entry.id,
-                &entry.name,
-                entry.size,
-                head.head_commit_id.as_deref().unwrap_or_default(),
-                email,
-            )
-            .await
-            {
-                tracing::warn!("Failed to record trash for {path}: {e}");
-            }
-        }
-
-        let quota = QuotaGuard::begin(
-            &self.repos,
-            repo_id,
-            self.config.get().storage.default_user_quota_bytes,
-        )
-        .await?;
-        FileOps::update_dir_tree_and_commit_sized(
-            db,
-            &self.repos,
-            repo_id,
-            &head.root_id,
-            parent_path,
-            &parent_fs_id,
-            email,
-            &format!("Deleted {name}"),
-            crate::fs::core::file_ops::EMPTY_ANCESTOR_CHAIN,
-            |dirents| {
-                dirents.retain(|d| d.name != name);
-                Ok(())
+        let names = [name.to_string()];
+        crate::service::fs::delete::delete_entries(
+            &crate::service::fs::delete::DeleteDeps {
+                db: self.db(),
+                repos: &self.repos,
+                indexer: self.indexer.as_ref(),
+                default_quota: self.config.get().storage.default_user_quota_bytes,
             },
-            -deleted_size,
-            quota.scope(),
-            quota.default_quota(),
+            crate::service::fs::delete::DeleteRequest {
+                repo_id,
+                parent_dir: parent_path,
+                names: &names,
+                email,
+                user_id,
+                description: format!("Deleted {name}"),
+                parent_policy: crate::service::fs::delete::ParentPolicy::NotFound,
+                entry_policy: crate::service::fs::delete::EntryPolicy::NotFound,
+                trash: crate::service::fs::delete::TrashMode::Single,
+                activity_detail: false,
+                parent_fs_id: None,
+                ancestor_chain: Vec::new(),
+            },
         )
-        .await?;
-        drop(quota);
-
-        if let Some(indexer) = &self.indexer
-            && let Err(e) = indexer.delete_file_async(repo_id, path).await
-        {
-            tracing::warn!("Failed to delete index for {path}: {e}");
-        }
-
-        activity_log::log_activity(
-            db, repo_id, "delete", obj, path, user_id, None, None, None, None, None,
-        )
-        .await;
-
-        Ok(())
+        .await
     }
 
     /// Build the v21 directory listing response data (non-recursive), including starred info.

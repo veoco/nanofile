@@ -27,7 +27,10 @@ pub use lock::{
     canonical_lock_path, check_commit_file_locks, prune_all_stale_file_locks,
     prune_stale_file_locks, upsert_lock_timestamp,
 };
-pub use size::{compute_repo_size, compute_tree_size, entry_exists, get_entry_total_size};
+pub use size::{
+    compute_repo_size, compute_tree_size, compute_tree_size_and_files, entry_exists,
+    get_entry_total_size,
+};
 pub use store::{store_fs_dir_object, store_fs_file_object};
 pub use tree::{
     RepoHead, read_fs_dir_data, read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch,

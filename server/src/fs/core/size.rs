@@ -22,31 +22,82 @@ pub async fn compute_tree_size(
     repo_id: &str,
     root_fs_id: &str,
 ) -> Result<i64, AppError> {
+    Ok(walk_tree(repos, repo_id, root_fs_id, "", false)
+        .await?
+        .total)
+}
+
+/// Walk a directory subtree, returning its total size and every file path below
+/// it (repo-absolute, joined under `path_prefix`).
+///
+/// A delete of a directory needs both the quota delta and the list of index
+/// documents to remove; one walk serves both so the tree is read once.
+pub async fn compute_tree_size_and_files(
+    repos: &Repositories,
+    repo_id: &str,
+    root_fs_id: &str,
+    path_prefix: &str,
+) -> Result<(i64, Vec<String>), AppError> {
+    let walk = walk_tree(repos, repo_id, root_fs_id, path_prefix, true).await?;
+    Ok((walk.total, walk.files))
+}
+
+struct TreeWalk {
+    total: i64,
+    files: Vec<String>,
+}
+
+/// The shared level-order walk behind [`compute_tree_size`] and
+/// [`compute_tree_size_and_files`].
+///
+/// `path_prefix` is only consulted when `collect_files` is set; the size-only
+/// path does not allocate a path per entry.
+async fn walk_tree(
+    repos: &Repositories,
+    repo_id: &str,
+    root_fs_id: &str,
+    path_prefix: &str,
+    collect_files: bool,
+) -> Result<TreeWalk, AppError> {
     if root_fs_id == EMPTY_SHA1 {
-        return Ok(0);
+        return Ok(TreeWalk {
+            total: 0,
+            files: Vec::new(),
+        });
     }
 
     let mut total: i64 = 0;
+    let mut files: Vec<String> = Vec::new();
     // Level frontier: one batched `IN` query per level (O(#dirs) → O(depth)).
-    let mut frontier: Vec<String> = vec![root_fs_id.to_string()];
+    let mut frontier: Vec<(String, String)> =
+        vec![(root_fs_id.to_string(), path_prefix.to_string())];
 
     let mut guard = crate::fs::core::traversal::TreeGuard::new();
     while !frontier.is_empty() {
         guard.enter_level()?;
         guard.visit(frontier.len())?;
-        let dir_map = read_fs_dir_data_batch(repos, repo_id, &frontier).await?;
-        let mut next: Vec<String> = Vec::new();
+        let ids: Vec<String> = frontier.iter().map(|(id, _)| id.clone()).collect();
+        let dir_map = read_fs_dir_data_batch(repos, repo_id, &ids).await?;
+        let mut next: Vec<(String, String)> = Vec::new();
 
-        for fs_id in &frontier {
+        for (fs_id, prefix) in &frontier {
             // Missing/EMPTY dirs are absent from the batch map → skip.
             let Some(dir_data) = dir_map.get(fs_id) else {
                 continue;
             };
             for entry in &dir_data.dirents {
+                let child_path = if collect_files {
+                    infra::common::util::join_path(prefix, &entry.name)
+                } else {
+                    String::new()
+                };
                 if entry.mode & S_IFDIR != 0 {
-                    next.push(entry.id.clone());
+                    next.push((entry.id.clone(), child_path));
                 } else {
                     total += entry.size;
+                    if collect_files {
+                        files.push(child_path);
+                    }
                 }
             }
         }
@@ -54,7 +105,7 @@ pub async fn compute_tree_size(
         frontier = next;
     }
 
-    Ok(total)
+    Ok(TreeWalk { total, files })
 }
 
 /// Resolve the directory entry at `path`, or `None` when it does not exist.

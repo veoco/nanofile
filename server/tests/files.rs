@@ -10,6 +10,7 @@ mod block_integrity_test;
 mod block_layout_test;
 mod chunked_upload_test;
 mod commit_test;
+mod delete_parity_test;
 mod dir_order_test;
 mod download_matrix_test;
 mod encrypted_repo_test;

@@ -1,3 +1,4 @@
+pub mod delete;
 pub mod dir;
 pub mod exif;
 pub mod file;
