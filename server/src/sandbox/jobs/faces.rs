@@ -16,8 +16,6 @@
 //! summary, `R` for bytes this build cannot decode (a verdict, not a failure) and
 //! `U` for a run that failed and is worth retrying.
 
-use std::io::Read;
-
 use crate::face_tags::DetectOptions;
 use crate::face_tags::engine::DetectionSummary;
 use crate::sandbox::worker::{self, RunOutcome};
@@ -61,19 +59,11 @@ pub(crate) const MAX_IMAGE_BYTES: usize = 32 * 1024 * 1024;
 /// cannot be set unlimited.
 pub(crate) const MAX_CONCURRENT_FACE_WORKERS: usize = 2;
 
-static FACE_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-    std::sync::OnceLock::new();
+static FACE_GATE: super::JobGate = super::JobGate::new(MAX_CONCURRENT_FACE_WORKERS, "face");
 
 /// Acquire a permit covering one face-worker child; callers queue rather than fail.
 pub(crate) async fn acquire_face_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
-    FACE_CONCURRENCY
-        .get_or_init(|| {
-            std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_FACE_WORKERS))
-        })
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|error| format!("face concurrency gate failed: {error}"))
+    FACE_GATE.acquire().await
 }
 
 /// Ask the worker for the face count. The reply is deliberately tiny: no boxes,
@@ -125,26 +115,15 @@ struct Reply {
 }
 
 fn request(op: u8, options: u32, content: &[u8]) -> Vec<u8> {
-    let mut request = Vec::with_capacity(worker::MAGIC.len() + 5 + content.len());
-    request.extend_from_slice(worker::MAGIC);
-    request.push(op);
-    request.extend_from_slice(&options.to_le_bytes());
-    request.extend_from_slice(content);
-    request
+    worker::request_frame(op, options, content)
 }
 
 pub fn serve() -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock();
-    let mut head = [0u8; 9];
-    stdin.read_exact(&mut head)?;
-    if &head[..4] != worker::MAGIC {
-        anyhow::bail!("the request does not start with the protocol magic");
-    }
-    let op = head[4];
-    let options = u32::from_le_bytes(head[5..9].try_into().expect("four bytes"));
+    let mut reader = worker::RequestReader::open()?;
+    let op = reader.tag();
+    let options = reader.word();
 
-    let mut data = Vec::new();
-    stdin.read_to_end(&mut data)?;
+    let data = reader.read_to_end()?;
     if data.len() > MAX_IMAGE_BYTES {
         return worker::write_frame(b'R', b"image over the size cap");
     }
@@ -219,7 +198,7 @@ pub fn probe() -> (String, JobVerdict) {
     match crate::face_tags::engine::detect(&image, DetectOptions::default()) {
         Ok(summary) => (format!("faces-ok({})", summary.face_count), JobVerdict::Ok),
         Err(error) => (
-            format!("faces-failed({})", token(&error)),
+            format!("faces-failed({})", super::token(&error)),
             JobVerdict::Failed,
         ),
     }
@@ -227,18 +206,6 @@ pub fn probe() -> (String, JobVerdict) {
 
 /// One token out of a failure message: the detail is comma-separated and
 /// whitespace-free.
-fn token(why: &str) -> String {
-    why.chars()
-        .map(|character| {
-            if character.is_whitespace() || character == ',' {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

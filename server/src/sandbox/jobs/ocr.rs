@@ -12,8 +12,6 @@
 //! UTF-8 text (page texts separated by `\u{1e}` for a PDF), `U` for "examined,
 //! no indexable text", `E` for "the environment or a model failed".
 
-use std::io::Read;
-
 use crate::ocr::{self, OcrOptions};
 use crate::sandbox::worker::{self, RunOutcome};
 use crate::sandbox::{Grants, JobVerdict, Profile};
@@ -35,19 +33,11 @@ pub(crate) const MAX_IMAGE_BYTES: usize = crate::ocr::MAX_IMAGE_BYTES;
 /// cannot be set unlimited.
 pub(crate) const MAX_CONCURRENT_OCR_WORKERS: usize = 2;
 
-static OCR_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-    std::sync::OnceLock::new();
+static OCR_GATE: super::JobGate = super::JobGate::new(MAX_CONCURRENT_OCR_WORKERS, "OCR");
 
 /// Acquire a permit covering one OCR child; callers queue rather than fail.
 pub(crate) async fn acquire_ocr_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
-    OCR_CONCURRENCY
-        .get_or_init(|| {
-            std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_OCR_WORKERS))
-        })
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|error| format!("OCR concurrency gate failed: {error}"))
+    OCR_GATE.acquire().await
 }
 
 /// Ask the confined child to read one image.
@@ -120,46 +110,31 @@ pub(crate) fn extract_pdf(pdf: &[u8], pages: &[u32], options: OcrOptions) -> wor
 }
 
 fn request(op: u8, options: u32, content: &[u8]) -> Vec<u8> {
-    let mut request = Vec::with_capacity(worker::MAGIC.len() + 5 + content.len());
-    request.extend_from_slice(worker::MAGIC);
-    request.push(op);
-    request.extend_from_slice(&options.to_le_bytes());
-    request.extend_from_slice(content);
-    request
+    worker::request_frame(op, options, content)
 }
 
 fn pdf_request(options: u32, pages: &[u32], pdf: &[u8]) -> Vec<u8> {
-    let mut request = Vec::with_capacity(worker::MAGIC.len() + 9 + pages.len() * 4 + pdf.len());
-    request.extend_from_slice(worker::MAGIC);
-    request.push(OP_OCR_PDF);
-    request.extend_from_slice(&options.to_le_bytes());
-    request.extend_from_slice(&(pages.len() as u32).to_le_bytes());
+    let mut payload = Vec::with_capacity(4 + pages.len() * 4 + pdf.len());
+    payload.extend_from_slice(&(pages.len() as u32).to_le_bytes());
     for page in pages {
-        request.extend_from_slice(&page.to_le_bytes());
+        payload.extend_from_slice(&page.to_le_bytes());
     }
-    request.extend_from_slice(pdf);
-    request
+    payload.extend_from_slice(pdf);
+    worker::request_frame(OP_OCR_PDF, options, &payload)
 }
 
 pub fn serve() -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock();
-    let mut head = [0u8; 9];
-    stdin.read_exact(&mut head)?;
-    if &head[..4] != worker::MAGIC {
-        anyhow::bail!("the request does not start with the protocol magic");
-    }
-    let op = head[4];
-    let options = u32::from_le_bytes(head[5..9].try_into().expect("four bytes"));
+    let mut reader = worker::RequestReader::open()?;
+    let op = reader.tag();
+    let options = reader.word();
 
     let pages = if op == OP_OCR_PDF {
-        let mut count = [0u8; 4];
-        stdin.read_exact(&mut count)?;
-        let count = u32::from_le_bytes(count) as usize;
+        let count =
+            u32::from_le_bytes(reader.read_exact(4)?.try_into().expect("four bytes")) as usize;
         if count == 0 || count > crate::indexer::extract::pdf::MAX_PAGES {
             return worker::write_frame(b'U', b"bad PDF page list");
         }
-        let mut bytes = vec![0u8; count * 4];
-        stdin.read_exact(&mut bytes)?;
+        let bytes = reader.read_exact(count * 4)?;
         Some(
             bytes
                 .as_chunks::<4>()
@@ -172,8 +147,7 @@ pub fn serve() -> anyhow::Result<()> {
         None
     };
 
-    let mut data = Vec::new();
-    stdin.read_to_end(&mut data)?;
+    let data = reader.read_to_end()?;
     if data.len() > MAX_IMAGE_BYTES {
         return worker::write_frame(b'U', b"input over the size cap");
     }
@@ -247,22 +221,11 @@ fn decode_options(raw: u32) -> OcrOptions {
 pub fn probe() -> (String, JobVerdict) {
     match ocr::engine::probe() {
         Ok(lines) => (format!("ocr-ok({lines})"), JobVerdict::Ok),
-        Err(error) => (format!("ocr-failed({})", token(&error)), JobVerdict::Failed),
+        Err(error) => (
+            format!("ocr-failed({})", super::token(&error)),
+            JobVerdict::Failed,
+        ),
     }
-}
-
-/// One token out of a failure message: the detail is comma-separated and
-/// whitespace-free.
-fn token(why: &str) -> String {
-    why.chars()
-        .map(|character| {
-            if character.is_whitespace() || character == ',' {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -12,8 +12,6 @@
 //! the bytes. Reply: the common frame, `P`/`J` for an image, `X` for EXIF JSON,
 //! `U` for a refusal.
 
-use std::io::Read;
-
 use crate::sandbox::worker::{self, RunOutcome};
 use crate::sandbox::{Grants, JobVerdict, Profile};
 use crate::thumbnail_util::{self, ThumbFormat};
@@ -72,12 +70,7 @@ fn run(op: u8, size: u32, content: &[u8]) -> Result<(u8, Vec<u8>), String> {
 }
 
 fn request(op: u8, size: u32, content: &[u8]) -> Vec<u8> {
-    let mut request = Vec::with_capacity(worker::MAGIC.len() + 5 + content.len());
-    request.extend_from_slice(worker::MAGIC);
-    request.push(op);
-    request.extend_from_slice(&size.to_le_bytes());
-    request.extend_from_slice(content);
-    request
+    worker::request_frame(op, size, content)
 }
 
 fn refusal(body: Vec<u8>) -> String {
@@ -95,33 +88,19 @@ fn unknown_tag(tag: u8) -> String {
 /// path, which needs no authentication. A constant, so it cannot be set unlimited.
 pub(crate) const MAX_CONCURRENT_IMAGE_WORKERS: usize = 4;
 
-static IMAGE_CONCURRENCY: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
-    std::sync::OnceLock::new();
+static IMAGE_GATE: super::JobGate = super::JobGate::new(MAX_CONCURRENT_IMAGE_WORKERS, "image");
 
 /// Acquire a permit covering one image-worker child; callers queue rather than fail.
 pub(crate) async fn acquire_image_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
-    IMAGE_CONCURRENCY
-        .get_or_init(|| {
-            std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_IMAGE_WORKERS))
-        })
-        .clone()
-        .acquire_owned()
-        .await
-        .map_err(|error| format!("image concurrency gate failed: {error}"))
+    IMAGE_GATE.acquire().await
 }
 
 pub fn serve() -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock();
-    let mut head = [0u8; 9];
-    stdin.read_exact(&mut head)?;
-    if &head[..4] != worker::MAGIC {
-        anyhow::bail!("the request does not start with the protocol magic");
-    }
-    let op = head[4];
-    let size = u32::from_le_bytes(head[5..9].try_into().expect("four bytes"));
+    let mut reader = worker::RequestReader::open()?;
+    let op = reader.tag();
+    let size = reader.word();
 
-    let mut data = Vec::new();
-    stdin.read_to_end(&mut data)?;
+    let data = reader.read_to_end()?;
     if data.len() > MAX_IMAGE_BYTES {
         return worker::write_frame(b'U', b"image over the size cap");
     }

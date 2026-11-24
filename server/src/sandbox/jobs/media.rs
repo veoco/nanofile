@@ -18,7 +18,6 @@
 // doc explains why the helper must fork rather than `posix_spawn`.
 #![cfg_attr(target_os = "macos", allow(unsafe_code))]
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -187,33 +186,25 @@ fn request(kind: Kind, size: u32, source: &Path) -> Result<Vec<u8>, String> {
     if path.len() > MAX_PATH_BYTES || path.len() > u16::MAX as usize {
         return Err("the media source path is too long".to_string());
     }
-    let mut request = Vec::with_capacity(worker::MAGIC.len() + 7 + path.len());
-    request.extend_from_slice(worker::MAGIC);
-    request.push(kind.as_byte());
-    request.extend_from_slice(&size.to_le_bytes());
-    request.extend_from_slice(&(path.len() as u16).to_le_bytes());
-    request.extend_from_slice(path);
-    Ok(request)
+    let mut payload = Vec::with_capacity(2 + path.len());
+    payload.extend_from_slice(&(path.len() as u16).to_le_bytes());
+    payload.extend_from_slice(path);
+    Ok(worker::request_frame(kind.as_byte(), size, &payload))
 }
 
 pub fn serve(grants: Grants<'_>) -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock();
-    let mut head = [0u8; 11];
-    stdin.read_exact(&mut head)?;
-    if &head[..4] != worker::MAGIC {
-        anyhow::bail!("the request does not start with the protocol magic");
-    }
-    let Some(kind) = Kind::from_byte(head[4]) else {
+    let mut reader = worker::RequestReader::open()?;
+    let Some(kind) = Kind::from_byte(reader.tag()) else {
         return worker::write_frame(b'U', b"unknown media kind");
     };
-    let size = u32::from_le_bytes(head[5..9].try_into().expect("four bytes"));
-    let path_len = u16::from_le_bytes(head[9..11].try_into().expect("two bytes")) as usize;
+    let size = reader.word();
+    let path_len =
+        u16::from_le_bytes(reader.read_exact(2)?.try_into().expect("two bytes")) as usize;
     if path_len == 0 || path_len > MAX_PATH_BYTES {
         return worker::write_frame(b'U', b"bad media source path length");
     }
 
-    let mut path = vec![0u8; path_len];
-    stdin.read_exact(&mut path)?;
+    let path = reader.read_exact(path_len)?;
     let source = PathBuf::from(
         String::from_utf8(path)
             .map_err(|_| anyhow::anyhow!("the media source path is not UTF-8"))?,
@@ -547,29 +538,17 @@ pub fn probe(grants: Grants<'_>) -> (String, JobVerdict) {
     let (token_text, job) = match encoded_thumbnail(helper, Kind::Video, source, PROBE_SIZE) {
         Ok((bytes, _)) => (format!("media-ok({})", bytes.len()), JobVerdict::Ok),
         Err(FrameError::Unavailable(why)) => (
-            format!("media-unavailable({})", token(&why)),
+            format!("media-unavailable({})", super::token(&why)),
             JobVerdict::Failed,
         ),
-        Err(FrameError::Failed(why)) => {
-            (format!("media-failed({})", token(&why)), JobVerdict::Failed)
-        }
+        Err(FrameError::Failed(why)) => (
+            format!("media-failed({})", super::token(&why)),
+            JobVerdict::Failed,
+        ),
     };
     #[cfg(target_os = "macos")]
     let token_text = format!("{token_text},hand={}", hand_start(helper));
     (token_text, job)
-}
-
-/// One token out of a failure message: the detail is comma-separated and whitespace-free.
-fn token(why: &str) -> String {
-    why.chars()
-        .map(|character| {
-            if character.is_whitespace() || character == ',' {
-                '_'
-            } else {
-                character
-            }
-        })
-        .collect()
 }
 
 /// Start the helper by hand, and say what the kernel answered.

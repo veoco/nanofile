@@ -412,18 +412,102 @@ fn document_verdicts() -> (String, JobVerdict) {
 }
 
 fn read_request() -> anyhow::Result<(Plan, Vec<u8>)> {
-    let mut stdin = std::io::stdin().lock();
-    let mut prologue = [0u8; 5];
-    stdin.read_exact(&mut prologue)?;
-    if &prologue[..4] != MAGIC {
-        anyhow::bail!("the request does not start with the protocol magic");
-    }
-    let plan = Plan::from_tag(prologue[4])
-        .ok_or_else(|| anyhow::anyhow!("unknown plan tag {}", prologue[4]))?;
-
-    let mut data = Vec::new();
-    stdin.read_to_end(&mut data)?;
+    let mut reader = RequestReader::open_bare()?;
+    let plan = Plan::from_tag(reader.tag())
+        .ok_or_else(|| anyhow::anyhow!("unknown plan tag {}", reader.tag()))?;
+    let data = reader.read_to_end()?;
     Ok((plan, data))
+}
+
+/// One request frame: magic, operation tag, little-endian `u32` word, payload.
+///
+/// The child side of this framing is [`RequestReader`]; the reply side is
+/// [`write_frame`] / [`parse_frame`]. Every profile used to hand-write this header
+/// and its reader, which is how `documents` ended up with no size check and
+/// `block_auth`-style asymmetries appeared in the request/reply pair.
+pub(crate) fn request_frame(tag: u8, word: u32, payload: &[u8]) -> Vec<u8> {
+    let mut request = Vec::with_capacity(MAGIC.len() + 5 + payload.len());
+    request.extend_from_slice(MAGIC);
+    request.push(tag);
+    request.extend_from_slice(&word.to_le_bytes());
+    request.extend_from_slice(payload);
+    request
+}
+
+/// A request frame without the `u32` word: magic, operation tag, payload.
+///
+/// Only the `documents` profile uses this shorter header; the plan is carried in
+/// the tag and the payload is the document itself.
+pub(crate) fn bare_request_frame(tag: u8, payload: &[u8]) -> Vec<u8> {
+    let mut request = Vec::with_capacity(MAGIC.len() + 1 + payload.len());
+    request.extend_from_slice(MAGIC);
+    request.push(tag);
+    request.extend_from_slice(payload);
+    request
+}
+
+/// Reads one request frame from stdin, validating the shared prologue once.
+pub(crate) struct RequestReader {
+    stdin: std::io::StdinLock<'static>,
+    tag: u8,
+    word: u32,
+}
+
+impl RequestReader {
+    fn prologue() -> anyhow::Result<(std::io::StdinLock<'static>, u8)> {
+        let mut stdin = std::io::stdin().lock();
+        let mut head = [0u8; 5];
+        stdin.read_exact(&mut head)?;
+        if &head[..4] != MAGIC {
+            anyhow::bail!("the request does not start with the protocol magic");
+        }
+        Ok((stdin, head[4]))
+    }
+
+    /// Open a frame with the standard 9-byte header.
+    pub(crate) fn open() -> anyhow::Result<Self> {
+        let (mut stdin, tag) = Self::prologue()?;
+        let mut word = [0u8; 4];
+        stdin.read_exact(&mut word)?;
+        Ok(Self {
+            stdin,
+            tag,
+            word: u32::from_le_bytes(word),
+        })
+    }
+
+    /// Open a frame with the short 5-byte header (`documents`).
+    pub(crate) fn open_bare() -> anyhow::Result<Self> {
+        let (stdin, tag) = Self::prologue()?;
+        Ok(Self {
+            stdin,
+            tag,
+            word: 0,
+        })
+    }
+
+    pub(crate) fn tag(&self) -> u8 {
+        self.tag
+    }
+
+    /// The header word (options, size or kind depending on the profile).
+    pub(crate) fn word(&self) -> u32 {
+        self.word
+    }
+
+    pub(crate) fn read_exact(&mut self, len: usize) -> anyhow::Result<Vec<u8>> {
+        let mut bytes = vec![0u8; len];
+        self.stdin.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+
+    /// Read the rest of the request body. Callers that enforce a size cap do so
+    /// after this returns, so their refusal uses the profile's own reply tag.
+    pub(crate) fn read_to_end(&mut self) -> anyhow::Result<Vec<u8>> {
+        let mut data = Vec::new();
+        self.stdin.read_to_end(&mut data)?;
+        Ok(data)
+    }
 }
 
 /// Write one reply frame: tag, little-endian `u32` length, body.
@@ -512,10 +596,7 @@ pub fn extract(plan: Plan, data: &[u8]) -> Outcome {
         return Outcome::Extracted(Extracted::Unsupported(reason::SANDBOX_OFF));
     }
 
-    let mut request = Vec::with_capacity(MAGIC.len() + 1 + data.len());
-    request.extend_from_slice(MAGIC);
-    request.push(plan.tag());
-    request.extend_from_slice(data);
+    let request = bare_request_frame(plan.tag(), data);
 
     match run_request(
         Profile::Documents,
@@ -2300,10 +2381,7 @@ mod tests {
     }
 
     fn request(plan: Plan, data: &[u8]) -> Vec<u8> {
-        let mut request = Vec::from(&MAGIC[..]);
-        request.push(plan.tag());
-        request.extend_from_slice(data);
-        request
+        bare_request_frame(plan.tag(), data)
     }
 
     #[test]
