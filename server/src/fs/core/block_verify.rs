@@ -163,17 +163,21 @@ impl BlockVerify {
             None => store.repo_ids().await?,
         };
 
-        // The block-size rule differs for client-side-encrypted libraries, so the
-        // flag is read once per scan rather than per file object. A repository with
-        // no row (a stale block directory) is treated as unencrypted, which is the
-        // same answer the reader would give.
-        let encrypted_repos: HashMap<String, bool> = repo::Entity::find()
-            .filter(repo::Column::Id.is_in(repo_ids.clone()))
-            .all(db)
-            .await?
-            .into_iter()
-            .map(|row| (row.id, row.encrypted != 0))
-            .collect();
+        // A repository with no row (a stale block directory) is treated as
+        // unencrypted, which is the same answer the reader would give. The id list
+        // comes from the on-disk block directories and can therefore outnumber the
+        // database rows (deleted libraries leave directories behind), so chunk it
+        // like every other `IN` query in the codebase (SQLite's variable limit).
+        let mut encrypted_repos: HashMap<String, bool> = HashMap::new();
+        for chunk in repo_ids.chunks(500) {
+            for row in repo::Entity::find()
+                .filter(repo::Column::Id.is_in(chunk.to_vec()))
+                .all(db)
+                .await?
+            {
+                encrypted_repos.insert(row.id, row.encrypted != 0);
+            }
+        }
 
         let mut report = VerifyReport {
             repos_scanned: repo_ids.len(),
