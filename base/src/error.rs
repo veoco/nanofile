@@ -96,8 +96,6 @@ impl AppError {
     }
 }
 
-// ── Standard From impls (always available) ──────────────────────────────────
-
 impl From<std::io::Error> for AppError {
     fn from(err: std::io::Error) -> Self {
         tracing::error!(?err, "IO error");
@@ -112,8 +110,6 @@ impl From<serde_json::Error> for AppError {
     }
 }
 
-// ── From<sea_orm::DbErr> — only when the "with-sea-orm" feature is enabled ──
-
 #[cfg(feature = "with-sea-orm")]
 impl From<sea_orm::DbErr> for AppError {
     fn from(err: sea_orm::DbErr) -> Self {
@@ -121,8 +117,6 @@ impl From<sea_orm::DbErr> for AppError {
         AppError::Internal(err.to_string())
     }
 }
-
-// ── IntoResponse + axum-related impls — only when "with-axum" is enabled ──
 
 #[cfg(feature = "with-axum")]
 mod into_response_impl {

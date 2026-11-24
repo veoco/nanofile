@@ -1,8 +1,7 @@
 //! The HTTP application: which routes exist, and what wraps them.
 //!
 //! It lives in the library rather than `main.rs` because `tests/` can only link
-//! a library target, and a second assembly inside the binary let the tests
-//! exercise a router the server does not run. There is one assembly now.
+//! a library target, so the binary and the tests assemble the same router.
 //!
 //! [`app_routes`] is the routing surface: every route, the per-group body
 //! limits, CORS, the HTML error pages and the fallback. [`build_app`] adds the

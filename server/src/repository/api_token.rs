@@ -77,7 +77,6 @@ pub trait ApiTokenRepository: Send + Sync {
         keep_id: Option<i32>,
     ) -> Result<u64, AppError>;
 
-    /// Create a session token and return the model.
     async fn create_session_token(
         &self,
         params: CreateSessionTokenParams,

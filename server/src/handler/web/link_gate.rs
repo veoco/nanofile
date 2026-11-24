@@ -1,11 +1,9 @@
 //! Shared password gate for the anonymous link pages (`/f/`, `/d/`, `/u/`).
 //!
-//! The three pages used to carry their own copies of "direction switch → resolve
-//! the link → check the password header/cookie → count failures → render the
-//! validation page", and the copies had drifted: the POST paths verified a
-//! passwordless link against an empty hash while the GET paths opened it. The
-//! gate is the one place that decides whether a link is open and what a locked
-//! visitor sees.
+//! The gate is the one place that decides whether a link is open and what a
+//! locked visitor sees: direction switch → resolve the link → check the password
+//! header/cookie → count failures → render the validation page. The POST and GET
+//! paths must agree on whether a passwordless link is open.
 
 use askama::Template;
 use axum::{http::HeaderMap, response::Html, response::IntoResponse, response::Response};

@@ -899,7 +899,6 @@ impl FileService {
         Ok(())
     }
 
-    /// Get file detail metadata.
     pub async fn file_detail(
         &self,
         repo_id: &str,

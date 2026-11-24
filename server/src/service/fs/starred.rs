@@ -316,7 +316,6 @@ impl StarredService {
         ))
     }
 
-    /// Unstar an item.
     pub async fn unstar_item(
         &self,
         user_id: i32,

@@ -430,9 +430,7 @@ mod tests {
     }
 
     /// `favicon.svg` (also what the tray/exe icons rasterize from) and
-    /// `icon_brand_mark` are two copies of one geometry, so they drift silently:
-    /// the mark once rendered at four different radii and four different glyph
-    /// weights across the tab, the topbar, the rail footer and the brand bar.
+    /// `icon_brand_mark` are two copies of one geometry, so they drift silently.
     /// Compare the parts that carry the shape, not the parts that must differ
     /// (a standalone favicon cannot read the app's CSS variables for colour).
     #[test]

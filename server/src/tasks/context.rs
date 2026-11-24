@@ -239,7 +239,6 @@ impl JobContext {
         self.progress.report(done, total, None);
     }
 
-    /// Report progress together with a message.
     pub fn report_with_message(&self, done: u64, total: Option<u64>, message: impl Into<String>) {
         self.progress.report(done, total, Some(message.into()));
     }

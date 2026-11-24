@@ -132,7 +132,6 @@ pub fn serve() -> anyhow::Result<()> {
     worker::write_frame(tag, &body)
 }
 
-/// Do the work one operation names, as a reply frame's tag and body.
 fn answer(op: u8, options: DetectOptions, data: &[u8]) -> (u8, Vec<u8>) {
     match op {
         OP_DETECT => match detect_answer(data, options) {

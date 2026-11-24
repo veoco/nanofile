@@ -176,7 +176,7 @@ pub async fn load_links(
 }
 
 /// The name shown for an upload link: the final path segment, or the original
-/// path for a whole-library link (which used to render as an empty label).
+/// path for a whole-library link.
 fn upload_link_name(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() {

@@ -1110,7 +1110,6 @@ impl TaskSystem {
         }
     }
 
-    /// Whether the process is shutting down.
     pub fn is_shutting_down(&self) -> bool {
         self.shutdown_token().is_cancelled()
     }

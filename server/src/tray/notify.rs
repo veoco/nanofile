@@ -22,8 +22,8 @@ pub(super) fn started() {
     }
 }
 
-/// A failed "Start at login" write used to be log-only; the checkbox simply
-/// reverted. Tell the person, without a modal box for a reversible toggle.
+/// A failed "Start at login" write: tell the person, without a modal box for a
+/// reversible toggle.
 pub(super) fn login_failed(detail: &str) {
     #[cfg(not(target_os = "macos"))]
     {

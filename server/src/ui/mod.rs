@@ -35,9 +35,8 @@ use base::error::AppError;
 
 /// Require an administrator and a valid form CSRF token.
 ///
-/// Admin pages each carried their own copy of this check; the copies drifted in
-/// whether the admin check or the CSRF check ran first. Every admin form goes
-/// through this function now, so a new handler cannot get only half of it.
+/// Every admin form goes through this function, so a new handler cannot get only
+/// half of the check: the admin check and the CSRF check always run together.
 pub fn require_admin_csrf(
     state: &Arc<crate::AppState>,
     user: &WebUser,

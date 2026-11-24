@@ -12,9 +12,7 @@
 use super::crop::{self, Crop};
 use super::resample::{IMAGENET_MEAN, IMAGENET_STD, resize_rgb};
 
-/// Width of the classifier input.
 pub(crate) const WIDTH: usize = 160;
-/// Height of the classifier input.
 pub(crate) const HEIGHT: usize = 80;
 /// The model has one score per direction.
 pub(crate) const CLASSES: usize = 2;

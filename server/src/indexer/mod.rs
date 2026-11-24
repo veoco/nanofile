@@ -466,7 +466,6 @@ impl TextIndexer {
         })
     }
 
-    /// The canonical directory this writer owns.
     fn index_dir(&self) -> &Path {
         &self.index_dir
     }
@@ -687,7 +686,6 @@ impl TextIndexer {
         Ok(())
     }
 
-    /// Run [`Self::mark_file`] on a blocking thread.
     pub async fn mark_file_async(
         &self,
         repo_id: &str,
@@ -739,7 +737,6 @@ impl TextIndexer {
             .map_err(|e| AppError::internal(format!("indexer commit task failed: {e}")))?
     }
 
-    /// Run `index_file` on a blocking thread (tokenization is CPU-heavy).
     pub async fn index_file_async(
         &self,
         repo_id: &str,
@@ -762,7 +759,6 @@ impl TextIndexer {
         Ok(())
     }
 
-    /// Run `delete_file` on a blocking thread.
     pub async fn delete_file_async(&self, repo_id: &str, fullpath: &str) -> Result<(), AppError> {
         let idx = self.clone();
         let repo_id = repo_id.to_string();

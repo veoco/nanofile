@@ -1875,7 +1875,6 @@ pub async fn update_aj(
     // See `update_api`: an update replaces the file, so only the commit-time
     // size delta is a correct quota check.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    // An update carries exactly one file part.
     let parts = read_update_body(&state, None, body, &headers).await?;
 
     let repo_id = parts
@@ -2027,7 +2026,6 @@ pub async fn update_api_handler(
     // See `update_api`: this endpoint only replaces an existing file, so the
     // commit-time delta is the only correct quota check.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    // An update carries exactly one file part.
     let parts = read_update_body(&state, Some(&auth), body, &headers).await?;
 
     let target_file = parts
@@ -2066,7 +2064,6 @@ pub async fn update_aj_token(
     let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    // An update carries exactly one file part.
     let parts = read_update_body(&state, Some(&auth), body, &headers).await?;
 
     let target_file = parts

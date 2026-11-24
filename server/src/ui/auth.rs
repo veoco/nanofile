@@ -419,7 +419,6 @@ pub async fn login(
         &tenant_origin,
     );
 
-    // CSRF: validate Origin/Referer.
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return render_login_page(
@@ -779,7 +778,6 @@ pub async fn two_factor_auth(
         &tenant_origin,
     );
 
-    // CSRF: validate Origin/Referer.
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest(
@@ -1125,7 +1123,6 @@ pub async fn register(
     headers: HeaderMap,
     Form(form): Form<RegisterForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    // CSRF: validate Origin/Referer.
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return register_error(
@@ -1457,7 +1454,6 @@ pub async fn password_reset(
     headers: HeaderMap,
     Form(form): Form<PasswordResetForm>,
 ) -> Result<Html<String>, AppError> {
-    // CSRF: validate Origin/Referer.
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(Html(String::new()));
@@ -1615,7 +1611,6 @@ pub async fn password_reset_confirm(
         return Err(AppError::NotFound("password reset is disabled".into()));
     }
 
-    // CSRF: validate Origin/Referer.
     let origin = state.config().server.site_url_origin();
     if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
         return Ok(StatusCode::FORBIDDEN.into_response());

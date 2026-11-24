@@ -22,8 +22,6 @@ pub trait InvitationCodeRepository: Send + Sync {
     ) -> Result<(), AppError>;
     async fn delete_by_id_and_creator(&self, id: i32, creator_id: i32) -> Result<(), AppError>;
 
-    // ── Methods for UI layer refactoring ───────────────────────────────
-    /// Find an invitation code by its code string.
     async fn find_by_code(&self, code: &str) -> Result<Option<invitation_code::Model>, AppError>;
     /// Mark an invitation code as used by a specific user.
     async fn mark_as_used(&self, id: i32, used_by: i32, used_at: i64) -> Result<(), AppError>;
@@ -105,7 +103,6 @@ impl InvitationCodeRepository for DbInvitationCodeRepository {
             .exec(self.db.as_ref())
             .await?;
         if result.rows_affected == 0 {
-            // Check if the record exists to differentiate "not found" from "already used"
             if invitation_code::Entity::find_by_id(id)
                 .one(self.db.as_ref())
                 .await?

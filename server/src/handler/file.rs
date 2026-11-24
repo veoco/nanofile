@@ -268,8 +268,7 @@ pub async fn file_post_handler(
             .cloned()
             .unwrap_or_else(|| "/".to_string());
         // The same parser as the token upload endpoints: `1`/`true` replaces,
-        // absent/`0`/`false` keeps both, anything else is a 400. This endpoint
-        // used to treat an unparsable value as "keep both", which hid a client bug.
+        // absent/`0`/`false` keeps both, anything else is a 400.
         let replace = crate::handler::web::upload::parse_replace_arg(
             None,
             fields.get("replace").map(String::as_str),

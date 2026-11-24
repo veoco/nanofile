@@ -32,10 +32,8 @@ impl RepoHead {
 
 /// Resolve a library's head in one round trip pair.
 ///
-/// Every `Repositories`-based caller used to hand-roll
-/// `find_by_id` → `head_commit_id` → `find_by_repo_and_commit_id` → `root_id`;
-/// the error shape here is the common one: a missing library and a dangling
-/// head are 404s, while an empty library is not an error.
+/// The error shape is the common one: a missing library and a dangling head are
+/// 404s, while an empty library is not an error.
 pub async fn repo_head(repos: &Repositories, repo_id: &str) -> Result<RepoHead, AppError> {
     let repo = repos
         .repo
@@ -73,7 +71,6 @@ pub async fn repo_head(repos: &Repositories, repo_id: &str) -> Result<RepoHead, 
 const S_IFMT: i32 = 0o170000;
 const S_IFDIR_TYPE: i32 = 0o040000;
 
-/// Whether a dirent's mode names a directory.
 pub(crate) fn is_dir_mode(mode: i32) -> bool {
     mode & S_IFMT == S_IFDIR_TYPE
 }

@@ -650,7 +650,6 @@ fn thumbnail_key(repo_id: &str, path: &str) -> String {
     hasher.update(repo_id.as_bytes());
     hasher.update(path.as_bytes());
     let hash = hex::encode(hasher.finalize());
-    // Use first 32 hex chars (128 bits) — plenty for collision avoidance
     format!("thumb_{}", &hash[..32])
 }
 

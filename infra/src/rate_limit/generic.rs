@@ -44,12 +44,10 @@ impl GenericRateLimiter {
         self.max_attempts.load(Ordering::Relaxed) == 0
     }
 
-    /// The configured budget.
     fn limit(&self) -> u32 {
         self.max_attempts.load(Ordering::Relaxed)
     }
 
-    /// The configured window, in seconds.
     fn window(&self) -> i64 {
         self.window_secs.load(Ordering::Relaxed)
     }
@@ -72,7 +70,6 @@ impl GenericRateLimiter {
         super::evict_oldest(map, MAX_KEYS);
     }
 
-    /// Record an attempt for the given key.
     pub fn record_attempt(&self, key: &str) {
         if self.disabled() {
             return;
@@ -83,7 +80,6 @@ impl GenericRateLimiter {
         Self::shrink(&mut map);
     }
 
-    /// Check if the given key has exceeded the rate limit.
     pub fn is_limited(&self, key: &str) -> bool {
         if self.disabled() {
             return false;
@@ -114,7 +110,6 @@ impl GenericRateLimiter {
         true
     }
 
-    /// Clear all recorded attempts for a key.
     pub fn clear(&self, key: &str) {
         let mut map = self.lock();
         map.remove(key);

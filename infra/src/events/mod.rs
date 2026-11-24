@@ -13,12 +13,10 @@ static REPO_UPDATE_SENDER: LazyLock<broadcast::Sender<RepoHeadUpdate>> = LazyLoc
     tx
 });
 
-/// Publish a repo update event to all subscribers.
 pub fn publish_repo_update(repo_id: impl Into<String>, commit_id: impl Into<String>) {
     let _ = REPO_UPDATE_SENDER.send((repo_id.into(), commit_id.into()));
 }
 
-/// Subscribe to repo update events.
 pub fn subscribe_repo_updates() -> broadcast::Receiver<RepoHeadUpdate> {
     REPO_UPDATE_SENDER.subscribe()
 }

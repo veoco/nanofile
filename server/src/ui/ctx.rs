@@ -38,11 +38,6 @@ pub async fn build_page_ctx(state: &AppState, user: &WebUser) -> Result<PageCtx,
     })
 }
 
-/// Whether either half of sharing is open.
-///
-/// The shell only needs this much: the left panel drops its Shares link when both
-/// directions are off. Pages that own one direction's controls read the two
-/// switches separately (`share_download_enabled` / `share_upload_enabled`).
 pub fn sharing_enabled(state: &AppState) -> bool {
     state.config().server.share_download_enabled || state.config().server.share_upload_enabled
 }

@@ -94,17 +94,14 @@ impl LoginRateLimiter {
             .store(max_distinct_usernames, Ordering::Relaxed);
     }
 
-    /// The configured per-key attempt budget.
     fn limit(&self) -> u32 {
         self.max_attempts.load(Ordering::Relaxed)
     }
 
-    /// The configured lockout window, in seconds.
     fn window(&self) -> i64 {
         self.lockout_secs.load(Ordering::Relaxed)
     }
 
-    /// The configured spray-detector budget.
     fn distinct_limit(&self) -> u32 {
         self.max_distinct_usernames.load(Ordering::Relaxed)
     }

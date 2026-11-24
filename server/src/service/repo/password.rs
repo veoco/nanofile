@@ -36,7 +36,6 @@ impl PasswordService {
         let salt = infra::crypto::key_derivation::effective_salt(enc_version, &repo_model.salt)
             .map_err(|e| AppError::BadRequest(format!("{e}")))?;
 
-        // Verify, derive and cache the key.
         password_manager
             .set_password(
                 repo_id,

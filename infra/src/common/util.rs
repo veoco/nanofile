@@ -285,8 +285,6 @@ mod tests {
         }
         assert_eq!(parent_and_name("/dir/a.txt"), ("/dir", "a.txt"));
         assert_eq!(parent_and_name("/a.txt"), ("/", "a.txt"));
-        // A relative name has no directory part; callers used to fall back to the
-        // whole input as the name for this case.
         assert_eq!(parent_and_name("a.txt"), ("/", "a.txt"));
     }
 

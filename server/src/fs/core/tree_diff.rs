@@ -396,7 +396,6 @@ fn parent_dir(path: &str) -> &str {
     }
 }
 
-/// Build a `delete` change for an old-side entry that no longer exists.
 fn delete_change(path: &str, entry: &DirEntryData) -> FsChange {
     FsChange {
         op_type: "delete",

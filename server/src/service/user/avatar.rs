@@ -196,7 +196,6 @@ impl AvatarService {
 
         match squared {
             Ok(thumbnail_data) => {
-                // Persist for future requests (non-fatal if it fails)
                 let _ = tokio::fs::create_dir_all(&storage_dir).await;
                 let _ = tokio::fs::write(&thumbnail_path, &thumbnail_data).await;
                 // The failure this marker remembered is over.

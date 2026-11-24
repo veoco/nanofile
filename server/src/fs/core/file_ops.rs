@@ -331,8 +331,8 @@ impl FileOps {
         let existed = dirents.iter().any(|d| d.name == name);
 
         // `replace` means "replace the file at this path", never "delete the
-        // directory at this path": the old code removed the dirent and pushed the
-        // file, silently dropping the whole subtree with no trash record.
+        // directory at this path": a replace must never drop a subtree without a
+        // trash record.
         if replace
             && dirents
                 .iter()

@@ -577,7 +577,6 @@ pub async fn verify_link_password(
     .await)
 }
 
-/// Check whether the password in the request matches the stored hash.
 pub async fn check_share_link_password(
     link: &infra::entity::share_link::Model,
     provided_password: Option<&str>,

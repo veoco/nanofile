@@ -27,7 +27,6 @@ fn notable(mut spec: JobSpec) -> JobSpec {
     spec
 }
 
-/// The policy for `key`.
 pub fn policy(key: JobKey) -> JobSpec {
     match key {
         JobKey::Copy => client_job(key, "copy"),

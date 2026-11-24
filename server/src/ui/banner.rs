@@ -6,8 +6,6 @@
 use crate::i18n::I18n;
 use base::error::AppError;
 
-/// The banner text for a failed admin action: `BadRequest` messages are shown
-/// verbatim, everything else is summarised.
 pub fn action_error(t: &I18n, error: &AppError) -> String {
     match error {
         AppError::BadRequest(message) => message.clone(),

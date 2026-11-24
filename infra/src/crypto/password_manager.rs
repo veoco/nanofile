@@ -61,7 +61,6 @@ impl PasswordManager {
         }
     }
 
-    /// Build the composite cache key.
     fn cache_key(repo_id: &str, user_id: i32) -> String {
         format!("{}:{}", repo_id, user_id)
     }

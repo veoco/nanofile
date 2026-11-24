@@ -58,7 +58,6 @@ pub async fn star_item(
     headers: HeaderMap,
     bytes: Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Parse request (JSON or multipart)
     let req = if headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -91,7 +90,6 @@ pub async fn unstar_item(
     State(state): State<Arc<AppState>>,
     Query(query): Query<UnstarQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    // Permission check (matches star_item)
     auth.require_repo_read(&state, &query.repo_id).await?;
 
     let svc = state.starred_service();

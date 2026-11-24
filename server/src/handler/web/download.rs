@@ -352,7 +352,6 @@ pub async fn block_download(
 
     let repo_id = &auth.repo_id;
 
-    // Look up the file by its fs_id in the fs_objects table.
     let file_obj = state
         .repos
         .fs_object
@@ -360,16 +359,13 @@ pub async fn block_download(
         .await?
         .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 
-    // Parse the FsFileData to get the block list.
     let file_data: FsFileData = serde_json::from_str(&file_obj.data)
         .map_err(|e| AppError::Internal(format!("invalid file data: {e}")))?;
 
-    // Verify the requested block_id belongs to this file.
     if !file_data.block_ids.contains(&block_id) {
         return Err(AppError::NotFound("block not found".into()));
     }
 
-    // Read the block from the block store.
     let block_data = state
         .block_store
         .read_block(repo_id, &block_id)

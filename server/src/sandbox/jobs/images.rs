@@ -109,7 +109,6 @@ pub fn serve() -> anyhow::Result<()> {
     worker::write_frame(tag, &body)
 }
 
-/// Do the work one operation names, as a reply frame's tag and body.
 fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
     match op {
         OP_THUMBNAIL => match thumbnail_util::generate_thumbnail_encoded(data, size) {

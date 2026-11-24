@@ -265,7 +265,6 @@ pub async fn list_trash2(
     })
 }
 
-/// Search trash by keyword and filters.
 pub async fn search_trash(
     db: &DatabaseConnection,
     repo_id: &str,
@@ -279,7 +278,6 @@ pub async fn search_trash(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let condition = build_trash_condition(
@@ -694,7 +692,6 @@ pub async fn list_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;
@@ -746,7 +743,6 @@ pub async fn search_trash_for_user(
 ) -> Result<TrashListResult, AppError> {
     let page = page.max(1);
     let per_page = per_page.clamp(1, 100);
-    // Widen before multiplying: `page * per_page` in `u32` would overflow.
     let offset = u64::from(page - 1) * u64::from(per_page);
 
     let repo_ids = gather_user_repo_ids(repos, user_id).await?;

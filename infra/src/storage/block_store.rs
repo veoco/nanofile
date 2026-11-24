@@ -158,7 +158,6 @@ impl BlockStorage {
         block_path(&self.base_dir, repo_id, block_id)
     }
 
-    /// Composite cache key for the presence cache.
     fn cache_key(repo_id: &str, block_id: &str) -> BlockKey {
         let mut block = [0u8; 20];
         let valid =

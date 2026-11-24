@@ -924,7 +924,6 @@ impl RepoService {
             )
             .await?;
 
-        // Log the rename after the update, with old_path holding the previous name.
         if name_changed {
             activity_log::log_activity(
                 db,

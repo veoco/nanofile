@@ -44,7 +44,6 @@ pub async fn list_repos(
     user: WebUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    // Find repos where user is a member
     let rows = crate::service::repo::service::RepoService::load_repo_access(
         &state.repos,
         user.user_id,

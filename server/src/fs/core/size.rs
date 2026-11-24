@@ -112,9 +112,7 @@ async fn walk_tree(
 ///
 /// This is the common half of [`get_entry_total_size`] and [`entry_exists`]: the
 /// former may then walk a directory's whole subtree, while the latter only needs
-/// to know whether the entry is there. The existence path used to call the total
-/// size function and throw the size away, which made an upload targeting a large
-/// directory walk the entire directory first.
+/// to know whether the entry is there.
 async fn resolve_dirent(
     repos: &Repositories,
     repo_id: &str,

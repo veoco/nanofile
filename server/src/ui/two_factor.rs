@@ -328,7 +328,6 @@ pub async fn disable_2fa(
 
     state.repos.user_2fa.delete_by_user_id(user.user_id).await?;
 
-    // Also clean up backup codes
     crate::service::auth::backup_codes::BackupCodeManager::delete_all_for_user(
         &state.repos,
         user.user_id,

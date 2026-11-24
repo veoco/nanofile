@@ -87,7 +87,6 @@ pub async fn trash_list_page(
     let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
     let q = query.q.as_deref().unwrap_or("").to_string();
 
-    // Fetch trash items across all accessible repos
     let result = if q.is_empty() {
         trash::list_trash_for_user(db, &state.repos, user.user_id, page, per_page).await?
     } else {

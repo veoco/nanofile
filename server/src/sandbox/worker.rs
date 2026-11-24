@@ -422,9 +422,7 @@ fn read_request() -> anyhow::Result<(Plan, Vec<u8>)> {
 /// One request frame: magic, operation tag, little-endian `u32` word, payload.
 ///
 /// The child side of this framing is [`RequestReader`]; the reply side is
-/// [`write_frame`] / [`parse_frame`]. Every profile used to hand-write this header
-/// and its reader, which is how `documents` ended up with no size check and
-/// `block_auth`-style asymmetries appeared in the request/reply pair.
+/// [`write_frame`] / [`parse_frame`].
 pub(crate) fn request_frame(tag: u8, word: u32, payload: &[u8]) -> Vec<u8> {
     let mut request = Vec::with_capacity(MAGIC.len() + 5 + payload.len());
     request.extend_from_slice(MAGIC);
