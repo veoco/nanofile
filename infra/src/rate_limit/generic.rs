@@ -79,10 +79,7 @@ impl GenericRateLimiter {
         }
         let now = Self::now();
         let mut map = self.lock();
-        let timestamps = map.entry(key.to_string()).or_default();
-        timestamps.push(now);
-        let cutoff = now - self.window();
-        timestamps.retain(|&t| t > cutoff);
+        super::SlidingWindow::record(&mut map, key, now, self.window());
         Self::shrink(&mut map);
     }
 
@@ -92,25 +89,9 @@ impl GenericRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut map = self.lock();
-        let (stale, limited) = match map.get_mut(key) {
-            Some(timestamps) => {
-                timestamps.retain(|&t| t > cutoff);
-                (
-                    timestamps.is_empty(),
-                    timestamps.len() as u32 >= self.limit(),
-                )
-            }
-            None => (false, false),
-        };
-        if stale {
-            // All attempts expired: drop the key so it does not accumulate.
-            map.remove(key);
-            false
-        } else {
-            limited
-        }
+        let count = super::SlidingWindow::count(&mut map, key, now, self.window());
+        count as u32 >= self.limit()
     }
 
     /// Clear all recorded attempts for a key.
