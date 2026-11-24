@@ -4,6 +4,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
+use crate::service::fs::quota::QuotaGuard;
 use crate::service::index::{IndexScheduler, IndexTarget};
 use crate::settings::RuntimeConfig;
 use base::common::DirEntryData;
@@ -148,8 +149,12 @@ impl FileOpsService {
             }
         }
 
-        let owner = self.repos.repo_owner_id(repo_id).await?;
-        let scope = self.repos.lock_quota(owner).await;
+        let quota = QuotaGuard::begin(
+            &self.repos,
+            repo_id,
+            self.config.get().storage.default_user_quota_bytes,
+        )
+        .await?;
         FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
@@ -165,12 +170,12 @@ impl FileOpsService {
                 Ok(())
             },
             -total_deleted,
-            &scope,
-            self.config.get().storage.default_user_quota_bytes,
+            quota.scope(),
+            quota.default_quota(),
         )
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?;
-        drop(scope);
+        drop(quota);
 
         for name in file_names {
             let fp = join_path(parent_dir, name);
@@ -324,8 +329,12 @@ impl FileOpsService {
             )
         };
 
-        let owner = self.repos.repo_owner_id(repo_id).await?;
-        let scope = self.repos.lock_quota(owner).await;
+        let quota = QuotaGuard::begin(
+            &self.repos,
+            repo_id,
+            self.config.get().storage.default_user_quota_bytes,
+        )
+        .await?;
         FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
@@ -351,11 +360,11 @@ impl FileOpsService {
                 Ok(())
             },
             total_copied,
-            &scope,
-            self.config.get().storage.default_user_quota_bytes,
+            quota.scope(),
+            quota.default_quota(),
         )
         .await?;
-        drop(scope);
+        drop(quota);
 
         for entry in &entries_to_add {
             let fp = join_path(dst_dir, &entry.name);

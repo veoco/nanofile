@@ -6,6 +6,7 @@ use crate::fs::core::file_ops::FileOps;
 use crate::fs::core::trash;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
+use crate::service::fs::quota::QuotaGuard;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
@@ -850,8 +851,12 @@ impl FileService {
         trash::record_deleted_entry(db, &self.repos, repo_id, path, name, email, &parent_fs_id)
             .await;
 
-        let owner = self.repos.repo_owner_id(repo_id).await?;
-        let scope = self.repos.lock_quota(owner).await;
+        let quota = QuotaGuard::begin(
+            &self.repos,
+            repo_id,
+            self.config.get().storage.default_user_quota_bytes,
+        )
+        .await?;
         FileOps::update_dir_tree_and_commit_sized(
             db,
             &self.repos,
@@ -867,11 +872,11 @@ impl FileService {
                 Ok(())
             },
             -deleted_size,
-            &scope,
-            self.config.get().storage.default_user_quota_bytes,
+            quota.scope(),
+            quota.default_quota(),
         )
         .await?;
-        drop(scope);
+        drop(quota);
 
         if let Some(indexer) = &self.indexer
             && let Err(e) = indexer.delete_file_async(repo_id, path).await

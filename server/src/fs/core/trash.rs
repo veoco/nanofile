@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use crate::domain::permission::RepoScope;
 use crate::fs::core::file_ops::FileOps;
 use crate::repository::Repositories;
+use crate::service::fs::quota::QuotaGuard;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
@@ -598,8 +599,7 @@ pub async fn restore_trash_items(
         let base_root_id = head_root_id
             .clone()
             .ok_or_else(|| AppError::Internal("restore commit without a head root".into()))?;
-        let owner = repos.repo_owner_id(repo_id).await?;
-        let scope = repos.lock_quota(owner).await;
+        let quota = QuotaGuard::begin(repos, repo_id, default_quota).await?;
         let result = FileOps::update_dir_tree_and_commit_sized(
             db,
             repos,
@@ -626,11 +626,11 @@ pub async fn restore_trash_items(
                 Ok(())
             },
             restored_size,
-            &scope,
-            default_quota,
+            quota.scope(),
+            quota.default_quota(),
         )
         .await;
-        drop(scope);
+        drop(quota);
 
         match result {
             Ok(new_root) => {

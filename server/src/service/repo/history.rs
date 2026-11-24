@@ -8,6 +8,7 @@ use crate::fs::core::{
     resolve_fs_id, resolve_fs_ids_batch,
 };
 use crate::repository::Repositories;
+use crate::service::fs::quota::QuotaGuard;
 use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
@@ -350,8 +351,7 @@ impl HistoryService {
             .unwrap_or(0);
         let size_delta = target_size - current_size;
 
-        let owner = repos.repo_owner_id(repo_id).await?;
-        let scope = repos.lock_quota(owner).await;
+        let quota = QuotaGuard::begin(repos, repo_id, default_quota).await?;
         FileOps::update_dir_tree_and_commit_sized(
             db,
             repos,
@@ -372,11 +372,11 @@ impl HistoryService {
                 Ok(())
             },
             size_delta,
-            &scope,
-            default_quota,
+            quota.scope(),
+            quota.default_quota(),
         )
         .await?;
-        drop(scope);
+        drop(quota);
 
         activity_log::log_activity(
             db,
