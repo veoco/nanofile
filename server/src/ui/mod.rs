@@ -29,6 +29,29 @@ use axum::Router;
 use axum::routing::get;
 use std::sync::Arc;
 
+use crate::ui::auth_extractor::WebUser;
+use base::error::AppError;
+
+/// Require an administrator and a valid form CSRF token.
+///
+/// Admin pages each carried their own copy of this check; the copies drifted in
+/// whether the admin check or the CSRF check ran first. Every admin form goes
+/// through this function now, so a new handler cannot get only half of it.
+pub fn require_admin_csrf(
+    state: &Arc<crate::AppState>,
+    user: &WebUser,
+    form: &std::collections::HashMap<String, String>,
+) -> Result<(), AppError> {
+    if !user.is_admin {
+        return Err(AppError::Forbidden);
+    }
+    crate::service::auth::csrf::check_form_csrf(
+        state,
+        &user.session_token,
+        form.get("csrf_token").map(String::as_str),
+    )
+}
+
 use crate::AppState;
 
 /// Build the web UI route tree.

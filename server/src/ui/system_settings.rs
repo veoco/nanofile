@@ -1129,21 +1129,6 @@ fn build_row(
     }
 }
 
-fn require_admin_csrf(
-    state: &Arc<AppState>,
-    user: &WebUser,
-    form: &HashMap<String, String>,
-) -> Result<(), AppError> {
-    if !user.is_admin {
-        return Err(AppError::Forbidden);
-    }
-    crate::service::auth::csrf::check_form_csrf(
-        state,
-        &user.session_token,
-        form.get("csrf_token").map(String::as_str),
-    )
-}
-
 /// Fold a submitted body into a map, letting the **last** value of a repeated
 /// field win: a checkbox submits its hidden `false` before the `true`, so an
 /// unchecked box means `false` rather than "absent".
@@ -1193,7 +1178,7 @@ pub async fn save(
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let form = fold_form(&pairs);
-    require_admin_csrf(&state, &user, &form)?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
 
     let Some(section) = section_of(&id) else {
         return Err(AppError::BadRequest("unknown settings page".to_string()));
@@ -1247,7 +1232,7 @@ pub async fn reset(
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let form = fold_form(&pairs);
-    require_admin_csrf(&state, &user, &form)?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
 
     let key = form
         .get("key")
@@ -1301,7 +1286,7 @@ pub async fn restart(
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let form = fold_form(&pairs);
-    require_admin_csrf(&state, &user, &form)?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     let section = form
         .get("section")
         .and_then(|id| section_of(id))
@@ -1333,7 +1318,7 @@ pub async fn refresh(
     Form(pairs): Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let form = fold_form(&pairs);
-    require_admin_csrf(&state, &user, &form)?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     let section = form
         .get("section")
         .and_then(|id| section_of(id))

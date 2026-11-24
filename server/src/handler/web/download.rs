@@ -14,13 +14,11 @@ use base::error::AppError;
 
 /// Whether a capability token's owner is still an active, verified account.
 pub(crate) async fn token_user_active(state: &AppState, user_id: i32) -> Result<bool, AppError> {
-    let user = state
-        .repos
-        .user
-        .find_by_id(user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-    Ok(user.is_active && user.email_verified)
+    match crate::service::auth::account_state::load_account_state(&state.repos, user_id).await? {
+        crate::service::auth::account_state::AccountState::Active(_) => Ok(true),
+        crate::service::auth::account_state::AccountState::Inactive => Ok(false),
+        crate::service::auth::account_state::AccountState::Missing => Err(AppError::Unauthorized),
+    }
 }
 
 /// Reject a capability token whose owner is no longer an active account.

@@ -178,11 +178,12 @@ async fn sync_fs_id_list_rejects_uppercase_object_ids() {
 }
 
 /// `/api2/device-wiped/` accepts a form token when the Authorization header is
-/// unusable (the desktop Qt shape). Today a malformed header falls back to the
-/// body; the authorization-parser consolidation makes a present-but-malformed
-/// header a hard 401 instead of a silent credential switch.
+/// absent (the desktop Qt shape). A header that names our scheme but carries no
+/// usable token is a credential failure: it must not silently switch to the
+/// body field. This pins the stricter behavior the shared authorization parser
+/// introduced.
 #[tokio::test]
-async fn device_wiped_malformed_authorization_falls_back_to_the_body_today() {
+async fn device_wiped_rejects_a_malformed_authorization_header() {
     let f = TestFixture::new().await;
 
     let login = f
@@ -216,7 +217,7 @@ async fn device_wiped_malformed_authorization_falls_back_to_the_body_today() {
         .unwrap();
     assert_eq!(
         resp.status(),
-        200,
-        "today the malformed header falls back to the form token"
+        401,
+        "a malformed authorization header must not fall back to the form token"
     );
 }

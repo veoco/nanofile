@@ -35,11 +35,7 @@ pub async fn verify_body_sync_token(
         return Ok(false);
     }
 
-    Ok(repos
-        .user
-        .find_by_id(record.user_id)
-        .await?
-        .is_some_and(|u| u.is_active && u.email_verified))
+    crate::service::auth::account_state::is_active_account(repos, record.user_id).await
 }
 
 /// Return the sync token the caller should use for one repository, or create it.

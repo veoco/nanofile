@@ -279,21 +279,6 @@ async fn render_page(
     Ok(Html(html).into_response())
 }
 
-async fn require_admin_csrf(
-    state: &Arc<AppState>,
-    user: &WebUser,
-    form: &HashMap<String, String>,
-) -> Result<(), AppError> {
-    if !user.is_admin {
-        return Err(AppError::Forbidden);
-    }
-    crate::service::auth::csrf::check_form_csrf(
-        state,
-        &user.session_token,
-        form.get("csrf_token").map(String::as_str),
-    )
-}
-
 fn query_from(form: &HashMap<String, String>) -> EmailQuery {
     EmailQuery {
         action: None,
@@ -308,7 +293,7 @@ pub async fn send_test(
     State(state): State<Arc<AppState>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    require_admin_csrf(&state, &user, &form).await?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     let query = query_from(&form);
     let to = form.get("to").cloned().unwrap_or_default();
 
@@ -334,7 +319,7 @@ pub async fn drain_now(
     State(state): State<Arc<AppState>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    require_admin_csrf(&state, &user, &form).await?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     state.mail.nudge();
     Ok((
         StatusCode::FOUND,
@@ -350,7 +335,7 @@ pub async fn retry_message(
     Path(id): Path<i32>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    require_admin_csrf(&state, &user, &form).await?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     let query = query_from(&form);
 
     if state.mail.retry(id).await? {
@@ -373,7 +358,7 @@ pub async fn delete_message(
     Path(id): Path<i32>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    require_admin_csrf(&state, &user, &form).await?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     if !state.repos.email_message.delete_by_id(id).await? {
         let query = query_from(&form);
         let msg = I18n::get(user.language.as_deref())
@@ -394,7 +379,7 @@ pub async fn clear_finished(
     State(state): State<Arc<AppState>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    require_admin_csrf(&state, &user, &form).await?;
+    crate::ui::require_admin_csrf(&state, &user, &form)?;
     state.repos.email_message.delete_finished().await?;
     Ok((
         StatusCode::FOUND,

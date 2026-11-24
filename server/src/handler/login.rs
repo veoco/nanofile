@@ -252,14 +252,10 @@ pub async fn logout_device(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token_str = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            v.strip_prefix("Token ")
-                .or_else(|| v.strip_prefix("Bearer "))
-        })
-        .ok_or(AppError::Unauthorized)?;
+    let token_str = match crate::middleware::auth::bearer_token(&headers) {
+        crate::middleware::auth::BearerToken::Token(token) => token,
+        _ => return Err(AppError::Unauthorized),
+    };
 
     state.login_service().logout_device(token_str).await?;
 

@@ -906,9 +906,14 @@ pub async fn upload_avatar(
         }
     }
 
-    let expected_csrf =
-        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
-    if csrf_token.as_deref() != Some(&expected_csrf) {
+    let csrf_ok = csrf_token.as_deref().is_some_and(|token| {
+        crate::service::auth::csrf::validate_csrf_token(
+            &state.csrf_secret,
+            &user.session_token,
+            token,
+        )
+    });
+    if !csrf_ok {
         return render_profile_error(
             &state,
             &user,

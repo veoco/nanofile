@@ -20,10 +20,15 @@ pub async fn device_wiped(
     headers: HeaderMap,
     body: String,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let token = match extract_authorization_token(&headers) {
-        Some(t) => t,
-        None => infra::common::util::extract_body_field(body.as_bytes(), "token")
-            .ok_or_else(|| AppError::BadRequest("token required".into()))?,
+    let token = match crate::middleware::auth::bearer_token(&headers) {
+        crate::middleware::auth::BearerToken::Token(token) => token.to_string(),
+        // A header that names our scheme but has no token is a failed credential,
+        // not "no header": do not silently switch to the body field.
+        crate::middleware::auth::BearerToken::Malformed => return Err(AppError::Unauthorized),
+        crate::middleware::auth::BearerToken::Missing => {
+            infra::common::util::extract_body_field(body.as_bytes(), "token")
+                .ok_or_else(|| AppError::BadRequest("token required".into()))?
+        }
     };
 
     let token_record = state
@@ -59,16 +64,4 @@ pub async fn device_wiped(
     state.token_manager.revoke_user(token_record.user_id);
 
     Ok(ok_json())
-}
-
-/// `Authorization: Token <t>` / `Bearer <t>`, as the mobile clients send it.
-fn extract_authorization_token(headers: &HeaderMap) -> Option<String> {
-    let raw = headers.get("authorization")?.to_str().ok()?;
-    let token = raw
-        .strip_prefix("Token ")
-        .or_else(|| raw.strip_prefix("Bearer "))?;
-    if token.is_empty() {
-        return None;
-    }
-    Some(token.to_string())
 }

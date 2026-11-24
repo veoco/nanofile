@@ -179,11 +179,11 @@ impl FromRequestParts<std::sync::Arc<AppState>> for SyncAuth {
             let repo_id = record.repo_id.clone();
 
             // A deactivated or unverified account must not keep syncing.
-            if !repos
-                .user
-                .find_by_id(user_id)
-                .await?
-                .is_some_and(|u| u.is_active && u.email_verified)
+            if !crate::service::auth::account_state::is_active_account(
+                state.repos.as_ref(),
+                user_id,
+            )
+            .await?
             {
                 return Err(base::error::AppError::Forbidden);
             }
@@ -361,7 +361,15 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let repos = &state.repos;
 
         // Authorization header (external API clients).
-        let token_str = extract_auth_header_token(&parts.headers);
+        let token_str = match bearer_token(&parts.headers) {
+            BearerToken::Missing => None,
+            // A header that names our scheme but carries no usable token is a
+            // credential failure, not "no credentials": falling through to the
+            // cookie session would let a malformed header silently switch the
+            // credential the request is authenticated with.
+            BearerToken::Malformed => return Err(StatusCode::UNAUTHORIZED.into()),
+            BearerToken::Token(token) => Some(token.to_string()),
+        };
 
         // CSRF check is skipped for safe methods (GET, HEAD): browsers cannot
         // attach custom headers for <img>, <link>, <script> etc.
@@ -418,16 +426,19 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
             return Err(StatusCode::UNAUTHORIZED.into());
         };
 
-        let user_record = repos
-            .user
-            .find_by_id(user_id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-            .ok_or(StatusCode::UNAUTHORIZED)?;
-
-        if !user_record.is_active || !user_record.email_verified {
-            return Err(StatusCode::FORBIDDEN.into());
-        }
+        let user_record =
+            match crate::service::auth::account_state::load_account_state(&state.repos, user_id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            {
+                crate::service::auth::account_state::AccountState::Active(user) => user,
+                crate::service::auth::account_state::AccountState::Missing => {
+                    return Err(StatusCode::UNAUTHORIZED.into());
+                }
+                crate::service::auth::account_state::AccountState::Inactive => {
+                    return Err(StatusCode::FORBIDDEN.into());
+                }
+            };
 
         Ok(AuthUser {
             user_id: user_record.id,
@@ -535,17 +546,39 @@ fn route_decision(
     Ok(())
 }
 
-/// Extract a token from `Authorization: Bearer <token>` or `Authorization: Token <token>`.
-fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> {
-    // TypedHeader needs Parts, which we lack here, so parse the header by hand.
-    if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        if let Some(token) = auth.strip_prefix("Token ") {
-            return Some(token.to_string());
-        } else if let Some(token) = auth.strip_prefix("Bearer ") {
-            return Some(token.to_string());
-        }
+/// What an `Authorization` header carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BearerToken<'a> {
+    /// No `Authorization` header, or one for an unrelated scheme.
+    Missing,
+    /// `Token`/`Bearer` with no token, an empty token or extra fields.
+    Malformed,
+    /// A usable token.
+    Token(&'a str),
+}
+
+/// Parse `Authorization: Bearer <token>` / `Authorization: Token <token>`.
+///
+/// One parser for every surface: the extractor, the logout endpoint and the
+/// device-wipe endpoint each split this header themselves before, and they
+/// disagreed on whether an empty token was "absent" or "invalid".
+pub fn bearer_token(headers: &HeaderMap) -> BearerToken<'_> {
+    let Some(raw) = headers.get("authorization").and_then(|v| v.to_str().ok()) else {
+        return BearerToken::Missing;
+    };
+    let mut parts = raw.split_whitespace();
+    let Some(scheme) = parts.next() else {
+        return BearerToken::Malformed;
+    };
+    if !scheme.eq_ignore_ascii_case("token") && !scheme.eq_ignore_ascii_case("bearer") {
+        // Some other authentication scheme: not ours, so callers may still use a
+        // cookie session.
+        return BearerToken::Missing;
     }
-    None
+    match (parts.next(), parts.next()) {
+        (Some(token), None) => BearerToken::Token(token),
+        _ => BearerToken::Malformed,
+    }
 }
 
 /// The value of one cookie from a request's `Cookie` headers.
@@ -717,16 +750,14 @@ pub(crate) fn is_token_expired(expires_at: Option<i64>) -> bool {
 /// deactivated or unverified account cannot keep syncing through a token issued
 /// earlier.
 async fn ensure_active_user(repos: &Repositories, user_id: i32) -> Result<(), StatusCode> {
-    let user = repos
-        .user
-        .find_by_id(user_id)
+    match crate::service::auth::account_state::load_account_state(repos, user_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    if !user.is_active || !user.email_verified {
-        return Err(StatusCode::FORBIDDEN);
+    {
+        crate::service::auth::account_state::AccountState::Active(_) => Ok(()),
+        crate::service::auth::account_state::AccountState::Missing => Err(StatusCode::UNAUTHORIZED),
+        crate::service::auth::account_state::AccountState::Inactive => Err(StatusCode::FORBIDDEN),
     }
-    Ok(())
 }
 
 /// Extract a sync/API token from headers: `Seafile-Repo-Token` first, then `Authorization`.
