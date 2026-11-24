@@ -90,11 +90,7 @@ pub async fn add_to_trash(
     parent_commit_id: &str,
     user_email: &str,
 ) -> Result<(), AppError> {
-    let parent_dir = match full_path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((parent, _)) => parent,
-        None => "/",
-    };
+    let parent_dir = infra::common::util::parent_path_from(full_path);
 
     let now = chrono::Utc::now().timestamp();
 
@@ -393,11 +389,7 @@ pub async fn restore_trash_items(
     for (commit_id, paths) in &restore_map {
         for full_path in paths {
             let full_path = full_path.trim_end_matches('/');
-            let (parent_dir, obj_name) = match full_path.rsplit_once('/') {
-                Some(("", name)) => ("/", name),
-                Some((parent, name)) => (parent, name),
-                None => ("/", full_path),
-            };
+            let (parent_dir, obj_name) = infra::common::util::parent_and_name(full_path);
             items.push(Item {
                 commit_id: commit_id.clone(),
                 full_path: full_path.to_string(),

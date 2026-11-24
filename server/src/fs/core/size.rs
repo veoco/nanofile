@@ -120,11 +120,7 @@ async fn resolve_dirent(
     repo_id: &str,
     path: &str,
 ) -> Result<Option<base::common::DirEntryData>, AppError> {
-    let parent_path = match path.rsplit_once('/') {
-        Some(("", _)) => "/",
-        Some((parent, _)) => parent,
-        None => "/",
-    };
+    let parent_path = infra::common::util::parent_path_from(path);
     let name = basename(path);
 
     let head = crate::fs::core::repo_head(repos, repo_id).await?;

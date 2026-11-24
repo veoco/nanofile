@@ -214,12 +214,7 @@ fn resolve_existing_target(
     if relative_path.starts_with('/') {
         return Err(AppError::BadRequest("Invalid relative path".into()));
     }
-    let (raw_parent, name) = path.rsplit_once('/').unwrap_or(("/", path));
-    let parent = if raw_parent.is_empty() {
-        "/"
-    } else {
-        raw_parent
-    };
+    let (parent, name) = infra::common::util::parent_and_name(path);
     let dir = match token {
         Some(info) => compute_scoped_target_dir(info, parent, relative_path)?,
         None => compute_target_dir(parent, relative_path)?,

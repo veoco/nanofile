@@ -141,6 +141,19 @@ pub fn basename(path: &str) -> &str {
     path.rsplit_once('/').map(|(_, name)| name).unwrap_or("")
 }
 
+/// Split an absolute path into its parent directory and final segment in one pass.
+///
+/// The same rule was open-coded at more than a dozen call sites, each deciding
+/// root/trailing-slash cases slightly differently. `("/a/b")` yields `("/a",
+/// "b")`, a top-level `("a")` yields `("/", "a")`, and `"/"` yields `("/", "")`.
+pub fn parent_and_name(path: &str) -> (&str, &str) {
+    match path.rsplit_once('/') {
+        Some(("", name)) => ("/", name),
+        Some((parent, name)) => (parent, name),
+        None => ("/", path),
+    }
+}
+
 /// Join parent and name without doubling the slash at the root.
 pub fn join_path(parent: &str, name: &str) -> String {
     if parent == "/" {
@@ -229,7 +242,9 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_size, generate_unique_filename};
+    use super::{
+        basename, format_size, generate_unique_filename, parent_and_name, parent_path_from,
+    };
 
     use base::common::DirEntryData;
 
@@ -259,6 +274,20 @@ mod tests {
         assert_eq!(mode, 0o700, "existing dir should be tightened to 0700");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parent_and_name_matches_the_separate_helpers() {
+        for path in ["/a.txt", "/dir/a.txt", "/", "", "/dir/"] {
+            let (parent, name) = parent_and_name(path);
+            assert_eq!(parent, parent_path_from(path), "parent of {path:?}");
+            assert_eq!(name, basename(path), "name of {path:?}");
+        }
+        assert_eq!(parent_and_name("/dir/a.txt"), ("/dir", "a.txt"));
+        assert_eq!(parent_and_name("/a.txt"), ("/", "a.txt"));
+        // A relative name has no directory part; callers used to fall back to the
+        // whole input as the name for this case.
+        assert_eq!(parent_and_name("a.txt"), ("/", "a.txt"));
     }
 
     #[test]

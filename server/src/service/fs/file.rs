@@ -1330,12 +1330,7 @@ impl FileService {
         user_id: i32,
     ) -> Result<(String, i64), AppError> {
         let db = self.db();
-        let file_name = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
-        let parent_path = match path.rsplit_once('/') {
-            Some(("", _)) => "/",
-            Some((parent, _)) => parent,
-            None => "/",
-        };
+        let (parent_path, file_name) = infra::common::util::parent_and_name(path);
 
         if file_name.is_empty() {
             return Err(AppError::BadRequest("invalid path".into()));

@@ -4,6 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use percent_encoding::{AsciiSet, CONTROLS};
 
 use base::error::AppError;
+pub use infra::common::util::join_path;
 use infra::common::util::{basename, parent_path_from};
 use infra::serialization::S_IFDIR;
 
@@ -193,12 +194,4 @@ pub fn http_date(ts: i64) -> String {
 pub fn build_href(repo_id: &str, path: &str) -> String {
     let encoded = percent_encoding::utf8_percent_encode(path, HREF_ENCODE_SET).to_string();
     format!("/dav/{repo_id}{encoded}")
-}
-
-pub fn join_path(parent: &str, name: &str) -> String {
-    if parent == "/" {
-        format!("/{name}")
-    } else {
-        format!("{parent}/{name}")
-    }
 }

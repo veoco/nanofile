@@ -5,6 +5,7 @@ use crate::repository::Repositories;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
+use infra::common::util::join_path;
 
 /// A single file-system change detected by diffing two tree snapshots.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,15 +384,6 @@ pub async fn diff_trees(
     // Sort by path so output order is deterministic.
     changes.sort_by(|a, b| a.path.cmp(&b.path));
     Ok(changes)
-}
-
-/// Join a directory prefix and entry name into an absolute path.
-fn join_path(prefix: &str, name: &str) -> String {
-    if prefix.is_empty() {
-        format!("/{name}")
-    } else {
-        format!("{prefix}/{name}")
-    }
 }
 
 /// Extract the parent directory of an absolute path (`"/"` for a top-level entry).

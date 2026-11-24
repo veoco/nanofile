@@ -650,11 +650,9 @@ pub async fn create_file_v21(
         .create_empty_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
 
-    let (parent_dir, obj_name) = match path.rsplit_once('/') {
-        Some(("", name)) => ("/".to_string(), name.to_string()),
-        Some((parent, name)) => (parent.to_string(), name.to_string()),
-        None => ("/".to_string(), path.clone()),
-    };
+    let (parent_dir, obj_name) = infra::common::util::parent_and_name(&path);
+    let parent_dir = parent_dir.to_string();
+    let obj_name = obj_name.to_string();
 
     Ok(Json(serde_json::json!({
         "type": "file",

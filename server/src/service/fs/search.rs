@@ -438,10 +438,7 @@ impl SearchService {
             let dir_url = if is_dir {
                 format!("/libraries/{}/files{}", repo_id, fullpath)
             } else {
-                let parent = fullpath
-                    .rsplit_once('/')
-                    .map(|(parent, _)| parent)
-                    .unwrap_or("/");
+                let parent = infra::common::util::parent_path_from(fullpath);
                 format!("/libraries/{}/files{}", repo_id, parent)
             };
 
