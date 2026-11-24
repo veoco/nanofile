@@ -4703,7 +4703,6 @@ dependencies = [
 name = "server"
 version = "0.1.24"
 dependencies = [
- "aes",
  "anyhow",
  "askama",
  "async-trait",
@@ -4713,7 +4712,6 @@ dependencies = [
  "base",
  "base64 0.23.1",
  "bytes",
- "cbc",
  "chrono",
  "clap",
  "flate2",

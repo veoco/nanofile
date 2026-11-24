@@ -21,7 +21,7 @@ anyhow = "1"
 async-trait = "0.1"
 aes = "0.9"
 # `alloc` carries `cipher/alloc`, which the padded-vec block mode helpers in
-# `infra::crypto` and `server::service::repo` need; `block-padding` is already
+# `infra::crypto` need; `block-padding` is already
 # `cbc`'s default. `cipher` itself is only reached through `aes::cipher`.
 cbc = { version = "0.2", features = ["alloc"] }
 chrono = { version = "0.4", features = ["serde"] }

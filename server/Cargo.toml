@@ -109,8 +109,6 @@ lettre = { version = "0.11", default-features = false, features = [
 rand = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
-aes = { workspace = true }
-cbc = { workspace = true }
 hmac = "0.13"
 pbkdf2 = { workspace = true }
 subtle = { workspace = true }
