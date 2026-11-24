@@ -101,6 +101,17 @@ impl AdminUserService {
         is_active: bool,
         storage_quota: Option<i64>,
     ) -> Result<(), AppError> {
+        // Deactivating an account is a revocation, not just a flag: keeping the
+        // rows would let every old session, sync token and API key work again as
+        // soon as the account is re-enabled, and an unused reset link would keep
+        // offering account takeover for the rest of its TTL.
+        let was_active = self
+            .repos
+            .user
+            .find_by_id(user_id)
+            .await?
+            .map(|user| user.is_active);
+
         self.repos.user.update_is_admin(user_id, is_admin).await?;
         self.repos.user.update_is_active(user_id, is_active).await?;
         self.repos
@@ -114,6 +125,15 @@ impl AdminUserService {
         // already-minted URL would keep working for its remaining TTL.
         if !is_active && let Some(manager) = &self.token_manager {
             manager.revoke_user(user_id);
+        }
+        if !is_active && was_active != Some(false) {
+            crate::service::auth::token::revoke_all_credentials(
+                &self.repos,
+                self.token_manager.as_ref(),
+                user_id,
+                None,
+            )
+            .await?;
         }
         Ok(())
     }

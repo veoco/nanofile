@@ -71,7 +71,7 @@ an administrator under **System Settings → Authentication / Rate limits**.
 |---|---|
 | Changing your password | sessions on the account's **other devices**, every sync token, every API key |
 | Enabling two-factor | other browser sessions, every sync token, every API key, remembered 2FA devices |
-| Disabling the account | every login the account holds; unused password-reset links survive, and only a password change or reset revokes them |
+| Disabling the account | every credential the account holds: other sessions and devices, repository sync tokens, API keys, 2FA device trusts and unused password-reset links |
 | Remote wipe | only the credentials of the wiped device — other devices, API keys and reset links are untouched |
 | Revoking one entry under Sessions & Credentials | that entry alone |
 | Rotating the master secret `server.secret_key` | sync clients break; TOTP, queued mail and encrypted blocks become unreadable. Browser sessions are not signed out — revoke them under Sessions & Credentials or change the password (see [Security](/guide/admin/security)) |

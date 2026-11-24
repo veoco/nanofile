@@ -744,3 +744,92 @@ async fn disabling_2fa_drops_device_trusts_and_keeps_the_session() {
         "disabling 2FA must not log the acting browser out"
     );
 }
+
+/// Deactivation is a revocation, not just a flag: the rows are deleted so that
+/// re-enabling the account cannot resurrect an old session, sync token or API
+/// key, and an unused reset link cannot outlive the deactivation.
+#[tokio::test]
+async fn deactivation_revokes_credentials_and_reset_links() {
+    let f = TestFixture::new().await;
+    let raw_reset = "reset-token-for-deactivation";
+    let _ = seed_reset_token(&f, raw_reset).await;
+    let reset =
+        server::service::auth::password_reset::PasswordResetService::new(f.server.repos.clone());
+    assert!(
+        reset.validate_token(raw_reset).await.unwrap().is_some(),
+        "the reset token must be live before deactivation"
+    );
+
+    f.server
+        .state
+        .admin_user_service()
+        .update_user(f.user_id, false, false, None)
+        .await
+        .expect("deactivate the account");
+
+    assert!(
+        f.server
+            .repos
+            .api_token
+            .find_by_token(&f.api_token)
+            .await
+            .unwrap()
+            .is_none(),
+        "the account token must be deleted, not only blocked"
+    );
+    assert!(
+        f.server
+            .repos
+            .sync_token
+            .find_by_token(&f.sync_token)
+            .await
+            .unwrap()
+            .is_none(),
+        "the repository sync token must be deleted"
+    );
+    assert!(
+        f.server
+            .repos
+            .password_reset_token
+            .find_by_user(f.user_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "unused reset links must be deleted"
+    );
+    assert!(
+        reset.validate_token(raw_reset).await.unwrap().is_none(),
+        "the old reset link must stop working"
+    );
+
+    let denied = f
+        .client
+        .get("/api2/account/info/", Some(&f.api_token))
+        .await;
+    assert_eq!(
+        denied.status(),
+        401,
+        "the deleted token must not authenticate"
+    );
+
+    f.server
+        .state
+        .admin_user_service()
+        .update_user(f.user_id, false, true, None)
+        .await
+        .expect("reactivate the account");
+    assert!(
+        f.server
+            .repos
+            .api_token
+            .find_by_token(&f.api_token)
+            .await
+            .unwrap()
+            .is_none(),
+        "re-enabling the account must not restore the old token"
+    );
+    assert!(
+        reset.validate_token(raw_reset).await.unwrap().is_none(),
+        "re-enabling the account must not restore the reset link"
+    );
+}
