@@ -87,8 +87,15 @@ The variables count as configuring the installation, so the container skips the
 one-time setup page. Create the first administrator inside the container:
 
 ```bash
-docker exec nanofile /nanofile adduser --email admin@example.com
+# interactive password prompt (-t gives it a terminal)
+docker exec -it nanofile /nanofile adduser --email admin@example.com
+
+# or non-interactive
+printf '%s\n' 'secret123' | docker exec -i nanofile /nanofile adduser --email admin@example.com --password-stdin
 ```
+
+`-t` gives the interactive password prompt a terminal; without one, pipe the
+password in with `--password-stdin`.
 
 For a production deployment, pin a version tag instead of `latest`, and see
 [Docker](/guide/deploy/docker) for the config-file variant, the first-run caveat and
@@ -115,10 +122,12 @@ server:
 
 Every later start reads that file. Delete it to run the setup again.
 
-The page is served on `127.0.0.1` without TLS. On a remote host, do not expose it as
-it stands — set `site_url` and a reverse proxy first (see
-[HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy)), or reach it
-through an SSH tunnel.
+The page listens on the configured listen address — `0.0.0.0:8082` by default, so
+every interface — and has no TLS. The URL the console prints is
+`http://127.0.0.1:<port>/setup/<token>`. On a remote host, do not leave that port
+reachable: restrict it with a firewall or use an SSH tunnel, and set `site_url` and
+a reverse proxy before exposing the server (see
+[HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy)).
 
 **Docker:** the command above already set `NANOFILE_*`, so there is no setup page.
 Use the `docker exec … adduser` command from the Docker section, then open
@@ -132,15 +141,15 @@ Use the `docker exec … adduser` command from the Docker section, then open
    progress panel to finish.
 4. The file appears in the list; double-click it to check the preview or download.
 
-If the upload button is missing, the account has read-only permission on that
-library. The creator of a library has read/write permission; other users are added
-through sharing, which this tutorial does not cover.
+The upload and new-folder buttons are shown whether or not the account may write:
+with read-only permission on that library, uploading or creating a folder fails. The
+creator of a library has read/write permission; other users are added through
+sharing, which this tutorial does not cover.
 
 ## Share the file
 
 1. Open the file's **⋯** menu and choose **share link**.
-2. Set a password and an expiry time if you want one. A share link also supports a
-   view limit.
+2. Set a password and an expiry time if you want one.
 3. Copy the link, open it in a private browser window, enter the password and
    download the file.
 

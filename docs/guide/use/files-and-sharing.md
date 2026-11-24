@@ -69,11 +69,12 @@ A share link lets somebody without an account download a file or a folder.
 
 1. Select the file or folder and choose **share link** in the row menu or the
    details drawer.
-2. Set a password, an expiry time (or none) and, for a share link, a view limit.
+2. Set a password and an expiry time (or none).
 3. Copy the link and send it.
 
 The link opens a public page with the file or folder. A password-protected link asks
-for the password first. An expired or used-up link answers as gone.
+for the password first. An expired link answers as gone. The links list shows each
+link's view count; there is no view limit.
 
 ## Upload links
 
@@ -82,8 +83,8 @@ directory. Create it the same way as a share link, then send the link. The recip
 does not need a Nanofile account.
 
 - Upload links support a password and an expiry time.
-- They cannot target an encrypted library. The server does not have the library
-  password, so it cannot write the uploaded content.
+- They cannot target an encrypted library: an anonymous visitor has no cached
+  library key, so the server cannot write the uploaded content.
 - An upload link created before an administrator turned upload sharing off is refused
   on use.
 

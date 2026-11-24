@@ -42,15 +42,19 @@ and can be revoked at any time.
 
 ### Sync tokens
 
-Every client login leaves a sync token behind. They are listed one by one under
+The first time a client syncs a library, the server issues a sync token for that
+(library, user, device). The tokens are listed one by one under
 **Settings → Sessions & Credentials** and revoked individually. Changing your
 password revokes all of them.
 
 ### Encrypted libraries
 
-An encrypted library can only be created by a client, and its password is only
-entered there — the server does not have it, which is why web preview and
-download, and anonymous upload links, do not work for such a library.
+An encrypted library can only be created by a client. The client hands the library
+password to the server through `set-password` when it syncs, and the server derives
+and caches the library key for one hour. While that cache is warm, the same
+account's web preview and download can decrypt; with a cold cache the web interface
+answers 440. Thumbnails stay unavailable. WebDAV, share links and anonymous upload
+links are refused for an encrypted library.
 
 ## WebDAV
 
@@ -92,8 +96,10 @@ them under **Settings → API keys**:
 To call in with one, put it in the `Authorization` header:
 `Authorization: Bearer <key>` (`Token <key>` also works).
 
-The key management surface accepts a browser session only, so **a key cannot
-issue another key**; changing your password revokes every key on the account. See
+The key management surface accepts an account session only — a browser cookie, or
+the account token returned by `POST /api2/auth-token/`; API keys and sync tokens
+are rejected, so **a key cannot issue another key**; changing your password revokes
+every key on the account. See
 [Account security](/guide/use/account-security).
 
 ## Verify

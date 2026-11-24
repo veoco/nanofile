@@ -29,9 +29,9 @@ accepts `[ocr]` as its startup value, but the settings page is the reference.
 
 - `min_score` (0–1) is the recognition confidence a text line must reach to be
   indexed. Raise it to drop noisy lines; lower it to keep faint print.
-- `max_side` is the longest edge the detector resizes a page to, rounded up to
-  a multiple of 32 (320–1600). Larger values read smaller print and cost more
-  CPU.
+- `max_side` is the longest edge the detector resizes a page to, rounded to the
+  nearest multiple of 32 (320–1600). Larger values read smaller print and cost
+  more CPU.
 
 Before detection, a small four-class model turns a page that was scanned or
 photographed a quarter turn off upright (90°, 180° or 270°). After detection, a

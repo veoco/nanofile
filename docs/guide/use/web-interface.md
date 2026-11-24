@@ -63,7 +63,8 @@ size and modified time it holds:
 - **Tags** — free-text labels of your own.
 - **EXIF** — the shooting metadata of a photo.
 - **Full-text index** — the text the indexer extracted from this file, plus a
-  "re-index" button; when a file is not indexed, this section says why.
+  "re-index" button; a file that is not indexed shows only the fixed "Not indexed"
+  note.
 - **Share links / upload links** — the links already issued for this file.
 
 The drawer has no inline player: its summary thumbnail is the still frame, and the
@@ -119,7 +120,7 @@ Pages under `/settings/`:
 | Page | Use |
 |---|---|
 | Overview | account information |
-| Profile | display name, avatar, language |
+| Account | display name, avatar, language |
 | Security | two-factor authentication, password |
 | Sessions & Credentials | devices that signed in, sync tokens, revocation |
 | API keys | keys for third-party tools, including WebDAV keys |
@@ -137,7 +138,6 @@ Two-factor authentication and credentials are covered in
 | `g` then `s` | starred |
 | `g` then `t` | trash |
 | `g` then `a` | activity |
-| `g` then `p` | your settings |
 
 ## Next steps
 

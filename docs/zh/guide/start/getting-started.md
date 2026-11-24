@@ -73,8 +73,14 @@ docker run -d --name nanofile -p 8082:8082 \
 这些变量视为已配置，因此容器不会进入一次性设置页。在容器里创建第一个管理员：
 
 ```bash
-docker exec nanofile /nanofile adduser --email admin@example.com
+# 交互式输入密码（-t 为密码提示提供终端）
+docker exec -it nanofile /nanofile adduser --email admin@example.com
+
+# 或免交互
+printf '%s\n' 'secret123' | docker exec -i nanofile /nanofile adduser --email admin@example.com --password-stdin
 ```
+
+`-t` 让交互式密码提示拿到终端；没有终端时，用 `--password-stdin` 通过管道传入密码。
 
 生产部署请固定版本 tag，不要用 `latest`；配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](/zh/guide/deploy/docker)。
 
@@ -92,7 +98,7 @@ docker exec nanofile /nanofile adduser --email admin@example.com
 
 之后每次启动都读这个文件；删掉它即可重新初始化。
 
-页面地址是 `127.0.0.1` 且不带 TLS。在远程主机上部署时，不要把它直接暴露出去——先按 [HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy)配好 `site_url` 与反向代理，或用 SSH 隧道访问。
+页面监听配置里的监听地址（默认 `0.0.0.0:8082`，即所有网卡），且不带 TLS。控制台打印的地址是 `http://127.0.0.1:<port>/setup/<token>`。在远程主机上部署时，不要把这个端口直接暴露出去：用防火墙限制端口，或用 SSH 隧道访问；对外服务前再按 [HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy)配好 `site_url` 与反向代理。
 
 **Docker：** 上面的命令已经设置了 `NANOFILE_*`，因此没有设置页。用 Docker 一节的 `docker exec … adduser` 创建管理员，然后打开 `http://localhost:8082`。
 
@@ -103,12 +109,12 @@ docker exec nanofile /nanofile adduser --email admin@example.com
 3. 打开资料库，点**上传文件**，选一个小文件，等进度面板走完。
 4. 文件出现在列表里；双击它可以检查预览或下载。
 
-如果看不到上传按钮，说明该账号对这个资料库只有只读权限。资料库的创建者有读写权限；其他用户要通过分享加入，本教程不展开。
+上传与新建按钮不会因权限而隐藏：只读账号点上传或新建文件夹会失败。资料库的创建者有读写权限；其他用户要通过分享加入，本教程不展开。
 
 ## 分享文件
 
 1. 打开文件的 **⋯** 菜单，选**分享链接**。
-2. 需要的话设置密码和过期时间；分享链接还支持查看次数。
+2. 需要的话设置密码和过期时间。
 3. 复制链接，在隐私窗口打开，输入密码并下载文件。
 
 这是公开分享的路径。**上传链接**同理，但让收件人向资料库上传。完整选项见[文件与分享](/zh/guide/use/files-and-sharing)。

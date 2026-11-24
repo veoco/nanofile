@@ -66,7 +66,7 @@ are in [Seafile compatibility](/dev/protocol).
 | **Commit** | A snapshot of a library's file tree, with history and a commit id compatible with Seafile. |
 | **Share link / upload link** | A public link that lets somebody download from, or upload into, a library without an account. |
 | **API key / WebDAV key** | A scoped credential for scripts, third-party tools or a WebDAV mount. It is not the account password. |
-| **Encrypted library** | A client-side encrypted library. The server never receives the library password. |
+| **Encrypted library** | A client-encrypted library. A client can hand its password to the server with `set-password`, which derives and caches the library key for one hour so the web interface can decrypt during that window. |
 | **Full-text index** | Extracted document text, stored next to the data directory and searchable from the web interface. |
 | **Sandbox** | The confined child processes that parse untrusted content. |
 
@@ -74,8 +74,13 @@ are in [Seafile compatibility](/dev/protocol).
 
 - **One process, one SQLite database.** The current architecture has no built-in
   clustering or multi-node mode; the guide assumes one server per data directory.
-- **Encrypted libraries are client-side.** The web interface cannot preview or
-  download them, and anonymous upload links cannot target them.
+- **Encrypted libraries keep their password on the client side, but the server can
+  hold the derived key.** A client can hand the library password to the server
+  through `set-password`; the server derives the library key and caches it for one
+  hour. While that cache is warm, the same account's web preview and download can
+  decrypt; when it is cold, the page answers 440. Thumbnails stay unavailable
+  because they are generated from the stored ciphertext. Share links and anonymous
+  upload links never serve an encrypted library.
 - **WebDAV does not serve encrypted libraries**, because WebDAV cannot carry the
   library password.
 - **OCR and people tags are optional and bounded.** Both need the sandbox, and both

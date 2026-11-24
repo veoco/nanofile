@@ -65,7 +65,7 @@ docker run -d --name nanofile \
   ghcr.io/veoco/nanofile:latest
 ```
 
-主密钥生成一次并长期保存：更换后所有会话登出、同步客户端失效、已加密块无法解密。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/deploy/docker)。
+主密钥生成一次并长期保存：更换后同步客户端失效、已加密块无法解密，用该密钥加密的其他数据（如 TOTP 种子、队列中的邮件）也会失效；但已登录的浏览器会话不会随之登出，需要显式吊销。配置文件方式、容器内首次初始化的注意事项与升级权限见 [Docker 部署](https://veoco.github.io/nanofile/zh/guide/deploy/docker)。
 
 ## 文档
 
@@ -89,7 +89,7 @@ docker run -d --name nanofile \
 
 ## 开发
 
-项目是包含四个 crate 的 Cargo workspace：`base`（领域类型）、`infra`（数据库、存储、加密、配置）、`server`（HTTP、同步协议、WebDAV、网页界面）与 `migration`。依赖方向 `base → infra → server`。
+项目是包含五个 crate 的 Cargo workspace：`base`（领域类型）、`infra`（数据库、存储、加密、配置）、`inference`（内嵌模型的固定执行计划运行时）、`server`（HTTP、同步协议、WebDAV、网页界面）与 `migration`。依赖方向 `base → infra → server`，`inference` 是叶子 crate。
 
 环境要求：稳定的 Rust 工具链（edition 2024）与 Node.js（CI 使用 24，用于前端打包工具）；`ffmpeg` 可选，用于媒体缩略图。
 

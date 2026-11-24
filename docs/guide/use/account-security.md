@@ -38,11 +38,15 @@ under your account, and every entry can be revoked on its own:
 
 | Group | What it holds |
 |---|---|
-| Client devices | each device's platform, name and last sign-in; expanding one shows its session, sync token and trust state, and unlinks the whole device. |
+| Desktop and mobile apps | each device's platform, name and last sign-in; expanding one shows its session, sync token and trust state, and unlinks the whole device. |
 | Browser sessions | every web sign-in, with the **current session** marked; revoke them one by one, or sign out of all others at once. |
-| Sync tokens | the tokens clients hold, with an expiring-soon badge. |
-| Trusted devices | the two-factor trust records, with their expiry. |
+| Unattributed repository sync tokens | sync tokens that match no listed device, with the last sync time and the expiry. |
+| Unknown two-factor trust tokens | two-factor trust records that match no listed device, with their expiry. |
 | API keys | the count and the way in; the page itself is **Settings → API Keys**. |
+
+The page opens with a summary strip: browsers, client devices, sync tokens and API
+keys. The two token groups appear only when something is left over — a token or
+trust that belongs to a listed device is shown inside that device's row.
 
 If you do not recognise a device, revoke it — revocation deletes no data, it only
 makes that one credential stop working.
@@ -67,16 +71,19 @@ an administrator under **System Settings → Authentication / Rate limits**.
 |---|---|
 | Changing your password | sessions on the account's **other devices**, every sync token, every API key |
 | Enabling two-factor | other browser sessions, every sync token, every API key, remembered 2FA devices |
-| Disabling the account / remote wipe | every login the account holds, including unused password-reset links |
+| Disabling the account | every login the account holds; unused password-reset links survive, and only a password change or reset revokes them |
+| Remote wipe | only the credentials of the wiped device — other devices, API keys and reset links are untouched |
 | Revoking one entry under Sessions & Credentials | that entry alone |
-| Rotating the master secret `server.secret_key` | everybody: sessions are signed out, sync clients break, encrypted blocks cannot be decrypted (see [Security](/guide/admin/security)) |
+| Rotating the master secret `server.secret_key` | sync clients break; TOTP, queued mail and encrypted blocks become unreadable. Browser sessions are not signed out — revoke them under Sessions & Credentials or change the password (see [Security](/guide/admin/security)) |
 
 ## API keys
 
 API keys let third-party tools — WebDAV clients, sync clients, scripts — connect
 without sharing the account password. A key carries only the capabilities granted
 to it and can be narrowed to specific libraries; the key management surface
-accepts a browser session only, so a key cannot issue another key.
+accepts an account session only — a browser cookie, or the account token returned
+by `POST /api2/auth-token/` — and rejects API keys and sync tokens, so a key cannot
+issue another key.
 
 Creating and using them is in [Connecting clients](/guide/use/clients).
 
