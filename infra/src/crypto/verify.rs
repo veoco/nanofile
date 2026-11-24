@@ -44,16 +44,6 @@ pub fn verify_magic(stored_magic: &str, provided_magic: &str) -> bool {
         .into()
 }
 
-/// Effective salt: empty for v2 (signals [`MAGIC_SALT`]) and for unsupported
-/// versions; the stored per-repo salt for v4.
-pub fn effective_salt(enc_version: i32, repo_salt: &str) -> &str {
-    match enc_version {
-        2 => "", // Use default MAGIC_SALT
-        4 => repo_salt,
-        _ => "",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,19 +85,6 @@ mod tests {
     fn test_verify_magic() {
         assert!(verify_magic("same", "same"));
         assert!(!verify_magic("same", "different"));
-    }
-
-    #[test]
-    fn test_effective_salt_v2() {
-        assert_eq!(effective_salt(2, ""), "");
-        assert_eq!(effective_salt(2, "some_salt"), "");
-    }
-
-    #[test]
-    fn test_effective_salt_v4() {
-        let repo_salt = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-        assert_eq!(effective_salt(4, repo_salt), repo_salt);
-        assert_eq!(effective_salt(4, ""), "");
     }
 
     #[test]

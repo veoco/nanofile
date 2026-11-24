@@ -32,11 +32,9 @@ impl PasswordService {
             .as_deref()
             .ok_or_else(|| AppError::BadRequest("repo has no random_key".into()))?;
 
-        let salt = if repo_model.enc_version >= 3 {
-            repo_model.salt.as_str()
-        } else {
-            ""
-        };
+        let enc_version = repo_model.enc_version as i32;
+        let salt = infra::crypto::key_derivation::effective_salt(enc_version, &repo_model.salt)
+            .map_err(|e| AppError::BadRequest(format!("{e}")))?;
 
         // Verify, derive and cache the key.
         password_manager
@@ -45,7 +43,7 @@ impl PasswordService {
                 user_id,
                 password,
                 &infra::crypto::password_manager::RepoKeyMaterial {
-                    enc_version: repo_model.enc_version as i32,
+                    enc_version,
                     magic: repo_model.magic.as_deref(),
                     random_key,
                     salt,
@@ -83,11 +81,8 @@ impl PasswordService {
             .random_key
             .as_deref()
             .ok_or_else(|| AppError::BadRequest("repo has no random_key".into()))?;
-        let salt = if enc_version >= 3 {
-            repo_model.salt.as_str()
-        } else {
-            ""
-        };
+        let salt = infra::crypto::key_derivation::effective_salt(enc_version, &repo_model.salt)
+            .map_err(|e| AppError::BadRequest(format!("{e}")))?;
 
         // Verify the old password via password_manager.
         password_manager
@@ -149,35 +144,31 @@ impl PasswordService {
             }
         };
 
-        // Decrypt the old random_key to get the secret key (the actual file key).
-        use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
-        let old_derived =
-            infra::crypto::key_derivation::derive_key(old_password, enc_version, salt)
-                .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
-        let random_key_bytes = hex::decode(random_key)
-            .map_err(|_| AppError::BadRequest("invalid random_key hex".into()))?;
-        let old_cipher =
-            cbc::Decryptor::<aes::Aes256>::new_from_slices(&old_derived.0, &old_derived.1)
-                .map_err(|e| AppError::BadRequest(format!("cipher init: {e}")))?;
-        let secret_key = old_cipher
-            .decrypt_padded_vec::<Pkcs7>(&random_key_bytes)
-            .map_err(|e| AppError::BadRequest(format!("failed to decrypt random_key: {e}")))?;
-
-        // Re-encrypt with the new password (same format: raw AES-CBC with PKCS7).
-        let new_derived =
-            infra::crypto::key_derivation::derive_key(new_password, enc_version, salt)
-                .map_err(|e| AppError::BadRequest(format!("key derivation failed: {e}")))?;
-        let new_cipher =
-            cbc::Encryptor::<aes::Aes256>::new_from_slices(&new_derived.0, &new_derived.1)
-                .map_err(|e| AppError::BadRequest(format!("cipher init: {e}")))?;
-        let new_random_key = new_cipher.encrypt_padded_vec::<Pkcs7>(&secret_key);
+        // Decrypt the old random_key to the 32-byte library secret, then wrap it
+        // again under the new password. Both directions are the crate's one
+        // implementation of the stored format, so rotation cannot drift from the
+        // reader.
+        let secret_key = infra::crypto::key_derivation::unwrap_repo_secret_key(
+            old_password,
+            random_key,
+            enc_version,
+            salt,
+        )
+        .map_err(|e| AppError::BadRequest(format!("failed to decrypt random_key: {e}")))?;
+        let new_random_key = infra::crypto::key_derivation::wrap_repo_secret_key(
+            &secret_key,
+            new_password,
+            enc_version,
+            salt,
+        )
+        .map_err(|e| AppError::BadRequest(format!("failed to encrypt random_key: {e}")))?;
 
         repos
             .repo
             .update_repo_keys(
                 repo_id,
                 UpdateRepoKeysParams {
-                    random_key: Some(hex::encode(&new_random_key)),
+                    random_key: Some(new_random_key),
                     ..new_verifier
                 },
             )

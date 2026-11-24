@@ -83,16 +83,10 @@ impl PasswordManager {
     ) -> Result<(), AppError> {
         let enc_version = material.enc_version;
         let random_key = material.random_key;
-        // For enc_version 2, salt is empty (uses default MAGIC_SALT)
-        let effective_salt = match enc_version {
-            2 => "",
-            4 => material.salt,
-            _ => {
-                return Err(AppError::BadRequest(format!(
-                    "unsupported encryption version: {enc_version}"
-                )));
-            }
-        };
+        // One salt rule for the whole crate; for v2 this is the empty string that
+        // selects the fixed protocol salt.
+        let effective_salt = key_derivation::effective_salt(enc_version, material.salt)
+            .map_err(|e| AppError::BadRequest(format!("{e}")))?;
 
         let verified = match (material.pwd_hash, material.pwd_hash_algo) {
             // A `pwd_hash` library stores no `magic`; this is its only verifier.

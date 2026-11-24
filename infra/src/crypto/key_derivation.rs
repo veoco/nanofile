@@ -101,6 +101,42 @@ pub fn derive_key_bytes(
     }
 }
 
+/// Effective salt for the Seafile key schedule.
+///
+/// v2 uses the fixed [`MAGIC_SALT`] (represented as the empty string) and v4 the
+/// per-repo salt. v1 and v3 use cipher/KDF schemes this server does not implement,
+/// so they are errors here instead of silently falling back to the v2 salt.
+pub fn effective_salt(enc_version: i32, repo_salt: &str) -> Result<&str, CryptoError> {
+    match enc_version {
+        2 => Ok(""),
+        4 => Ok(repo_salt),
+        1 | 3 => Err(CryptoError::UnsupportedVersion(enc_version)),
+        _ => Err(CryptoError::UnsupportedVersion(enc_version)),
+    }
+}
+
+/// AES-256-CBC encrypt with PKCS7 padding, no IV prefix.
+///
+/// The Seafile protocol fixes key/IV sizes; callers inside `crypto` pass values
+/// derived from that chain.
+pub(crate) fn cbc_encrypt_pkcs7(data: &[u8], key: &[u8], iv: &[u8]) -> Vec<u8> {
+    Aes256CbcEnc::new_from_slices(key, iv)
+        .expect("AES-256 key must be 32 bytes and IV 16 bytes")
+        .encrypt_padded_vec::<Pkcs7>(data)
+}
+
+/// AES-256-CBC decrypt with PKCS7 padding, no IV prefix.
+pub(crate) fn cbc_decrypt_pkcs7(
+    data: &[u8],
+    key: &[u8],
+    iv: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    Aes256CbcDec::new_from_slices(key, iv)
+        .map_err(|e| CryptoError::DecryptionFailed(format!("init: {e}")))?
+        .decrypt_padded_vec::<Pkcs7>(data)
+        .map_err(|e| CryptoError::DecryptionFailed(format!("decrypt: {e}")))
+}
+
 /// Derive the actual block key by decrypting `random_key`.
 ///
 /// password → derive_key → (derivedKey, derivedIv), AES-256-CBC-decrypt of
@@ -114,23 +150,59 @@ pub fn decrypt_repo_enc_key(
     enc_version: i32,
     repo_salt: &str,
 ) -> Result<(Vec<u8>, Vec<u8>), CryptoError> {
-    let random_key_bytes = hex::decode(random_key)
-        .map_err(|e| CryptoError::InvalidKey(format!("invalid random_key hex: {e}")))?;
-
-    // Step 1: Derive wrapping key from password
-    let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
-
-    // PKCS7 strips the padding, returning exactly the 32-byte secret key.
-    let file_key = Aes256CbcDec::new_from_slices(&derived_key, &derived_iv)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("init: {e}")))?
-        .decrypt_padded_vec::<Pkcs7>(&random_key_bytes)
-        .map_err(|e| CryptoError::DecryptionFailed(format!("decrypt random_key: {e}")))?;
+    let secret_key = unwrap_repo_secret_key(password, random_key, enc_version, repo_salt)?;
 
     // Derive the block key from the raw 32 bytes — not via `from_utf8_lossy`, which
     // would corrupt arbitrary byte values.
-    let (enc_key, enc_iv) = derive_key_bytes(&file_key, enc_version, repo_salt)?;
+    derive_key_bytes(&secret_key, enc_version, repo_salt)
+}
 
-    Ok((enc_key, enc_iv))
+/// Decrypt a library's `random_key` into the 32-byte secret that unwraps it.
+///
+/// This is the one implementation of the AES-256-CBC + PKCS7 unwrap; the password
+/// change path uses it too, so a format or salt rule cannot be updated in only one
+/// place and leave a `random_key` that one path can read and the other cannot.
+pub fn unwrap_repo_secret_key(
+    password: &str,
+    random_key: &str,
+    enc_version: i32,
+    repo_salt: &str,
+) -> Result<Vec<u8>, CryptoError> {
+    let salt = effective_salt(enc_version, repo_salt)?;
+    let random_key_bytes = hex::decode(random_key)
+        .map_err(|e| CryptoError::InvalidKey(format!("invalid random_key hex: {e}")))?;
+    let (derived_key, derived_iv) = derive_key(password, enc_version, salt)?;
+    let secret = cbc_decrypt_pkcs7(&random_key_bytes, &derived_key, &derived_iv)
+        .map_err(|_| CryptoError::DecryptionFailed("failed to decrypt random_key".to_string()))?;
+    if secret.len() != 32 {
+        return Err(CryptoError::InvalidKey(format!(
+            "random_key must unwrap to 32 bytes, got {}",
+            secret.len()
+        )));
+    }
+    Ok(secret)
+}
+
+/// Encrypt a 32-byte library secret into the stored `random_key` (96 hex chars).
+///
+/// Writes the exact inverse of [`unwrap_repo_secret_key`]: AES-256-CBC + PKCS7,
+/// no IV prefix, hex encoded.
+pub fn wrap_repo_secret_key(
+    secret: &[u8],
+    password: &str,
+    enc_version: i32,
+    repo_salt: &str,
+) -> Result<String, CryptoError> {
+    if secret.len() != 32 {
+        return Err(CryptoError::InvalidKey(format!(
+            "library secret must be 32 bytes, got {}",
+            secret.len()
+        )));
+    }
+    let salt = effective_salt(enc_version, repo_salt)?;
+    let (derived_key, derived_iv) = derive_key(password, enc_version, salt)?;
+    let ciphertext = cbc_encrypt_pkcs7(secret, &derived_key, &derived_iv);
+    Ok(hex::encode(ciphertext))
 }
 
 /// Generate a per-repo salt: 64 hex chars (32 random bytes), for enc_version >= 3.
@@ -150,17 +222,11 @@ pub fn generate_random_key_for_repo(
     enc_version: i32,
     repo_salt: &str,
 ) -> Result<String, CryptoError> {
-    let (derived_key, derived_iv) = derive_key(password, enc_version, repo_salt)?;
-
     let mut secret_key = [0u8; 32]; // 32-byte random secret key
     rand::rng().fill_bytes(&mut secret_key);
 
-    // Encrypt with PKCS7 padding: 32 bytes → 48 bytes ciphertext
-    let ciphertext = Aes256CbcEnc::new_from_slices(&derived_key, &derived_iv)
-        .map_err(|e| CryptoError::EncryptionFailed(format!("init: {e}")))?
-        .encrypt_padded_vec::<Pkcs7>(&secret_key);
-
-    Ok(hex::encode(&ciphertext))
+    // Encrypt with PKCS7 padding: 32 bytes → 48 bytes ciphertext, as hex.
+    wrap_repo_secret_key(&secret_key, password, enc_version, repo_salt)
 }
 
 /// Generate the magic string for password verification. Seafile's magic is the
@@ -337,5 +403,51 @@ mod tests {
 
         assert_eq!(correct_key.len(), 32);
         assert_eq!(correct_iv.len(), 16);
+    }
+
+    /// One salt rule: v2 uses the fixed protocol salt (empty string), v4 the
+    /// per-repo salt, and unsupported versions are refused rather than silently
+    /// treated as v2.
+    #[test]
+    fn effective_salt_is_one_rule() {
+        assert_eq!(effective_salt(2, "").unwrap(), "");
+        assert_eq!(effective_salt(2, "ignored").unwrap(), "");
+        let salt = generate_repo_salt();
+        assert_eq!(effective_salt(4, &salt).unwrap(), salt);
+        for unsupported in [0, 1, 3, 5] {
+            assert!(
+                effective_salt(unsupported, &salt).is_err(),
+                "enc_version {unsupported} must be refused"
+            );
+        }
+    }
+
+    /// The wrap/unwrap pair is the only implementation of the stored `random_key`
+    /// format: 32 bytes in, 96 hex chars out, and back.
+    #[test]
+    fn random_key_wrap_roundtrips() {
+        let secret = [0x37u8; 32];
+        let salt = generate_repo_salt();
+
+        let wrapped = wrap_repo_secret_key(&secret, "correct horse", 4, &salt).unwrap();
+        assert_eq!(wrapped.len(), 96, "32 bytes + PKCS7 is 48 bytes of hex");
+        assert_eq!(
+            unwrap_repo_secret_key("correct horse", &wrapped, 4, &salt).unwrap(),
+            secret
+        );
+        assert!(
+            unwrap_repo_secret_key("wrong horse", &wrapped, 4, &salt).is_err(),
+            "a wrong password must not unwrap the secret"
+        );
+
+        // v2 has no per-repo salt; the same pair works with the fixed protocol salt.
+        let wrapped_v2 = wrap_repo_secret_key(&secret, "pw", 2, "").unwrap();
+        assert_eq!(
+            unwrap_repo_secret_key("pw", &wrapped_v2, 2, "").unwrap(),
+            secret
+        );
+
+        // Wrong secret length is refused in both directions.
+        assert!(wrap_repo_secret_key(&[0u8; 31], "pw", 2, "").is_err());
     }
 }

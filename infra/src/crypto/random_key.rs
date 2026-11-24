@@ -1,7 +1,4 @@
-use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
-
-type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+use super::key_derivation::{cbc_decrypt_pkcs7, cbc_encrypt_pkcs7};
 
 /// Encrypt a file block with AES-256-CBC + PKCS7 (Seafile protocol).
 ///
@@ -27,9 +24,7 @@ pub fn encrypt_block(data: &[u8], file_key: &[u8], file_iv: &[u8]) -> Vec<u8> {
         "AES IV must be 16 bytes, got {}",
         file_iv.len()
     );
-    Aes256CbcEnc::new_from_slices(file_key, file_iv)
-        .expect("key must be 32 bytes, IV must be 16 bytes")
-        .encrypt_padded_vec::<Pkcs7>(data)
+    cbc_encrypt_pkcs7(data, file_key, file_iv)
 }
 
 /// Decrypt a block from `encrypt_block`: raw AES-256-CBC ciphertext with no IV prefix;
@@ -43,10 +38,7 @@ pub fn decrypt_block(
         return Err("encrypted block is empty".into());
     }
 
-    let plaintext = Aes256CbcDec::new_from_slices(file_key, file_iv)
-        .map_err(|e| format!("decrypt init error: {}", e))?
-        .decrypt_padded_vec::<Pkcs7>(encrypted)
-        .map_err(|e| format!("decrypt error: {}", e))?;
+    let plaintext = cbc_decrypt_pkcs7(encrypted, file_key, file_iv).map_err(|e| e.to_string())?;
 
     Ok(plaintext)
 }
