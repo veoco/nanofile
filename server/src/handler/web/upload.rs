@@ -1526,31 +1526,15 @@ async fn read_parts_inner(
 
 /// Buffer one multipart field under a byte cap, rejecting an oversized part from
 /// its Content-Length or from the bytes actually read.
+///
+/// multer is used directly (not axum's extractor) because axum 400s the quoted
+/// boundaries some Qt clients send, but the size policy is the shared one.
 async fn read_field_limited(
     field: &mut multer::Field<'_>,
     limit: usize,
 ) -> Result<Vec<u8>, AppError> {
-    if let Some(len) = field
-        .headers()
-        .get(axum::http::header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok())
-        && len > limit
-    {
-        return Err(AppError::ContentTooLarge);
-    }
-    let mut out = Vec::with_capacity(limit.min(1 << 20));
-    while let Some(chunk) = field
-        .chunk()
-        .await
-        .map_err(|e| AppError::Internal(format!("multipart field read error: {e}")))?
-    {
-        if out.len() + chunk.len() > limit {
-            return Err(AppError::ContentTooLarge);
-        }
-        out.extend_from_slice(&chunk);
-    }
-    Ok(out)
+    crate::handler::check_field_length(field.headers(), limit)?;
+    crate::handler::read_stream_limited(&mut *field, limit).await
 }
 
 /// A byte stream fed to the CDC chunker.
@@ -1809,6 +1793,34 @@ async fn commit_uploads(
 
 /// `POST /update-api/` 鈥?update an existing file from the web UI (no token),
 /// taking `file`, `repo_id`, and `p` / `path` (the full target path).
+/// Shared tail of the four update endpoints.
+///
+/// The session/token and `-api`/`-aj` variants differ only in how they extract
+/// `target_file` and frame the reply; target existence, the uncommitted-block
+/// guard and the commit are the same sequence in all four. The guard is created
+/// before target resolution so a malformed target cannot leak streamed blocks.
+async fn finish_update(
+    state: &Arc<AppState>,
+    auth: &AuthContext,
+    parts: Parts,
+    target_file: &str,
+    relative_path: &str,
+    range: Option<&str>,
+    style: ReplyStyle,
+) -> Result<axum::response::Response, AppError> {
+    let mut guard = UncommittedBlocks::new(
+        state.clone(),
+        auth.repo_id.clone(),
+        parts.written_block_ids(),
+        false,
+    );
+    let target = resolve_existing_target(auth.token.as_ref(), target_file, relative_path)?;
+    require_target_exists(state, &auth.repo_id, &target.dir, &target.name).await?;
+    let finished = finish_existing(state, auth, parts, &target, range, style, &mut guard).await?;
+    guard.disarm();
+    Ok(finished.response)
+}
+
 pub async fn update_api(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1840,28 +1852,16 @@ pub async fn update_api(
     }
 
     let auth = AuthContext::from_session(&state, &user, &repo_id, csrf_token.as_deref()).await?;
-
-    let target = resolve_existing_target(None, &file_path, "")?;
-    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
-
-    let mut guard = UncommittedBlocks::new(
-        state.clone(),
-        auth.repo_id.clone(),
-        parts.written_block_ids(),
-        false,
-    );
-    let finished = finish_existing(
+    finish_update(
         &state,
         &auth,
         parts,
-        &target,
+        &file_path,
+        "",
         range,
         ReplyStyle::Array,
-        &mut guard,
     )
-    .await?;
-    guard.disarm();
-    Ok(finished.response)
+    .await
 }
 
 /// `POST /update-aj/` 鈥?AJAX file update from the Seahub web UI (no token),
@@ -1885,7 +1885,8 @@ pub async fn update_aj(
     let target_file = parts
         .fields
         .get("target_file")
-        .ok_or_else(|| AppError::BadRequest("target_file required".into()))?;
+        .ok_or_else(|| AppError::BadRequest("target_file required".into()))?
+        .clone();
 
     let auth = AuthContext::from_session(
         &state,
@@ -1894,28 +1895,16 @@ pub async fn update_aj(
         parts.fields.get("csrf_token").map(|s| s.as_str()),
     )
     .await?;
-
-    let target = resolve_existing_target(None, target_file, "")?;
-    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
-
-    let mut guard = UncommittedBlocks::new(
-        state.clone(),
-        auth.repo_id.clone(),
-        parts.written_block_ids(),
-        false,
-    );
-    let finished = finish_existing(
+    finish_update(
         &state,
         &auth,
         parts,
-        &target,
+        &target_file,
+        "",
         range,
         ReplyStyle::Array,
-        &mut guard,
     )
-    .await?;
-    guard.disarm();
-    Ok(finished.response)
+    .await
 }
 
 /// `POST /upload-aj/{token}` 鈥?upload with an upload-link token, as sent by the
@@ -2044,7 +2033,8 @@ pub async fn update_api_handler(
     let target_file = parts
         .fields
         .get("target_file")
-        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
+        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?
+        .clone();
     let relative_path = parts
         .fields
         .get("relative_path")
@@ -2053,29 +2043,16 @@ pub async fn update_api_handler(
     // `/update-api` honours `ret-json`; without it the body is a plain id.
     let ret_json = wants_ret_json(&query, &parts.fields);
 
-    // Scoped for consistency: an update token never carries `upload_link_id`
-    // today, but this keeps the link-directory clamp if one ever does.
-    let mut guard = UncommittedBlocks::new(
-        state.clone(),
-        auth.repo_id.clone(),
-        parts.written_block_ids(),
-        false,
-    );
-    let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
-    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
-
-    let finished = finish_existing(
+    finish_update(
         &state,
         &auth,
         parts,
-        &target,
+        &target_file,
+        &relative_path,
         range,
         ReplyStyle::PlainOrJson { ret_json },
-        &mut guard,
     )
-    .await?;
-    guard.disarm();
-    Ok(finished.response)
+    .await
 }
 
 /// `POST /update-aj/{token}` 鈥?token-based AJAX file update from the Seahub web
@@ -2095,7 +2072,8 @@ pub async fn update_aj_token(
     let target_file = parts
         .fields
         .get("target_file")
-        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?;
+        .ok_or_else(|| AppError::BadRequest("No target_file given.".into()))?
+        .clone();
     let relative_path = parts
         .fields
         .get("relative_path")
@@ -2104,27 +2082,16 @@ pub async fn update_aj_token(
     // Scoped like every other token upload: an update token never carries
     // `upload_link_id` today, but this keeps the link-directory clamp if one
     // ever does (and matches `update_api_handler`).
-    let mut guard = UncommittedBlocks::new(
-        state.clone(),
-        auth.repo_id.clone(),
-        parts.written_block_ids(),
-        false,
-    );
-    let target = resolve_existing_target(Some(auth.token()), target_file, &relative_path)?;
-    require_target_exists(&state, &auth.repo_id, &target.dir, &target.name).await?;
-
-    let finished = finish_existing(
+    finish_update(
         &state,
         &auth,
         parts,
-        &target,
+        &target_file,
+        &relative_path,
         range,
         ReplyStyle::Array,
-        &mut guard,
     )
-    .await?;
-    guard.disarm();
-    Ok(finished.response)
+    .await
 }
 
 /// The commit-phase fields of a block upload.

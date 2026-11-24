@@ -39,32 +39,15 @@ impl Downloader {
         max_bytes: usize,
     ) -> Result<Vec<u8>, AppError> {
         let (file_data, block_ids) = Self::download_file_stream(repos, repo_id, path).await?;
-
-        // Clamp before the cast: a negative `size` would wrap to `usize::MAX` and overflow.
-        let mut out = Vec::with_capacity(file_data.size.max(0).min(max_bytes as i64) as usize);
-        for block_id in &block_ids {
-            if out.len() >= max_bytes {
-                break;
-            }
-            let block_data = block_store
-                .read_block(repo_id, block_id)
-                .await
-                .map_err(|e| AppError::internal(e.to_string()))?;
-            let block_data = if let Some((key, iv)) = dec_key {
-                decrypt_block_offload(block_data, key, iv)
-                    .await
-                    .map_err(|e| AppError::internal(e.to_string()))?
-            } else {
-                block_data
-            };
-            let remaining = max_bytes - out.len();
-            let take = remaining.min(block_data.len());
-            out.extend_from_slice(&block_data[..take]);
-            if take < block_data.len() {
-                break;
-            }
-        }
-        Ok(out)
+        Self::read_blocks_limited(
+            repo_id,
+            block_store,
+            &block_ids,
+            file_data.size,
+            dec_key,
+            max_bytes,
+        )
+        .await
     }
 
     /// Read at most `max_bytes` from known block IDs, skipping the tree walk.
@@ -76,7 +59,23 @@ impl Downloader {
         dec_key: Option<(&[u8], &[u8])>,
         max_bytes: usize,
     ) -> Result<Vec<u8>, AppError> {
-        // As in `download_file_limited`: clamp before casting.
+        Self::read_blocks_limited(repo_id, block_store, block_ids, size, dec_key, max_bytes).await
+    }
+
+    /// The one truncating block reader behind both preview paths.
+    ///
+    /// A partial read must stop at `max_bytes` and never load the rest of the
+    /// file: callers use it for thumbnails and previews, and the two copies had to
+    /// keep the encrypted-block and truncation semantics in step by hand.
+    async fn read_blocks_limited(
+        repo_id: &str,
+        block_store: &DynBlockStorage,
+        block_ids: &[String],
+        size: i64,
+        dec_key: Option<(&[u8], &[u8])>,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, AppError> {
+        // Clamp before the cast: a negative `size` would wrap to `usize::MAX` and overflow.
         let mut out = Vec::with_capacity(size.max(0).min(max_bytes as i64) as usize);
         for block_id in block_ids {
             if out.len() >= max_bytes {
