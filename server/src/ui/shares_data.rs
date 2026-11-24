@@ -1,10 +1,8 @@
-//! Shared data for the user's shares page and the admin shares page.
+//! Row loading shared by the user shares page and the admin shares page.
 //!
-//! The two pages rendered the same rows from the same tables, but each carried its
-//! own copy of the mapping and its own lookups: the user page batched repository
-//! names while the admin page did one query per link and swallowed the error. One
-//! loader and one row shape now back both pages; only the ownership check and the
-//! template differ.
+//! Both pages read the same tables and need the same batched repository and user
+//! lookups; one loader and one row shape keep their error handling from drifting
+//! apart. Only the ownership check and the template differ.
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,16 +1,9 @@
 //! Dictionary-free tokenization for the content field.
 //!
-//! The content analyzer used to be jieba. Its embedded word list costs about
-//! 2.1 MiB in the binary, a zstd C dependency only to decompress that list,
-//! and ~33 MiB of RSS once loaded. Chinese full-text search does not need a
-//! dictionary: cutting CJK runs into overlapping bigrams and letting
-//! `QueryParser` turn a multi-token query into a `PhraseQuery` matches the same
-//! substrings, while a dictionary-free analyzer cannot disagree between
-//! indexing and query time.
-//!
-//! Latin text keeps whole-word tokens, split the same way `SimpleTokenizer`
-//! splits it, so English search is unchanged; only CJK runs are cut into
-//! bigrams.
+//! Cutting CJK runs into overlapping bigrams and letting `QueryParser` turn a
+//! multi-token query into a `PhraseQuery` matches the same substrings, so the
+//! analyzer cannot disagree between indexing and query time. Latin text keeps
+//! whole-word tokens, split the same way `SimpleTokenizer` splits it.
 //!
 //! The stream is lazy: a document may hold up to 8 MiB of text, and building a
 //! `Token` per bigram up front would allocate hundreds of MiB. It keeps one

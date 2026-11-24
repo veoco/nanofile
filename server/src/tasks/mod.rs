@@ -1,15 +1,10 @@
-//! The task system: one registry of jobs, one bounded store of runs, one
+//! The task system: one registry of jobs, one bounded store of runs and one
 //! executor that owns every state transition.
 //!
-//! [`TaskSystem::submit`] schedules work somebody will ask about later by id and
-//! produces a pollable, cancellable [`JobRun`]; [`TaskSystem::run_inline`] runs
-//! request-scoped work under the same limits but keeps no record. A long-lived
-//! listener has no owner, no progress and no terminal state, so it is a service.
-//!
-//! A job declares its history with [`History`](spec::History): an `EveryRun`
-//! job is written down when it starts and ends, a `Notable` one leaves nothing
-//! for an idle tick, and [`Origin`] decides whether an idle run counts as an
-//! event. Failures are always recorded; quiet is for ticks.
+//! A long-lived listener has no owner, no progress and no terminal state, so it
+//! is a service; a job records every run or only the notable ones, and a failure
+//! is always recorded. See `docs/dev/architecture.md` (Background tasks) for the
+//! submit/run_inline contract.
 
 pub mod admission;
 pub mod catalog;

@@ -1,17 +1,11 @@
 //! File activity event logger.
 //!
-//! One entry point records user-initiated file operations (create, rename, move,
-//! delete, edit) into the `activities` table. Each activity is a summary row;
-//! the affected objects live in `activity_items`. That keeps one upload of a
-//! large directory to one summary per operation instead of one row per file,
-//! while the exact item count stays available and the detail payload can be
-//! bounded independently.
-//!
-//! `create`/`delete` still aggregate single (non-commit) calls within a 5-minute
-//! window into one `batch_create` / `batch_delete` summary, matching seafevents'
-//! `save_user_activity`. The sync commit path groups by `commit_id` instead: a
-//! commit is a deterministic operation boundary, so it never needs a clock
-//! window. All errors are logged and never propagated: activity logging must not
+//! One entry point records user-initiated file operations into the `activities`
+//! table: one summary row per operation, with the affected objects in
+//! `activity_items`, so a large directory upload stays one summary and the item
+//! count and detail payload stay bounded. `create`/`delete` aggregate non-commit
+//! calls in a 5-minute window (seafevents' `save_user_activity`); the sync path
+//! groups by `commit_id`. Errors are logged, never propagated: logging must not
 //! break the caller.
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
