@@ -1046,14 +1046,15 @@ async fn run_server(
     // directory too, via `logging::init`), so the operator's umask does not decide.
     // Failures name the setting and the directory: under a service the only report is
     // a log line, and "Permission denied" without the path is not actionable.
-    for (field, dir) in [
-        ("storage.block_dir", &config.storage.block_dir),
-        ("storage.temp_dir", &config.storage.temp_dir),
-        ("storage.thumbnail_dir", &config.storage.thumbnail_dir),
-        ("storage.avatar_dir", &config.storage.avatar_dir),
-        ("index.index_dir", &config.index.index_dir),
-    ] {
-        infra::common::util::ensure_private_dir(dir).map_err(|e| {
+    // The directory list lives in one place: `Config::state_dirs` is also what the
+    // startup checks and preflight walk. The database's directory is skipped here
+    // because SQLite creates it together with the file.
+    for (field, dir) in config
+        .state_dirs()
+        .into_iter()
+        .filter(|(field, _)| *field != "database.url")
+    {
+        infra::common::util::ensure_private_dir(&dir).map_err(|e| {
             anyhow::anyhow!(
                 "cannot create or write the {field} directory {} ({e}); the account this \
                  process runs as needs write access to it",

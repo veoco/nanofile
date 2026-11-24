@@ -251,16 +251,28 @@ impl SetupPlan {
         self.data_dir.join("nanofile.log")
     }
 
-    /// Every directory the plan needs, in creation order, named by its setting.
-    pub fn directories(&self) -> Vec<(&'static str, PathBuf)> {
+    /// The state layout this plan writes: configuration setting -> absolute path.
+    ///
+    /// The one list behind [`Self::directories`], [`Self::apply_to`] and the
+    /// storage/index entries of [`Self::sections`]. Before, the same five
+    /// `data_dir.join("…")` names and their setting names were written three times,
+    /// so renaming a directory meant editing all three and could leave the plan and
+    /// the config it writes disagreeing.
+    fn state_layout(&self) -> Vec<(&'static str, PathBuf)> {
         vec![
-            ("data directory", self.data_dir.clone()),
             ("storage.block_dir", self.data_dir.join("blocks")),
             ("storage.temp_dir", self.data_dir.join("temp")),
             ("storage.thumbnail_dir", self.data_dir.join("thumbnails")),
             ("storage.avatar_dir", self.data_dir.join("avatars")),
             ("index.index_dir", self.data_dir.join("index")),
         ]
+    }
+
+    /// Every directory the plan needs, in creation order, named by its setting.
+    pub fn directories(&self) -> Vec<(&'static str, PathBuf)> {
+        let mut dirs = vec![("data directory", self.data_dir.clone())];
+        dirs.extend(self.state_layout());
+        dirs
     }
 
     /// Apply the plan to the in-memory configuration used before anything is written.
@@ -270,12 +282,17 @@ impl SetupPlan {
         config.server.site_url = self.site_url.clone();
         config.server.secret_key = self.secret_key.clone();
         config.database.url = self.database_url();
-        config.storage.block_dir = self.data_dir.join("blocks");
-        config.storage.temp_dir = self.data_dir.join("temp");
-        config.storage.thumbnail_dir = self.data_dir.join("thumbnails");
-        config.storage.avatar_dir = self.data_dir.join("avatars");
+        for (setting, path) in self.state_layout() {
+            match setting {
+                "storage.block_dir" => config.storage.block_dir = path,
+                "storage.temp_dir" => config.storage.temp_dir = path,
+                "storage.thumbnail_dir" => config.storage.thumbnail_dir = path,
+                "storage.avatar_dir" => config.storage.avatar_dir = path,
+                "index.index_dir" => config.index.index_dir = path,
+                other => unreachable!("unknown state directory setting {other}"),
+            }
+        }
         config.storage.block_encryption_mode = self.encryption.clone();
-        config.index.index_dir = self.data_dir.join("index");
         config.logging.file = Some(self.log_path());
     }
 
@@ -285,12 +302,23 @@ impl SetupPlan {
     pub fn sections(&self) -> Vec<ConfigSection<'static>> {
         let text = |value: String| ConfigValue::Text(std::borrow::Cow::Owned(value));
         let path = |value: PathBuf| text(value.to_string_lossy().to_string());
+        let layout = self.state_layout();
 
+        let layout_path = |setting: &str| {
+            path(
+                layout
+                    .iter()
+                    .find(|(name, _)| *name == setting)
+                    .expect("setting is in the state layout")
+                    .1
+                    .clone(),
+            )
+        };
         let mut storage = vec![
-            ("block_dir", path(self.data_dir.join("blocks"))),
-            ("temp_dir", path(self.data_dir.join("temp"))),
-            ("thumbnail_dir", path(self.data_dir.join("thumbnails"))),
-            ("avatar_dir", path(self.data_dir.join("avatars"))),
+            ("block_dir", layout_path("storage.block_dir")),
+            ("temp_dir", layout_path("storage.temp_dir")),
+            ("thumbnail_dir", layout_path("storage.thumbnail_dir")),
+            ("avatar_dir", layout_path("storage.avatar_dir")),
         ];
         // Off is the default and is not written: only a mode that changes how bytes are read.
         if self.encryption != "off" {
@@ -324,7 +352,7 @@ impl SetupPlan {
                 comment: "Full-text search index.",
                 entries: vec![
                     ("enabled", ConfigValue::Boolean(true)),
-                    ("index_dir", path(self.data_dir.join("index"))),
+                    ("index_dir", layout_path("index.index_dir")),
                 ],
             },
             ConfigSection {
@@ -509,6 +537,61 @@ mod tests {
         assert!(plan.data_dir.is_absolute(), "{:?}", plan.data_dir);
         assert!(plan.data_dir.ends_with("nanofile-setup-test-data"));
         let _ = std::fs::remove_dir(&plan.data_dir);
+    }
+
+    #[test]
+    fn the_plan_layout_matches_the_config_it_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let plan = valid_form(dir.path())
+            .into_plan(&defaults())
+            .expect("valid form");
+
+        let planned: Vec<_> = plan
+            .directories()
+            .into_iter()
+            .filter(|(name, _)| *name != "data directory")
+            .collect();
+        let mut applied = Config::default();
+        plan.apply_to(&mut applied);
+        // `state_dirs` also names the database's directory, which setup does not
+        // write as a storage setting; everything else must match one-for-one.
+        let applied_dirs: Vec<_> = applied
+            .state_dirs()
+            .into_iter()
+            .filter(|(name, _)| *name != "database.url")
+            .collect();
+        assert_eq!(planned, applied_dirs);
+
+        // The document's storage/index entries name the same paths as the layout.
+        let sections = plan.sections();
+        let storage = sections
+            .iter()
+            .find(|section| section.name == "storage")
+            .expect("storage section");
+        for (name, path) in &planned {
+            let written = match *name {
+                "storage.block_dir" => Some("block_dir"),
+                "storage.temp_dir" => Some("temp_dir"),
+                "storage.thumbnail_dir" => Some("thumbnail_dir"),
+                "storage.avatar_dir" => Some("avatar_dir"),
+                _ => None,
+            };
+            if let Some(written) = written {
+                let rendered = storage
+                    .entries
+                    .iter()
+                    .find(|(key, _)| *key == written)
+                    .and_then(|(_, value)| match value {
+                        ConfigValue::Text(text) => Some(text.to_string()),
+                        _ => None,
+                    });
+                assert_eq!(
+                    rendered.as_deref(),
+                    Some(path.to_string_lossy().as_ref()),
+                    "{name}"
+                );
+            }
+        }
     }
 
     #[test]
