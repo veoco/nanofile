@@ -19,10 +19,10 @@ A `Same` row is a route contract, not a byte-for-byte promise: check the linked 
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 25 | 40 | 100 | 0 |
+| Account Operations - User | 165 | 20 | 45 | 100 | 0 |
 | Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **34** | **53** | **180** | **37** |
+| **Total** | **304** | **29** | **58** | **180** | **37** |
 
 ## authentication
 
@@ -286,8 +286,8 @@ Nanofile has no invitations; registration is a web flow or admin-only.
 | [Get library info](https://seafile-api.readme.io/reference/get_api2-repos-repo-id)<br>`GET /api2/repos/{repo_id}/` | Differs | [our endpoint](/reference/api/libraries#get-api2-repos-repo-id) | Response has no `file_count` and no repo-level `modifier_*` fields. |
 | [Rename/Decrypt library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id)<br>`POST /api2/repos/{repo_id}/` | Differs | [our endpoint](/reference/api/libraries#post-api2-repos-repo-id) | Supports `rename`, `update`, `setpassword` and `checkpassword`; decrypt is not implemented. |
 | [Delete library](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id)<br>`DELETE /api2/repos/{repo_id}/` | Same | [our endpoint](/reference/api/libraries#delete-api2-repos-repo-id) |  |
-| [Get library owner](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-owner)<br>`GET /api2/repos/{repo_id}/owner/` | Missing | — | No ownership-transfer API. |
-| [Transfer library](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-owner)<br>`PUT /api2/repos/{repo_id}/owner/` | Missing | — |  |
+| [Get library owner](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-owner)<br>`GET /api2/repos/{repo_id}/owner/` | Missing | — | No separate route; `owner`/`owner_name` are in `GET /api2/repos/{repo_id}/` (v2.1: `owner_email`/`owner_name`/`owner_contact_email`). |
+| [Transfer library](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-owner)<br>`PUT /api2/repos/{repo_id}/owner/` | Missing | — | No ownership-transfer API. |
 | [Get library history](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-history)<br>`GET /api/v2.1/repos/{repo_id}/history/` | Missing | — | Only the per-commit changes view exists (`/api2/repo_history_changes/`). |
 | [Get library history limit days](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-history-limit)<br>`GET /api2/repos/{repo_id}/history-limit/` | Missing | — |  |
 | [Set library history limit days](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-history-limit)<br>`PUT /api2/repos/{repo_id}/history-limit/` | Missing | — |  |
@@ -586,7 +586,7 @@ No admin-wide share-link API.
 | --- | --- | --- | --- |
 | [List metadata records](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-records)<br>`GET /api/v2.1/repos/{repo_id}/metadata/records/` | Missing | — | Only a single record is available (`/metadata/record/`). |
 | [Update metadata records](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-metadata-records)<br>`PUT /api/v2.1/repos/{repo_id}/metadata/records/` | Missing | — | Update one record at a time through `/metadata/record/`. |
-| [Get metadata record](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-record)<br>`GET /api/v2.1/repos/{repo_id}/metadata/record/` | Differs | [our endpoint](/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-record) | Returns the record itself; the official `{metadata, results}` column envelope is not produced. |
+| [Get metadata record](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-record)<br>`GET /api/v2.1/repos/{repo_id}/metadata/record/` | Differs | [our endpoint](/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-record) | Returns the same `{metadata, results}` envelope; the difference is that `results` holds a single record and `metadata` only lists the built-in system columns. |
 | [Update metadata record](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-metadata-record)<br>`PUT /api/v2.1/repos/{repo_id}/metadata/record/` | Differs | [our endpoint](/reference/api/metadata#put-api-v2-1-repos-repo-id-metadata-record) | Addresses the file by `record_id`; the official `parent_dir`/`file_name` body is not read. |
 | [Add column](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-metadata-columns)<br>`POST /api/v2.1/repos/{repo_id}/metadata/columns/` | Missing | — | Columns are not modelled; records store free-form JSON. |
 
@@ -737,9 +737,9 @@ Route-level rows cannot capture everything. These differences apply across the s
 
 - **Credentials.** Besides the account token, Nanofile accepts API keys (capability-scoped, library-scoped) and, on `/seafhttp/`, repository sync tokens. Repo-Token callers use a library-scoped API key; the `/via-repo-token/` mirror is not routed.
 - **Authorization header.** Both `Bearer` and the legacy `Token` prefix are accepted on every API route, so clients written for pre-11 and post-11 Seafile both work.
-- **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`; a locked file is plain text. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.
+- **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`. A lock conflict is `403` with the plain-text body `File <path> is locked` on sync commits and on the lock endpoint; REST/WebDAV deletes of a file locked by another user answer `423` with a JSON `error_msg`. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.
 - **Version string.** `/api2/server-info/` reports `server.version` (`8.0.0` by default). Clients gate features on it; this page describes the routes that actually exist, independent of that string.
-- **Timestamps.** Most are Unix seconds. `file/detail/` and `search-file` use RFC 3339; `dir/detail/` returns a number where seahub returns a string.
+- **Timestamps.** Most are Unix seconds. `search-file`'s `mtime` and `file/detail/`'s `last_modified` use RFC 3339, while `file/detail/`'s `mtime` stays Unix seconds; `dir/detail/` returns a number where seahub returns a string.
 - **Listings.** The legacy directory listing hides `_Internal`, sorts directories first by lowercased name, and reports the real `dir_perm`/`permission`; `?oid=` revalidation is not implemented.
 - **Search.** `/api/v2.1/search-file/` caps results at 200; `/api2/search/` ignores the Pro-only filters.
 - **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. `zip-task` mints with `POST`.

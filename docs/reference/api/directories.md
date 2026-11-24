@@ -22,7 +22,7 @@ Lists one directory. The path is absolute; `/` is the root.
 | --- | --- |
 | `p` | Directory path, default `/`. |
 | `t` | `f` files only, `d` directories only. Any other value is a `400`. |
-| `recursive` | `1` walks the whole subtree depth-first. `_Internal` is hidden. |
+| `recursive` | `1` walks the whole subtree level by level (breadth-first). `_Internal` is hidden. |
 | `reloaddir` | Ignored on this endpoint; see the write operations below. |
 
 **Response `200`** — a bare JSON array of dirents:
@@ -35,9 +35,10 @@ Lists one directory. The path is absolute; `/` is the root.
 ```
 
 Directories come first, then files, each sorted by lowercased name — seahub's
-display order, not the stored object order. Recursive listings are depth-first
-and additionally carry `parent_dir`; their file entries also carry
-`modifier_name` and `modifier_contact_email`.
+display order, not the stored object order. Recursive listings expand level by
+level (breadth-first) and additionally carry `parent_dir`; file entries in both
+plain and recursive listings carry `modifier_name` and
+`modifier_contact_email`.
 
 A locked file additionally carries `is_locked: true`, `locked_by_me` (whether the
 caller holds the lock), `lock_owner`, `lock_owner_name` and `lock_time` (a unix
@@ -130,8 +131,9 @@ The listing shape the mobile clients and the web interface use.
 `user_perm` equals every entry's `permission` (Nanofile has no per-folder
 shares). With `with_thumbnail=true` each file entry gains
 `encoded_thumbnail_src`, which is always the empty string; the clients treat
-that as "build the thumbnail URL yourself". The recursive shape is the same. A
-locked file carries the same five lock keys as the legacy listing above.
+that as "build the thumbnail URL yourself". The recursive shape is not
+identical: its entries carry no `starred`, and `with_thumbnail` has no effect on
+them. A locked file carries the same five lock keys as the legacy listing above.
 The `oid`/`dir_perm` headers are set here too, with `dir_id` falling back to the
 all-zero sentinel for a headless library.
 
@@ -141,7 +143,8 @@ Requires read permission and `file.read`.
 
 `POST /api/v2.1/repos/{repo_id}/dir/`
 
-**Body** (JSON) — `{"p": "/new/folder"}`, or `p` as a query parameter.
+**Body** (JSON) — `{"p": "/new/folder"}`. A JSON body is required; `p` as a
+query parameter alone is not read.
 
 **Response `200`** — `{"success": true}`. Requires write permission and
 `file.write`.

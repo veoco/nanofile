@@ -115,13 +115,19 @@ display.
 | `name` | string | no | Display name, at most 255 characters. |
 | `capabilities` | string[] | yes | Capability ids. |
 | `all_repos` | bool | no | Apply to every library the account can see. Default `false`. |
-| `repo_permissions` | array | no | `[{"repo_id": "…", "permission": "r" \| "rw"}]`, used when `all_repos` is false. |
+| `repo_permissions` | array | yes when `all_repos` is `false`; must be omitted when it is `true` | `[{"repo_id": "…", "permission": "r" \| "rw"}]`, the libraries a scoped key may touch. A key that is not account-wide needs at least one entry, and the field may not be combined with `all_repos: true`. |
 | `expires_in_days` | integer | one of | Lifetime in days. |
 | `expires_at` | integer | one of | Absolute expiry, Unix seconds. |
 | `never` | bool | one of | Never expire. |
 
 Exactly one lifetime field is required. A key may not be created with a lifetime
-beyond `auth.api_key_max_ttl_days`.
+beyond `auth.api_key_max_ttl_days`. The library scope must be valid too: a key
+with `all_repos: false` needs at least one `repo_permissions` entry, while
+`all_repos: true` must not carry any. A minimal library-scoped body:
+
+```json
+{"name":"ci","capabilities":["library.read"],"all_repos":false,"repo_permissions":[{"repo_id":"<uuid>","permission":"r"}],"never":true}
+```
 
 **Response `200`** — the key view with an extra `key` field. That plaintext value
 is returned **once**; only a hash is stored.
@@ -140,9 +146,14 @@ keys answer `404`.
 `PUT /api2/api-keys/{id}/`
 
 Accepts any subset of `name`, `capabilities`, `all_repos`,
-`repo_permissions`, `expires_in_days`, `expires_at`, `never`. Omitted fields are
-left alone; omitting every lifetime field keeps the current expiry. A lifetime
-field, when present, must be the only one.
+`repo_permissions`, `expires_in_days`, `expires_at`, `never`, but the subset is
+not enough on its own: the resulting state must be valid. `all_repos: true`
+makes the key account-wide and must not carry bindings (a bare `all_repos: true`
+clears the stored ones); `all_repos: false` needs a non-empty
+`repo_permissions`, so turning an account-wide key back into a scoped one
+without sending bindings answers `400`. Omitted fields are left alone; omitting
+every lifetime field keeps the current expiry. A lifetime field, when present,
+must be the only one.
 
 **Response `200`** — the updated view.
 

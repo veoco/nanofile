@@ -20,18 +20,20 @@ Returns the authenticated account and its quota usage.
 {
   "email": "user@example.com",
   "name": "User",
-  "nickname": "Display name",
+  "nickname": "User",
   "id": 2,
   "usage": 22020651,
   "total": 30000000,
-  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/256/",
+  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/80/",
   "contact_email": "user@example.com",
   "space_usage": "73.40217%"
 }
 ```
 
-`total` is the storage quota in bytes; `-1` means unlimited. `nickname` is omitted
-when the account has no display name. Requires `account.read` for an API key.
+`total` is the storage quota in bytes; `-1` means unlimited. `nickname` is always
+present and always equals `name`: the display name when one is set, otherwise the
+account's name, otherwise the email's local part. Requires `account.read` for an
+API key.
 
 **Seafile** — same route. The response omits seahub's `login_id`, `is_staff`,
 `email_notification_interval`, `institution` and `department` fields; none of the
@@ -107,7 +109,8 @@ avatar URLs are embedded in pages and clients.
 Uploads a new primary avatar for the authenticated account.
 
 **Body** — `multipart/form-data` with an `avatar` file field (also accepted as
-`file`). Maximum 1 MiB; the image is re-encoded to PNG. Requires
+`file`). Maximum 1 MiB. The original is stored with its own extension (`.png`,
+`.jpg`, `.jpeg` or `.gif`); every thumbnail is rendered as PNG. Requires
 `account.write`.
 
 **Response `200`**
@@ -153,7 +156,7 @@ Administrator only.
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `email` | yes | Login address. |
-| `password` | yes | Must satisfy the password policy. |
+| `password` | yes | Hashed as sent. This legacy administrator endpoint does not apply `auth.password_min_length` or `require_strong_password`; `/api2/accounts/` (same handler as `/api2/account/`) and the web forms do. |
 | `is_admin` | no | Default `false`. |
 | `is_active` | no | Default `true`. |
 | `storage_quota` | no | Bytes; `null` uses the server default. |

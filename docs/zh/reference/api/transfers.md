@@ -57,7 +57,7 @@
 
 **断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。分块请求只能带一个文件。`/upload-aj/`、`/upload-aj/{token}`、`/upload-api/{token}`、`/update-aj/`、`/update-aj/{token}`、`/update-api/`、`/update-api/{token}` 都实现了它；`/api2/repos/{repo_id}/file/` 收到 `Content-Range` 仍返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
 
-需要写令牌；加密资料库要先缓存库密钥（上传链接请求会做），可分享的上传链接对加密库直接拒绝。
+需要写令牌。加密资料库要先缓存库密钥：通过 `?op=setpassword`（或 v2.1 `set-password/`）提供库密码；签发仓库上传链接本身不会做这件事。可分享的上传链接（`/api/v2.1/upload-links/`）对加密库直接拒绝。
 
 ## 从浏览器上传 {#post-upload-aj-token}
 
@@ -161,6 +161,6 @@
 
 `GET /zip/{token}`
 
-流式返回压缩包并消耗令牌。使用令牌时会重新核对条目列表与用户权限，因此被吊销的用户无法下载之前生成的包。一个令牌只能下载一次。
+流式返回压缩包并消耗令牌。条目清单在签发令牌时已确定；使用时只重新核对用户权限，因此被吊销的用户无法下载之前生成的包。一个令牌只能下载一次。
 
 **Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；仅有会话的 `/upload-aj/`、`/update-aj/`、`/update-api/` 是 Nanofile 扩展；省略 `parent_dir` 时回退到令牌绑定的目录，fileserver 则直接拒绝；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。

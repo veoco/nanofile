@@ -19,10 +19,10 @@
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 25 | 40 | 100 | 0 |
+| Account Operations - User | 165 | 20 | 45 | 100 | 0 |
 | Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **34** | **53** | **180** | **37** |
+| **Total** | **304** | **29** | **58** | **180** | **37** |
 
 ## authentication
 
@@ -286,8 +286,8 @@ Nanofile 没有邀请功能；注册走网页流程或由管理员创建。
 | [Get library info](https://seafile-api.readme.io/reference/get_api2-repos-repo-id)<br>`GET /api2/repos/{repo_id}/` | 有差异 | [本地接口](/zh/reference/api/libraries#get-api2-repos-repo-id) | 响应没有 `file_count`，也没有库级 `modifier_*` 字段。 |
 | [Rename/Decrypt library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id)<br>`POST /api2/repos/{repo_id}/` | 有差异 | [本地接口](/zh/reference/api/libraries#post-api2-repos-repo-id) | 支持 `rename`、`update`、`setpassword`、`checkpassword`；没有解密操作。 |
 | [Delete library](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id)<br>`DELETE /api2/repos/{repo_id}/` | 一致 | [本地接口](/zh/reference/api/libraries#delete-api2-repos-repo-id) |  |
-| [Get library owner](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-owner)<br>`GET /api2/repos/{repo_id}/owner/` | 未实现 | — | 没有转让所有权的接口。 |
-| [Transfer library](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-owner)<br>`PUT /api2/repos/{repo_id}/owner/` | 未实现 | — |  |
+| [Get library owner](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-owner)<br>`GET /api2/repos/{repo_id}/owner/` | 未实现 | — | 没有独立路由；`owner`/`owner_name` 在 `GET /api2/repos/{repo_id}/` 里（v2.1 为 `owner_email`/`owner_name`/`owner_contact_email`）。 |
+| [Transfer library](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-owner)<br>`PUT /api2/repos/{repo_id}/owner/` | 未实现 | — | 没有转让所有权的接口。 |
 | [Get library history](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-history)<br>`GET /api/v2.1/repos/{repo_id}/history/` | 未实现 | — | 只有按提交查看变更的接口（`/api2/repo_history_changes/`）。 |
 | [Get library history limit days](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-history-limit)<br>`GET /api2/repos/{repo_id}/history-limit/` | 未实现 | — |  |
 | [Set library history limit days](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-history-limit)<br>`PUT /api2/repos/{repo_id}/history-limit/` | 未实现 | — |  |
@@ -586,7 +586,7 @@ Nanofile 没有 Wiki。
 | --- | --- | --- | --- |
 | [List metadata records](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-records)<br>`GET /api/v2.1/repos/{repo_id}/metadata/records/` | 未实现 | — | 只能读取单条记录（`/metadata/record/`）。 |
 | [Update metadata records](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-metadata-records)<br>`PUT /api/v2.1/repos/{repo_id}/metadata/records/` | 未实现 | — | 通过 `/metadata/record/` 逐条更新。 |
-| [Get metadata record](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-record)<br>`GET /api/v2.1/repos/{repo_id}/metadata/record/` | 有差异 | [本地接口](/zh/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-record) | 直接返回记录；不产出官方的 `{metadata, results}` 列结构。 |
+| [Get metadata record](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-metadata-record)<br>`GET /api/v2.1/repos/{repo_id}/metadata/record/` | 有差异 | [本地接口](/zh/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-record) | 返回相同的 `{metadata, results}` 信封；差异是 `results` 只有一条记录、`metadata` 只含内置系统列。 |
 | [Update metadata record](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-metadata-record)<br>`PUT /api/v2.1/repos/{repo_id}/metadata/record/` | 有差异 | [本地接口](/zh/reference/api/metadata#put-api-v2-1-repos-repo-id-metadata-record) | 用 `record_id` 定位文件；不读取官方的 `parent_dir`/`file_name` 请求体。 |
 | [Add column](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-metadata-columns)<br>`POST /api/v2.1/repos/{repo_id}/metadata/columns/` | 未实现 | — | 没有列模型；记录保存自由格式 JSON。 |
 
@@ -733,9 +733,9 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
-- **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`；文件被锁时返回纯文本。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
+- **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交与加锁接口上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
 - **版本字符串。** `/api2/server-info/` 返回 `server.version`（默认 `8.0.0`），客户端据此裁剪功能；本页描述实际存在的路由，与该字符串无关。
-- **时间。** 多数是 Unix 秒。`file/detail/` 与 `search-file` 用 RFC 3339；`dir/detail/` 返回数字，而 seahub 返回字符串。
+- **时间。** 多数是 Unix 秒。`search-file` 的 `mtime` 与 `file/detail/` 的 `last_modified` 用 RFC 3339，而 `file/detail/` 的 `mtime` 仍是 Unix 秒；`dir/detail/` 返回数字，而 seahub 返回字符串。
 - **列表。** 旧版目录列表隐藏 `_Internal`，目录在前并按小写名称排序，报告真实的 `dir_perm`/`permission`；未实现 `?oid=` 校验。
 - **搜索。** `/api/v2.1/search-file/` 最多 200 条；`/api2/search/` 忽略 Pro 专属过滤参数。
 - **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。`zip-task` 用 `POST`。

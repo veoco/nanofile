@@ -60,8 +60,8 @@ Creates a library owned by the caller. Bodies may be JSON, URL-encoded forms
 | `name` | yes | Library name. |
 | `desc` | no | Description. |
 | `repo_id` | no | Client-chosen UUID for a cloned library. |
-| `encrypted` | no | `1` for an encrypted library. |
-| `enc_version` | no | Encryption version (`2` or `4`); ignored when not encrypted. |
+| `encrypted` | no | `1` marks an encrypted library. `magic`, `random_key`, `pwd_hash` or an `enc_version` of `2` or more also make it encrypted. |
+| `enc_version` | for encrypted libraries | Encryption version; only `2` and `4` are accepted. A value of `2` or more forces an encrypted library, it is not ignored. |
 | `magic`, `random_key`, `salt` | no | Encryption material a client computes itself. |
 | `pwd_hash`, `pwd_hash_algo`, `pwd_hash_params` | no | The Seafile 11+ password verifier triple, sent when `/api2/server-info/` advertised an algorithm. |
 | `passwd` | no | A plaintext password the server hashes itself. |
@@ -103,8 +103,9 @@ Seafile overloads this path; the query's `op` selects the operation:
 password operations return `{"success": true}`.
 
 Wrong-password checks share one per-(user, library) limiter; repeated failures
-answer `429`. Requires `library.update` (or `library.password` for the password
-operations); a key also needs write permission on the library.
+answer `429`. Every operation on this legacy path requires `library.update`;
+`library.password` only applies to the v2.1 `set-password/` endpoint. A key also
+needs write permission on the library.
 
 ## Delete a library {#delete-api2-repos-repo-id}
 
@@ -130,7 +131,7 @@ The v2.1 shape used by the mobile clients and the web interface.
       "repo_desc": "",
       "permission": "rw",
       "encrypted": false,
-      "type": "repo",
+      "type": "mine",
       "size": 22020651,
       "last_modified": "2026-10-24T09:00:00+00:00",
       "mtime": 1760000000,
@@ -142,7 +143,8 @@ The v2.1 shape used by the mobile clients and the web interface.
 }
 ```
 
-`last_modified` is RFC 3339; `mtime` is the same instant as Unix seconds.
+`type` is `mine` for a library the caller owns and `shared` for one shared with
+them. `last_modified` is RFC 3339; `mtime` is the same instant as Unix seconds.
 An encrypted library with `enc_version` 3 or 4 also carries `salt`, the
 per-library salt the client needs to derive its key; the key is omitted for
 other libraries. Requires `library.read`.
@@ -242,7 +244,10 @@ Returns an absolute URL the caller posts files to.
 | `replace` | `1` asks the uploader to replace an existing file instead of failing. |
 
 **Response `200`** — the URL as a JSON string. Requires write permission and
-`file.write`. Encrypted libraries refuse upload links.
+`file.write`. Unlike the anonymous upload links, this one is also minted for an
+encrypted library; the uploader must supply the library password first
+(`?op=setpassword` or the v2.1 `set-password/`), otherwise the upload answers
+`440`.
 
 The link's token is valid for one directory; see
 [Uploads and downloads](/reference/api/transfers#post-upload-api-token).

@@ -157,17 +157,28 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 ```json
 {
-  "_id": "…",
-  "_name": "notes.txt",
-  "_parent_dir": "/",
-  "_size": 1204,
-  "_file_mtime": "2026-10-24T09:00:00+00:00",
-  "_file_modifier": "user@example.com",
-  "_tags": [{ "row_id": "1", "display_value": "Important" }]
+  "results": [
+    {
+      "_id": "…",
+      "_name": "notes.txt",
+      "_parent_dir": "/",
+      "_size": 1204,
+      "_file_mtime": "2026-10-24T09:00:00+00:00",
+      "_file_modifier": "user@example.com",
+      "_tags": [{ "row_id": "1", "display_value": "Important" }]
+    }
+  ],
+  "metadata": [
+    { "key": "_size", "name": "_size", "type": "number" },
+    { "key": "_file_modifier", "name": "_file_modifier", "type": "text" },
+    { "key": "_file_mtime", "name": "_file_mtime", "type": "date" },
+    { "key": "_tags", "name": "_tags", "type": "link" },
+    { "key": "_description", "name": "_description", "type": "long-text" }
+  ]
 }
 ```
 
-保存的自定义字段会合并进对象。`file_name` 也可以写成 `name`。需要 `metadata.read`。
+记录在 `results[0]`，其 `_id` 就是打标签接口所需的 record id。`metadata` 是固定的系统列清单（`_size` 为 `number`、`_file_modifier` 为 `text`、`_file_mtime` 为 `date`、`_tags` 为 `link`、`_description` 为 `long-text`），不是资料库的自定义列。保存的自定义字段会合并进记录对象。`file_name` 也可以写成 `name`。需要 `metadata.read`。
 
 ## 更新文件的元数据记录 {#put-api-v2-1-repos-repo-id-metadata-record}
 
@@ -281,7 +292,7 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 **请求体**（JSON）—— `{"p": "/notes.txt"}`。
 
-**响应 `200`** —— `{"status": "ok", "indexed": true}`。仅资料库所有者或管理员；需要 `search.reindex`。
+**响应 `200`** —— `{"status": "ok", "indexed": true}`。需要该资料库的写权限与 `search.reindex`，不要求资料库所有者或管理员。
 
 ## 重建资料库索引 {#post-api2-reindex}
 

@@ -43,14 +43,21 @@ ones that version implies.
 
 ## Authentication {#authentication}
 
-Every endpoint requires one of four credentials, unless it is marked public.
+Every REST endpoint requires one of the four credentials below, unless it is
+marked public. WebDAV authenticates with HTTP Basic (account email plus a WebDAV
+API key; see [WebDAV](/reference/api/webdav)), and `/notification/events` with a
+signed event JWT (see [Notification WebSocket](/reference/api/notification)).
 
 | Credential | How it is sent | Where it is accepted |
 | --- | --- | --- |
 | Account token | `Authorization: Bearer <token>`; the legacy `Authorization: Token <token>` is accepted too | Every `/api2/` and `/api/v2.1/` endpoint |
-| Session cookie | `seahub-session` cookie, set by signing in at `/accounts/login/`; state-changing requests also need `X-CSRFToken` matching the `sfcsrftoken` cookie | The same API surfaces, and the only credential the key-management endpoints accept |
-| API key | `Authorization: Bearer <key>` | The API surfaces, limited to the key's capabilities and library scope; never `/seafhttp/` |
+| Session cookie | `seahub-session` cookie, set by signing in at `/accounts/login/`; state-changing requests also need `X-CSRFToken` matching the `sfcsrftoken` cookie | The same API surfaces; the key-management routes accept only an account session (this cookie, or the account token from `POST /api2/auth-token/`), never an API key or sync token |
+| API key | `Authorization: Bearer <key>` | The API surfaces, limited to the key's capabilities and library scope; with `sync.read`/`sync.write` it also serves `/seafhttp/`, within the same library scope |
 | Sync token | `Seafile-Repo-Token: <token>` (or `Authorization: Token <token>`) | `/seafhttp/` only, bound to one library |
+
+`/seafhttp/` accepts a library sync token (what the official clients use), an API
+key carrying `sync.read`/`sync.write`, or an account token; the library named in
+the URL must be within the credential's scope.
 
 An account token is minted by [`POST /api2/auth-token/`](/reference/api/authentication#post-api2-auth-token)
 with the account's username and password. API keys are Nanofile's own
@@ -76,8 +83,9 @@ endpoint's page names it.
 - Seafile overloads `POST` on a resource path: `POST /api2/repos/{repo_id}/file/`
   creates, renames, moves, copies or reverts depending on the form's
   `operation` field. The endpoint pages list the accepted operations.
-- Boolean query parameters accept `true`/`false` case-insensitively, matching
-  seahub's comparison.
+- Seafile-style boolean query parameters (`reloaddir` and the like) accept
+  `true`/`false` case-insensitively, matching seahub's comparison. Typed boolean
+  parameters parsed by serde accept only lowercase `true`/`false`.
 
 ## Responses
 
@@ -94,9 +102,11 @@ Two shapes are special:
   `error_msg`, so either client style reads a message:
   `{"detail": "…", "error_msg": "…"}`.
 - The login endpoint reports failures as DRF serializer errors:
-  `{"non_field_errors": ["…"]}`. A locked file answers `403` with the plain
-  text `File <path> is locked` because the sync daemon parses that body with a
-  regular expression.
+  `{"non_field_errors": ["…"]}`. On the sync commit and file-lock paths a locked
+  file answers `403` with the plain text `File <path> is locked`, because the
+  sync daemon parses that body with a regular expression. A REST or WebDAV
+  deletion of a file locked by another account answers `423` instead (an
+  `error_msg` JSON body on REST, an empty body on WebDAV).
 
 ### Status codes
 
@@ -120,7 +130,7 @@ Two shapes are special:
 | `445` | Seafile: the library is corrupted. |
 | `446` | Seafile: blocks are missing for an uploaded file. |
 | `500` | Internal error. |
-| `503` | Temporarily unavailable (maintenance or connection limit). |
+| `503` | Temporarily unavailable: the notification WebSocket connection limit is reached. There is no HTTP maintenance mode. |
 | `520` | Seafile: the operation failed. |
 
 ## Ids and timestamps

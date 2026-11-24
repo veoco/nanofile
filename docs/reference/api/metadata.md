@@ -177,17 +177,32 @@ record id they need for tags.
 
 ```json
 {
-  "_id": "…",
-  "_name": "notes.txt",
-  "_parent_dir": "/",
-  "_size": 1204,
-  "_file_mtime": "2026-10-24T09:00:00+00:00",
-  "_file_modifier": "user@example.com",
-  "_tags": [{ "row_id": "1", "display_value": "Important" }]
+  "results": [
+    {
+      "_id": "…",
+      "_name": "notes.txt",
+      "_parent_dir": "/",
+      "_size": 1204,
+      "_file_mtime": "2026-10-24T09:00:00+00:00",
+      "_file_modifier": "user@example.com",
+      "_tags": [{ "row_id": "1", "display_value": "Important" }]
+    }
+  ],
+  "metadata": [
+    { "key": "_size", "name": "_size", "type": "number" },
+    { "key": "_file_modifier", "name": "_file_modifier", "type": "text" },
+    { "key": "_file_mtime", "name": "_file_mtime", "type": "date" },
+    { "key": "_tags", "name": "_tags", "type": "link" },
+    { "key": "_description", "name": "_description", "type": "long-text" }
+  ]
 }
 ```
 
-Stored custom fields are merged into the object. `file_name` may be sent as
+The record sits in `results[0]`; its `_id` is the record id the tag endpoints
+take. `metadata` is the fixed system-column list (`_size` is `number`,
+`_file_modifier` is `text`, `_file_mtime` is `date`, `_tags` is `link` and
+`_description` is `long-text`), not the library's user-defined columns. Stored
+custom fields are merged into the record object. `file_name` may be sent as
 `name`. Requires `metadata.read`.
 
 ## Update a file's metadata record {#put-api-v2-1-repos-repo-id-metadata-record}
@@ -315,8 +330,9 @@ Reindexes one file synchronously.
 
 **Body** (JSON) — `{"p": "/notes.txt"}`.
 
-**Response `200`** — `{"status": "ok", "indexed": true}`. Library owner or
-administrator only; requires `search.reindex`.
+**Response `200`** — `{"status": "ok", "indexed": true}`. Requires write
+permission on the library plus `search.reindex`; library owner or administrator
+is not required.
 
 ## Rebuild a library's index {#post-api2-reindex}
 

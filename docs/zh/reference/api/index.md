@@ -28,14 +28,16 @@
 
 ## 认证 {#authentication}
 
-除标注为公开的接口外，每个接口都要求以下四种凭据之一。
+除标注为公开的接口外，每个 REST 接口都要求以下四种凭据之一。WebDAV 用 HTTP Basic（账号邮箱加 WebDAV API 密钥，见 [WebDAV](/zh/reference/api/webdav)），`/notification/events` 用签名的事件 JWT（见 [通知 WebSocket](/zh/reference/api/notification)）。
 
 | 凭据 | 发送方式 | 适用范围 |
 | --- | --- | --- |
 | 账号令牌 | `Authorization: Bearer <token>`；也接受旧式 `Authorization: Token <token>` | 全部 `/api2/` 与 `/api/v2.1/` 接口 |
-| 会话 Cookie | 在 `/accounts/login/` 登录后设置的 `seahub-session`；改变状态的请求还需 `X-CSRFToken`，值来自 `sfcsrftoken` Cookie | 同样的 API 接口，也是密钥管理接口唯一接受的凭据 |
-| API 密钥 | `Authorization: Bearer <key>` | API 接口，受密钥的能力与资料库范围限制；从不能用于 `/seafhttp/` |
+| 会话 Cookie | 在 `/accounts/login/` 登录后设置的 `seahub-session`；改变状态的请求还需 `X-CSRFToken`，值来自 `sfcsrftoken` Cookie | 同样的 API 接口；密钥管理路由只接受账号会话（该 Cookie 或 `POST /api2/auth-token/` 换来的账号令牌），API 密钥与同步令牌都会被拒 |
+| API 密钥 | `Authorization: Bearer <key>` | API 接口，受密钥的能力与资料库范围限制；带 `sync.read`/`sync.write` 时也用于 `/seafhttp/`，同样受库范围限制 |
 | 同步令牌 | `Seafile-Repo-Token: <token>`（或 `Authorization: Token <token>`） | 仅 `/seafhttp/`，构造上绑定一个资料库 |
+
+`/seafhttp/` 接受库同步令牌（官方客户端用这种）、带 `sync.read`/`sync.write` 的 API 密钥，或账号令牌；URL 中的资料库必须在凭据的范围内。
 
 账号令牌由 [`POST /api2/auth-token/`](/zh/reference/api/authentication#post-api2-auth-token) 用账号密码换取。API 密钥是 Nanofile 自己的凭据，见 [API 密钥与凭据](/zh/reference/api/api-keys)。
 
@@ -49,7 +51,7 @@
 - 路径参数写作 `{repo_id}`；查询参数单独列出。路径值必须 URL 编码。
 - 文件与目录路径是绝对路径（`/a/b.txt`），通过 `p`（或 `path`）查询参数传递，不作为 URL 段。
 - Seafile 在同一路径上重载 `POST`：`POST /api2/repos/{repo_id}/file/` 按表单里的 `operation` 创建、重命名、移动、复制或回退。接口页列出支持的操作。
-- 布尔查询参数按 seahub 的规则大小写不敏感地接受 `true`/`false`。
+- Seafile 风格的布尔查询参数（`reloaddir` 等）按 seahub 的规则大小写不敏感地接受 `true`/`false`；serde 解析的带类型布尔参数只接受小写 `true`/`false`。
 
 ## 响应
 
@@ -62,7 +64,7 @@
 有两种特殊形状：
 
 - 认证失败返回 `401`，同时带 DRF 的 `detail` 与 Seafile 的 `error_msg`，两种客户端都能读到消息：`{"detail": "…", "error_msg": "…"}`。
-- 登录失败使用 DRF 的序列化错误：`{"non_field_errors": ["…"]}`。文件被锁时返回 `403` 与纯文本 `File <path> is locked`，因为同步守护进程用正则解析这段正文。
+- 登录失败使用 DRF 的序列化错误：`{"non_field_errors": ["…"]}`。锁冲突在同步提交与文件加锁路径返回 `403` 与纯文本 `File <path> is locked`，因为同步守护进程用正则解析这段正文；REST 或 WebDAV 删除被其他账号锁定的文件则返回 `423`（REST 带 `error_msg` JSON 正文，WebDAV 为空正文）。
 
 ### 状态码
 
@@ -86,7 +88,7 @@
 | `445` | Seafile：资料库已损坏。 |
 | `446` | Seafile：上传的文件缺少块。 |
 | `500` | 内部错误。 |
-| `503` | 暂时不可用（维护或连接数上限）。 |
+| `503` | 暂时不可用：通知 WebSocket 连接数达到上限。没有 HTTP 维护模式响应。 |
 | `520` | Seafile：操作失败。 |
 
 ## ID 与时间

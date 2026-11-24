@@ -55,7 +55,8 @@ the library; they answer `403` otherwise.
 ## PROPFIND
 
 The request body may be empty, `<D:propfind><D:allprop/></D:propfind>`,
-`<D:propname/>`, or a `<D:prop>` selection. Requested and returned properties:
+`<D:propname/>`, or a `<D:prop>` selection. The server always returns the same
+fixed property set; a `<D:prop>` selection does not trim it:
 
 | Property | On | Value |
 | --- | --- | --- |
@@ -64,6 +65,8 @@ The request body may be empty, `<D:propfind><D:allprop/></D:propfind>`,
 | `D:getcontentlength` | files | Size in bytes; **absent for collections** |
 | `D:getlastmodified` | every resource | RFC 1123 date |
 | `D:getetag` | files | The FS object id, quoted — the same value `GET` returns in `ETag` |
+| `D:supportedlock` | every resource | Empty element |
+| `D:lockdiscovery` | every resource | Empty element |
 
 `Depth` accepts `0`, `1` and `infinity` (the default). `Depth: infinity` on a
 file is a `400`. A listing whose result would exceed
@@ -78,7 +81,7 @@ trailing slash on collections.
 ## GET and HEAD
 
 The response carries a strong `ETag: "<fs_id>"`, the MIME type inferred from the
-name, `Cache-Control: private, max-age=604800`, and the file bytes. A single
+name, `Cache-Control: private, no-cache`, and the file bytes. A single
 `Range` is honoured (the reply is `206` with `Content-Range`); an unsatisfiable
 range on a non-empty file answers `416` with `Content-Range: bytes */<size>`, while
 a zero-length file stays `200`. `If-None-Match` is evaluated before `Range`, so a
@@ -90,9 +93,9 @@ the same headers without a body.
 The body is streamed into blocks as it arrives. The target's parent must exist
 (`409` otherwise); an existing file is replaced, and `201` vs `204` says whether
 the resource existed. There is no `If-Match`/`If-Unmodified-Since`
-implementation: a concurrent write is last-writer-wins, but a locked file is
-reported with `403` and the plain-text `File <path> is locked` body that the
-clients parse.
+implementation and no file-lock check: a concurrent write is last-writer-wins,
+even when another account has locked the file. A `DELETE` of a file locked by
+another account answers `423`.
 
 ## MOVE and COPY
 
@@ -102,8 +105,8 @@ its parent must exist (`409`). `Overwrite: F` on an existing destination answers
 `412`; the default `T` replaces it. Moving a directory into its own subtree is a
 `403`. Same-library moves are one commit.
 
-The copied tree's blocks are duplicated into the destination library because
-blocks are stored per library.
+A same-library `COPY` is a reference copy: the new dirent points at the source's
+`fs_id`, so blocks are shared, not duplicated.
 
 ## Known limitations
 

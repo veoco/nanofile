@@ -40,7 +40,7 @@ HTTP Basic：用户名是账号**邮箱**，密码是**WebDAV API 密钥**（在
 
 ## PROPFIND
 
-请求体可以为空、`<D:propfind><D:allprop/></D:propfind>`、`<D:propname/>`，或 `<D:prop>` 选择。请求与返回的属性：
+请求体可以为空、`<D:propfind><D:allprop/></D:propfind>`、`<D:propname/>`，或 `<D:prop>` 选择。服务端总是返回同一组固定属性，`<D:prop>` 选择不会裁剪：
 
 | 属性 | 出现于 | 值 |
 | --- | --- | --- |
@@ -49,6 +49,8 @@ HTTP Basic：用户名是账号**邮箱**，密码是**WebDAV API 密钥**（在
 | `D:getcontentlength` | 文件 | 字节数；**目录不返回** |
 | `D:getlastmodified` | 所有资源 | RFC 1123 日期 |
 | `D:getetag` | 文件 | FS 对象 id，带引号——与 `GET` 的 `ETag` 相同 |
+| `D:supportedlock` | 所有资源 | 空元素 |
+| `D:lockdiscovery` | 所有资源 | 空元素 |
 
 `Depth` 接受 `0`、`1` 与 `infinity`（默认）。文件上的 `Depth: infinity` 返回 `400`。结果超过 `server.max_propfind_entries`（默认 100,000）的列表会被拒绝而不是截断：`403` 与 RFC 4918 前置条件正文 `<D:error xmlns:D="DAV:"><D:propfind-finite-depth/></D:error>`，提示客户端改用更浅的深度。这与 seafdav 关闭无限深度时的行为一致。
 
@@ -56,17 +58,17 @@ HTTP Basic：用户名是账号**邮箱**，密码是**WebDAV API 密钥**（在
 
 ## GET 与 HEAD
 
-响应带强 `ETag: "<fs_id>"`、按名称推断的 MIME、`Cache-Control: private, max-age=604800` 与文件字节。支持单个 `Range`（返回 `206` 与 `Content-Range`）；非空文件上不可满足的区间返回 `416` 与 `Content-Range: bytes */<size>`，零字节文件仍是 `200`。`If-None-Match` 在 `Range` 之前求值，所以匹配的校验值即使带区间也返回 `304`。`HEAD` 返回相同头、无正文。
+响应带强 `ETag: "<fs_id>"`、按名称推断的 MIME、`Cache-Control: private, no-cache` 与文件字节。支持单个 `Range`（返回 `206` 与 `Content-Range`）；非空文件上不可满足的区间返回 `416` 与 `Content-Range: bytes */<size>`，零字节文件仍是 `200`。`If-None-Match` 在 `Range` 之前求值，所以匹配的校验值即使带区间也返回 `304`。`HEAD` 返回相同头、无正文。
 
 ## PUT
 
-请求体边到达边写入块。目标的父目录必须存在（否则 `409`）；已有文件被替换，`201`/`204` 表示资源此前是否存在。没有实现 `If-Match`/`If-Unmodified-Since`：并发写是后写获胜，但被锁文件返回 `403` 与客户端解析的纯文本 `File <path> is locked`。
+请求体边到达边写入块。目标的父目录必须存在（否则 `409`）；已有文件被替换，`201`/`204` 表示资源此前是否存在。没有实现 `If-Match`/`If-Unmodified-Since`，也不检查文件锁：并发写是后写获胜，即使另一个账号已锁定该文件也一样。删除被其他账号锁定的文件返回 `423`。
 
 ## MOVE 与 COPY
 
 `Destination` 指定目标（`/dav/{repo_id}/{path}`；也接受绝对 URL）。目标必须在同一资料库（否则 `403`），父目录必须存在（`409`）。目标已存在且 `Overwrite: F` 返回 `412`；默认 `T` 会替换。把目录移进自己的子树返回 `403`。同库移动是一个提交。
 
-复制出来的树会把块复制进目标资料库，因为块按资料库存储。
+同库 `COPY` 是引用复制：新目录项指向源的 `fs_id`，块共享而不复制。
 
 ## 已知限制
 

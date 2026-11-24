@@ -16,17 +16,17 @@
 {
   "email": "user@example.com",
   "name": "User",
-  "nickname": "Display name",
+  "nickname": "User",
   "id": 2,
   "usage": 22020651,
   "total": 30000000,
-  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/256/",
+  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/80/",
   "contact_email": "user@example.com",
   "space_usage": "73.40217%"
 }
 ```
 
-`total` 是存储配额（字节），`-1` 表示不限。没有显示名时省略 `nickname`。API 密钥需要 `account.read`。
+`total` 是存储配额（字节），`-1` 表示不限。`nickname` 始终存在且等于 `name`：有显示名时取显示名，否则取账号名，再否则取邮箱的本地部分。API 密钥需要 `account.read`。
 
 **Seafile** —— 路由相同。响应不包含 seahub 的 `login_id`、`is_staff`、`email_notification_interval`、`institution`、`department`；官方客户端都不读这些字段。
 
@@ -87,7 +87,7 @@
 
 为当前账号上传新头像。
 
-**请求体** —— `multipart/form-data`，文件字段名 `avatar`（也接受 `file`）。最大 1 MiB；图片会重新编码为 PNG。需要 `account.write`。
+**请求体** —— `multipart/form-data`，文件字段名 `avatar`（也接受 `file`）。最大 1 MiB。原图按自己的扩展名保存（`.png`、`.jpg`、`.jpeg` 或 `.gif`）；所有缩略图统一渲染为 PNG。需要 `account.write`。
 
 **响应 `200`**
 
@@ -131,7 +131,7 @@
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
 | `email` | 是 | 登录地址。 |
-| `password` | 是 | 必须满足密码策略。 |
+| `password` | 是 | 按传入值哈希。该旧版管理员端点不套用 `auth.password_min_length` 与 `require_strong_password`；`/api2/accounts/`（与 `/api2/account/` 是同一 handler）与网页表单才套用。 |
 | `is_admin` | 否 | 默认 `false`。 |
 | `is_active` | 否 | 默认 `true`。 |
 | `storage_quota` | 否 | 字节数；`null` 用服务器默认值。 |

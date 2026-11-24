@@ -72,12 +72,16 @@ Locks or unlocks a file for other sync clients. The request body is a
 URL-encoded form with `operation=lock` or `operation=unlock`.
 
 **Response `200`** — `{"success": true}`. Requires write permission and
-`file.write`. Locks are advisory: any writer may lock or unlock, and only sync
-commit uploads enforce them. A commit that creates, edits, deletes, renames or
-moves a path held by another user is rejected with `403` and the plain-text body
-`File <path> is locked`; commits that do not touch that path are unaffected.
-Direct REST and WebDAV writes do not consult locks. A lock whose file is gone
-from the library is removed, so it cannot block a later file at the same path.
+`file.write`. A lock is exclusive: locking a path another user holds answers
+`403` with the plain-text body `File <path> is locked`, and unlocking another
+user's lock is also `403`. An unlock with no lock row is a success: the file is
+already unlocked. Sync commits check locks by diffing the tree and reject a
+commit that creates, edits, deletes, renames or moves a path held by another user
+with the same `403` and plain-text body; commits that do not touch that path are
+unaffected. REST and WebDAV deletes check locks too and answer `423` with
+`{"error_msg": "File <path> is locked"}`. Uploads and overwrites do not consult
+locks, so the last writer wins. A lock whose file is gone from the library is
+removed, so it cannot block a later file at the same path.
 
 ## Delete a file {#delete-api2-repos-repo-id-file}
 
@@ -138,7 +142,7 @@ Metadata for one file, including its last modifier and star state.
   "mtime": 1760000000,
   "size": 1204,
   "last_modified": "2026-10-24T09:00:00+00:00",
-  "last_modifier_name": "User",
+  "last_modifier_name": "user@example.com",
   "last_modifier_email": "user@example.com",
   "last_modifier_contact_email": "user@example.com",
   "last_modifier_avatar": "https://files.example.com/avatars/user/user@example.com/resized/72/",

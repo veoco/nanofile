@@ -99,12 +99,16 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 | `name` | string | 否 | 显示名，最长 255 字符。 |
 | `capabilities` | string[] | 是 | 能力 id。 |
 | `all_repos` | bool | 否 | 适用于账号可见的所有资料库，默认 `false`。 |
-| `repo_permissions` | array | 否 | `[{"repo_id": "…", "permission": "r" \| "rw"}]`，`all_repos` 为 false 时使用。 |
+| `repo_permissions` | array | `all_repos` 为 `false` 时必填；为 `true` 时必须省略 | `[{"repo_id": "…", "permission": "r" \| "rw"}]`，受限密钥可访问的资料库。非全库密钥至少要给一项，且不能与 `all_repos: true` 同时出现。 |
 | `expires_in_days` | integer | 三选一 | 有效天数。 |
 | `expires_at` | integer | 三选一 | 绝对过期时间，Unix 秒。 |
 | `never` | bool | 三选一 | 永不过期。 |
 
-必须且只能给一个有效期字段。有效期不能超过 `auth.api_key_max_ttl_days`（0 表示不设上限）。
+必须且只能给一个有效期字段。有效期不能超过 `auth.api_key_max_ttl_days`（0 表示不设上限）。库范围也必须合法：`all_repos: false` 的密钥至少要有一项 `repo_permissions`，`all_repos: true` 则不能带任何项。最小合法受限请求体：
+
+```json
+{"name":"ci","capabilities":["library.read"],"all_repos":false,"repo_permissions":[{"repo_id":"<uuid>","permission":"r"}],"never":true}
+```
 
 **响应 `200`** —— 密钥视图外加一个 `key` 字段。明文只返回**一次**，服务端只存哈希。
 
@@ -120,7 +124,7 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 `PUT /api2/api-keys/{id}/`
 
-接受 `name`、`capabilities`、`all_repos`、`repo_permissions`、`expires_in_days`、`expires_at`、`never` 的任意子集。省略的字段保持不变；三个有效期字段都省略时保留当前过期时间；出现时必须只有一个。
+接受 `name`、`capabilities`、`all_repos`、`repo_permissions`、`expires_in_days`、`expires_at`、`never` 的任意子集，但最终状态必须合法。`all_repos: true` 把密钥改为全库，不能带绑定（只给 `all_repos: true` 会清掉已存的绑定）；`all_repos: false` 要求非空的 `repo_permissions`，所以把全库密钥改回受限范围却不给绑定会返回 `400`。省略的字段保持不变；三个有效期字段都省略时保留当前过期时间；出现时必须只有一个。
 
 **响应 `200`** —— 更新后的视图。
 

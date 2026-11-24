@@ -97,9 +97,11 @@ commits. A chunked request carries exactly one file. `/upload-aj/`,
 `400`. See
 [uploaded bytes](#get-api-v2-1-repos-repo-id-file-uploaded-bytes).
 
-Requires a write token; encrypted libraries need the library key to be cached
-first (the upload link request does that; a shareable upload link is refused for
-an encrypted library).
+Requires a write token. For an encrypted library the library key must be cached
+first: supply the library password through `?op=setpassword` (or the v2.1
+`set-password/`); minting the repo upload link itself does not do that. A
+shareable upload link (`/api/v2.1/upload-links/`) is refused for an encrypted
+library.
 
 ## Upload a file from the browser {#post-upload-aj-token}
 
@@ -246,9 +248,10 @@ selection with no files a `404`, and exceeding the per-archive entry/byte caps
 
 `GET /zip/{token}`
 
-Streams the archive and consumes the token. The entry list and the user's
-permission are re-checked when the token is used, so a revoked user cannot
-download an archive minted before the revocation. One download per token.
+Streams the archive and consumes the token. The entry list is fixed when the
+token is minted; on use the server only re-checks the user's permission, so a
+revoked user cannot download an archive minted before the revocation. One
+download per token.
 
 **Seafile** — the transfer flow and field names match seahub. Differences:
 the returned upload/update URLs are `/upload-api/<token>` and

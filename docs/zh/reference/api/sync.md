@@ -1,6 +1,6 @@
 # 同步协议
 
-桌面端与移动端守护进程使用的 `/seafhttp/` API。它和 REST API 是两套凭据体系：请求携带**资料库同步令牌**，从不接受账号令牌或 API 密钥。
+桌面端与移动端守护进程使用的 `/seafhttp/` API。官方客户端使用**资料库同步令牌**；服务端同时接受带 `sync.read`/`sync.write` 能力的 API 密钥与会话/账号令牌，二者都受 URL 中的资料库与密钥的库范围约束。
 
 协议规则——提交 id、FS 对象 id、目录顺序、空头哨兵——见 [Seafile 兼容性](/zh/dev/protocol)；本页记录协议端点。
 
@@ -13,7 +13,7 @@
 | `Seafile-Repo-Token: <token>` | 资料库同步令牌。 |
 | `Authorization: Token <token>` | 同一令牌，供使用标准头的客户端。 |
 
-同步令牌构造上绑定一个资料库。把令牌用在另一个资料库的 URL 上返回 `403`，过期令牌或账号不再活跃也一样。`head-commits-multi` 是唯一不认证的端点（见下）。
+同步令牌构造上绑定一个资料库。把令牌用在另一个资料库的 URL 上返回 `403`，过期令牌或账号不再活跃也一样。`protocol-version` 与 `head-commits-multi` 不需要凭据（见下）。
 
 ## 状态码
 
@@ -26,7 +26,6 @@
 | `443` | 上传会超过所有者的存储配额。 |
 | `444` | 资料库已删除。 |
 | `446` | 上传的文件缺少块。 |
-| `441` | 写入目标不存在。 |
 
 ## 协议版本 {#get-seafhttp-protocol-version}
 
@@ -54,7 +53,7 @@
 
 `GET /seafhttp/repo/{repo_id}/commit/{commit_id}`
 
-以 JSON 返回提交对象（`application/json`），形状是 Seafile 的 `CommitData`，加密资料库会带加密信息。全零 id 返回一个合成的空提交，无提交资料库的客户端读的就是它。
+以 JSON 返回提交对象，形状是 Seafile 的 `CommitData`，加密资料库会带加密信息。正文是 JSON 文本，但响应的 `Content-Type` 是 `application/octet-stream`，不是 `application/json`。全零 id 返回一个合成的空提交，无提交资料库的客户端读的就是它。
 
 ## 上传提交 {#put-seafhttp-repo-repo-id-commit-commit-id}
 
@@ -70,13 +69,13 @@
 
 请求体：资料库 id 的 JSON 数组（最多 4096 个）。**响应 `200`** —— 每个 id 映射到头提交 id 的对象。
 
-该端点按协议**不认证**：守护进程调用时不带凭据，因此改为严格校验 id。
+该端点与 `protocol-version` 按协议**不认证**：守护进程调用时不带凭据，因此多库端点改为严格校验 id。
 
 ## 列出 FS 对象 id {#get-seafhttp-repo-repo-id-fs-id-list}
 
-`GET /seafhttp/repo/{repo_id}/fs-id-list/?server-head=<id>&client-head=<id>&dir-only=<0|1>`
+`GET /seafhttp/repo/{repo_id}/fs-id-list/?server-head=<id>&client-head=<id>&dir-only=<value>`
 
-客户端需要下载的 FS 对象 id。给了 `client-head` 时只返回两棵树的差异；否则返回整棵树。`dir-only` 只返回目录对象。
+客户端需要下载的 FS 对象 id。给了 `client-head` 时只返回两棵树的差异；否则返回整棵树。`dir-only` 按是否出现判断：带任意非空值（包括 `0`）都只返回目录对象；省略才返回全部对象。
 
 **响应 `200`** —— 40 位十六进制 id 的 JSON 数组。缺少 `server-head` 或 id 非法返回 `400`；空头返回 `[]`。
 
@@ -150,7 +149,7 @@
 
 `PUT /seafhttp/repo/{repo_id}/lock-file?p=<path>`
 
-**响应 `200`** —— `{"success": true}`。需要写权限。锁是建议性的，见 [文件](/zh/reference/api/files#put-api2-repos-repo-id-file)。
+**响应 `200`** —— `{"success": true}`。需要写权限。锁是排他的：他人持有的路径不能加锁也不能解锁（`403`），见 [文件](/zh/reference/api/files#put-api2-repos-repo-id-file)。
 
 ## 解锁文件 {#put-seafhttp-repo-repo-id-unlock-file}
 

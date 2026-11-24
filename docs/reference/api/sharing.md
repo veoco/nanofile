@@ -91,7 +91,7 @@ form).
 | `repo_id` | yes | Library id. |
 | `path` | yes | Shared file or directory path. |
 | `password` | no | Access password. |
-| `expire_days` | no | Days until expiry (1 minimum). |
+| `expire_days` | no | Days until expiry. |
 | `expiration_time` | no | RFC 3339 expiry, used when `expire_days` is absent. |
 | `description` | no | Free text stored with the link. |
 
@@ -132,8 +132,8 @@ Identical to `POST /api/v2.1/share-links/`; the Android client posts here.
 
 `GET /api/v2.1/share-links/{token}/`
 
-One of the caller's links, in the creation shape plus its `view_cnt`. Requires
-`share_link.read`; another user's link is a `404`.
+One of the caller's links, in the detail shape: the creation shape without
+`s_type`. Requires `share_link.read`; another user's link is a `404`.
 
 ## Update a share link {#put-api-v2-1-share-links-token}
 
@@ -149,8 +149,10 @@ Requires `share_link.write`.
 
 `DELETE /api/v2.1/share-links/{token}/`
 
-**Response `200`** — `{"success": true}`. Requires `share_link.write`; another
-user's link is a `404`.
+**Response `200`** — `{"success": true}`. Requires `share_link.write`. Another
+user's link is a `403`; a token that does not exist still answers `200` (the
+delete is idempotent); a link outside the API key's library scope is hidden as
+`404`.
 
 ## List upload links {#get-api2-upload-links}
 
@@ -259,8 +261,9 @@ libraries are refused. Refused when `server.share_upload_enabled` is off.
 
 `GET /api/v2.1/repos/{repo_id}/upload-links/`
 
-Every upload link created for one library. **Response `200`** — an array of
-upload-link items. Requires read access and `upload_link.read`.
+The upload links the caller created for one library. Links created by other users
+are not returned. **Response `200`** — an array of upload-link items. Requires
+read access and `upload_link.read`.
 
 ## List starred files {#get-api2-starredfiles}
 
@@ -271,7 +274,7 @@ The legacy star list, intersected with libraries the caller can still access.
 **Response `200`**
 
 ```json
-[{ "repo_id": "…", "path": "/notes.txt", "size": 1204, "last_modified": 1760000000, "is_dir": false }]
+[{ "repo_id": "…", "path": "/notes.txt", "size": null, "last_modified": null, "is_dir": false }]
 ```
 
 Requires `star.read`.

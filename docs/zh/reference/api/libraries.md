@@ -47,8 +47,8 @@
 | `name` | 是 | 资料库名称。 |
 | `desc` | 否 | 描述。 |
 | `repo_id` | 否 | 克隆时客户端指定的 UUID。 |
-| `encrypted` | 否 | 加密资料库填 `1`。 |
-| `enc_version` | 否 | 加密版本（`2` 或 `4`）；未加密时忽略。 |
+| `encrypted` | 否 | 加密资料库填 `1`；带 `magic`、`random_key`、`pwd_hash` 或 `enc_version` 为 `2` 及以上也会被视为加密。 |
+| `enc_version` | 加密库必填 | 加密版本，只接受 `2` 或 `4`。值为 `2` 及以上会强制创建加密资料库，而不是未加密时忽略。 |
 | `magic`、`random_key`、`salt` | 否 | 客户端自己计算的加密材料。 |
 | `pwd_hash`、`pwd_hash_algo`、`pwd_hash_params` | 否 | Seafile 11+ 的密码校验三元组，`/api2/server-info/` 声明算法时发送。 |
 | `passwd` | 否 | 明文密码，由服务器自行计算上述值。 |
@@ -79,7 +79,7 @@ Seafile 重载了这个路径，查询参数 `op` 选择操作：
 
 **响应 `200`** —— `rename`/`update` 返回 JSON 字符串 `"success"`；密码操作返回 `{"success": true}`。
 
-所有密码校验共用一个按（用户, 资料库）的限流器；连续失败返回 `429`。需要 `library.update`（密码操作需要 `library.password`），密钥还需要该库的写权限。
+所有密码校验共用一个按（用户, 资料库）的限流器；连续失败返回 `429`。这条旧版路径上的所有操作都要求 `library.update`；`library.password` 只对 v2.1 的 `set-password/` 生效。密钥还需要该库的写权限。
 
 ## 删除资料库 {#delete-api2-repos-repo-id}
 
@@ -104,7 +104,7 @@ Seafile 重载了这个路径，查询参数 `op` 选择操作：
       "repo_desc": "",
       "permission": "rw",
       "encrypted": false,
-      "type": "repo",
+      "type": "mine",
       "size": 22020651,
       "last_modified": "2026-10-24T09:00:00+00:00",
       "mtime": 1760000000,
@@ -116,7 +116,7 @@ Seafile 重载了这个路径，查询参数 `op` 选择操作：
 }
 ```
 
-`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。`enc_version` 为 3 或 4 的加密资料库还会带 `salt`，客户端用它派生密钥；其他资料库不含这个键。需要 `library.read`。
+`type` 对调用者自己拥有的资料库是 `mine`，共享给调用者的是 `shared`。`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。`enc_version` 为 3 或 4 的加密资料库还会带 `salt`，客户端用它派生密钥；其他资料库不含这个键。需要 `library.read`。
 
 ## 获取资料库（v2.1） {#get-api-v2-1-repos-repo-id}
 
@@ -199,7 +199,7 @@ seahub 的主资料库查询。
 | `from` | `web` 返回浏览器表单接口（`/upload-aj/<token>`），否则返回客户端接口（`/upload-api/<token>`）。 |
 | `replace` | `1` 表示同名文件替换而不是失败。 |
 
-**响应 `200`** —— URL 的 JSON 字符串。需要写权限与 `file.write`。加密资料库拒绝上传链接。
+**响应 `200`** —— URL 的 JSON 字符串。需要写权限与 `file.write`。与匿名上传链接不同，加密资料库也会签发该链接；上传前必须先提供库密码（`?op=setpassword` 或 v2.1 `set-password/`），否则上传返回 `440`。
 
 链接令牌只对一个目录有效，见 [上传与下载](/zh/reference/api/transfers#post-upload-api-token)。
 

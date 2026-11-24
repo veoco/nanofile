@@ -1,8 +1,9 @@
 # Sync protocol
 
-The `/seafhttp/` API the desktop and mobile clients' daemons speak. It is a
-different credential world from the REST API: requests carry a **repository sync
-token**, never an account token or an API key.
+The `/seafhttp/` API the desktop and mobile clients' daemons speak. The official
+clients use a **repository sync token**; the server also accepts an API key
+carrying `sync.read`/`sync.write` and a session or account token. Either way the
+credential is limited to the library in the URL and to the key's library scope.
 
 The protocol rules — commit ids, FS object ids, directory order, the empty-head
 sentinel — are on [Seafile compatibility](/dev/protocol); this page documents the
@@ -21,7 +22,8 @@ Source: `server/src/handler/sync/`, `server/src/middleware/auth.rs`
 
 A sync token is bound to exactly one library. A token presented for another
 library's URL is `403`, as is an expired token or one whose account is no longer
-active. `head-commits-multi` is the one unauthenticated endpoint (see below).
+active. `protocol-version` and `head-commits-multi` need no credentials (see
+below).
 
 ## Status codes
 
@@ -34,7 +36,6 @@ Besides the usual codes, the daemon depends on these:
 | `443` | The upload would exceed the owner's storage quota. |
 | `444` | The library was deleted. |
 | `446` | Blocks are missing for an uploaded file. |
-| `441` | The write target does not exist. |
 
 ## Protocol version {#get-seafhttp-protocol-version}
 
@@ -70,8 +71,9 @@ branch ends at the merged tree, never at a lost update. Missing blocks answer
 
 `GET /seafhttp/repo/{repo_id}/commit/{commit_id}`
 
-Returns the commit object as JSON (`application/json`), in Seafile's
-`CommitData` shape including the encrypted-library metadata when applicable.
+Returns the commit object as JSON, in Seafile's `CommitData` shape including the
+encrypted-library metadata when applicable. The body is JSON text, but the
+response's `Content-Type` is `application/octet-stream`, not `application/json`.
 The all-zero id is answered with a synthesized empty commit, which is what a
 headless library's clients read.
 
@@ -93,16 +95,18 @@ validated here; it is checked at branch update.
 Body: a JSON array of library ids (at most 4096). **Response `200`** — an object
 mapping each id to its head commit id.
 
-This endpoint is **unauthenticated** by protocol: the daemon calls it with no
-credentials, so it validates ids strictly instead of trusting the caller.
+This endpoint and `protocol-version` are **unauthenticated** by protocol: the
+daemon calls them with no credentials, so the multi endpoint validates ids
+strictly instead of trusting the caller.
 
 ## List FS object ids {#get-seafhttp-repo-repo-id-fs-id-list}
 
-`GET /seafhttp/repo/{repo_id}/fs-id-list/?server-head=<id>&client-head=<id>&dir-only=<0|1>`
+`GET /seafhttp/repo/{repo_id}/fs-id-list/?server-head=<id>&client-head=<id>&dir-only=<value>`
 
 The FS object ids the client must download. With a `client-head`, returns only
-the difference between the two trees; without it, the whole tree. `dir-only`
-limits the answer to directory objects.
+the difference between the two trees; without it, the whole tree. `dir-only` is
+presence-based: passing it with any non-empty value, including `0`, limits the
+answer to directory objects; omit it to get all objects.
 
 **Response `200`** — a JSON array of 40-hex ids. A missing `server-head` or an
 invalid id is a `400`; an empty head returns `[]`.
@@ -203,7 +207,8 @@ lives 3 days, and carries `repo_id`, `username` and `exp`.
 `PUT /seafhttp/repo/{repo_id}/lock-file?p=<path>`
 
 **Response `200`** — `{"success": true}`. Requires write permission. Locks are
-advisory; see [Files](/reference/api/files#put-api2-repos-repo-id-file).
+exclusive: another user cannot lock or unlock a path you hold (`403`); see
+[Files](/reference/api/files#put-api2-repos-repo-id-file).
 
 ## Unlock a file {#put-seafhttp-repo-repo-id-unlock-file}
 

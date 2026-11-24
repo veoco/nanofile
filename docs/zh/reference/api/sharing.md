@@ -76,7 +76,7 @@
 | `repo_id` | 是 | 资料库 id。 |
 | `path` | 是 | 分享的文件或目录路径。 |
 | `password` | 否 | 访问密码。 |
-| `expire_days` | 否 | 多少天后过期（至少 1）。 |
+| `expire_days` | 否 | 多少天后过期。 |
 | `expiration_time` | 否 | RFC 3339 过期时间，`expire_days` 缺席时使用。 |
 | `description` | 否 | 随链接保存的说明。 |
 
@@ -116,7 +116,7 @@
 
 `GET /api/v2.1/share-links/{token}/`
 
-调用者的一条链接，创建形状加 `view_cnt`。需要 `share_link.read`；别人的链接返回 `404`。
+调用者的一条链接，detail 形状：创建形状去掉 `s_type`。需要 `share_link.read`；别人的链接返回 `404`。
 
 ## 更新分享链接 {#put-api-v2-1-share-links-token}
 
@@ -130,7 +130,7 @@
 
 `DELETE /api/v2.1/share-links/{token}/`
 
-**响应 `200`** —— `{"success": true}`。需要 `share_link.write`；别人的链接返回 `404`。
+**响应 `200`** —— `{"success": true}`。需要 `share_link.write`。别人的链接返回 `403`；令牌不存在仍返回 `200`（删除是幂等的）；链接超出 API 密钥的库范围时隐藏为 `404`。
 
 ## 列出上传链接 {#get-api2-upload-links}
 
@@ -228,7 +228,7 @@
 
 `GET /api/v2.1/repos/{repo_id}/upload-links/`
 
-为一个资料库创建的全部上传链接。**响应 `200`** —— 上传链接条目数组。需要读权限与 `upload_link.read`。
+为一个资料库中调用者自己创建的上传链接；不返回其他用户创建的链接。**响应 `200`** —— 上传链接条目数组。需要读权限与 `upload_link.read`。
 
 ## 列出收藏文件 {#get-api2-starredfiles}
 
@@ -239,7 +239,7 @@
 **响应 `200`**
 
 ```json
-[{ "repo_id": "…", "path": "/notes.txt", "size": 1204, "last_modified": 1760000000, "is_dir": false }]
+[{ "repo_id": "…", "path": "/notes.txt", "size": null, "last_modified": null, "is_dir": false }]
 ```
 
 需要 `star.read`。

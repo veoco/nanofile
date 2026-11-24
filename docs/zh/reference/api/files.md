@@ -55,7 +55,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 为其他同步客户端加锁或解锁。请求体是 URL 编码表单，`operation=lock` 或 `operation=unlock`。
 
-**响应 `200`** —— `{"success": true}`。需要写权限与 `file.write`。锁是建议性的：任何写者都可以加锁或解锁，只有同步提交会执行它。提交若创建、编辑、删除、重命名或移动了他人持有的路径，会以 `403` 加纯文本 `File <path> is locked` 拒绝；不涉及该路径的提交不受影响。REST 与 WebDAV 的直接写入不检查锁。路径已不在资料库中的锁会被清理，不会挡住之后同路径的新文件。
+**响应 `200`** —— `{"success": true}`。需要写权限与 `file.write`。锁是排他的：对他人持有的路径加锁返回 `403` 与纯文本 `File <path> is locked`，解锁他人持有的锁同样返回 `403`。没有锁记录时解锁成功：文件本来就未锁定。同步提交按树 diff 检查锁，创建、编辑、删除、重命名或移动他人持有的路径时以同样的 `403` 纯文本拒绝；不涉及该路径的提交不受影响。REST 与 WebDAV 删除也检查锁，返回 `423` 与 `{"error_msg": "File <path> is locked"}`。上传与覆盖不查锁，后写者胜。锁对应的文件已从资料库消失时会被清除，因此不会阻塞之后同路径的新文件。
 
 ## 删除文件 {#delete-api2-repos-repo-id-file}
 
@@ -113,7 +113,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
   "mtime": 1760000000,
   "size": 1204,
   "last_modified": "2026-10-24T09:00:00+00:00",
-  "last_modifier_name": "User",
+  "last_modifier_name": "user@example.com",
   "last_modifier_email": "user@example.com",
   "last_modifier_contact_email": "user@example.com",
   "last_modifier_avatar": "https://files.example.com/avatars/user/user@example.com/resized/72/",
@@ -147,7 +147,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 返回图片的 EXIF 标签对象，没有时返回 `null`（非图片，或沙盒无法解析）。
 
-需要 `file.read`。加密资料库无法生成缩略图：存储的是密文，尝试会失败而不是泄露内容。
+需要 `file.read`。
 
 ## 缩略图 {#get-api2-repos-repo-id-thumbnail}
 
@@ -155,7 +155,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 返回图片缩略图（不透明用 JPEG，带透明用 PNG）。`size` 默认 48，最大 1024。响应带强 `ETag` 与 `Cache-Control: private, max-age=604800`；`If-None-Match` 命中 ETag 时返回 `304`。
 
-需要 `file.read`。
+需要 `file.read`。加密资料库无法生成缩略图：存储的是密文，尝试会失败而不是泄露内容。
 
 ## 删除多个文件 {#post-api2-repos-repo-id-fileops-delete}
 

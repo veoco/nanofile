@@ -16,7 +16,7 @@
 | --- | --- |
 | `p` | 目录路径，默认 `/`。 |
 | `t` | `f` 只看文件，`d` 只看目录。其他值返回 `400`。 |
-| `recursive` | `1` 深度优先遍历整棵子树；`_Internal` 被隐藏。 |
+| `recursive` | `1` 按层遍历整棵子树（广度优先）；`_Internal` 被隐藏。 |
 | `reloaddir` | 本接口忽略；见下面的写操作。 |
 
 **响应 `200`** —— 目录项的裸 JSON 数组：
@@ -28,7 +28,7 @@
 ]
 ```
 
-目录在前、文件在后，各自按小写名称排序——这是 seahub 的展示顺序，不是对象存储顺序。递归列表按深度优先，条目额外带 `parent_dir`；文件条目还带 `modifier_name` 与 `modifier_contact_email`。
+目录在前、文件在后，各自按小写名称排序——这是 seahub 的展示顺序，不是对象存储顺序。递归列表按层展开（广度优先），条目额外带 `parent_dir`；普通列表与递归列表的文件条目都带 `modifier_name` 与 `modifier_contact_email`。
 
 被锁定的文件额外带 `is_locked: true`、`locked_by_me`（调用者是否持锁）、`lock_owner`、`lock_owner_name` 与 `lock_time`（unix 时间戳）。未锁定条目省略这五个键，官方客户端把「没有」当成「未锁定」。正是这些字段让桌面客户端显示**解锁**而不是**加锁**。
 
@@ -103,7 +103,7 @@
 }
 ```
 
-`user_perm` 等于每个条目的 `permission`（Nanofile 没有目录级分享）。带 `with_thumbnail=true` 时每个文件条目多一个 `encoded_thumbnail_src`，永远是空字符串；客户端把它当作「自己拼缩略图 URL」的信号。递归形状相同。被锁定的文件与旧版列表一样带那五个锁字段。这里也设置 `oid`/`dir_perm` 头，无提交资料库的 `dir_id` 用全零哨兵。
+`user_perm` 等于每个条目的 `permission`（Nanofile 没有目录级分享）。带 `with_thumbnail=true` 时每个文件条目多一个 `encoded_thumbnail_src`，永远是空字符串；客户端把它当作「自己拼缩略图 URL」的信号。递归形状并不相同：条目不带 `starred`，`with_thumbnail` 对它也不生效。被锁定的文件与旧版列表一样带那五个锁字段。这里也设置 `oid`/`dir_perm` 头，无提交资料库的 `dir_id` 用全零哨兵。
 
 需要读权限与 `file.read`。
 
@@ -111,7 +111,7 @@
 
 `POST /api/v2.1/repos/{repo_id}/dir/`
 
-**请求体**（JSON）—— `{"p": "/new/folder"}`，或把 `p` 放在查询参数。
+**请求体**（JSON）—— `{"p": "/new/folder"}`。必须给 JSON 体，只把 `p` 放在查询参数不会被读取。
 
 **响应 `200`** —— `{"success": true}`。需要写权限与 `file.write`。
 

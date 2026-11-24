@@ -128,8 +128,9 @@ Polls the state of an SSO link. Public, like the creation call.
 { "status": "error" }
 ```
 
-Unknown tokens answer `404`. `success` is returned once; the client stores
-`apiToken` as its account token.
+Unknown tokens answer `404`. Once the browser completes the flow, every poll
+during the following 300 seconds returns the same `success` and `apiToken`; the
+client stores `apiToken` as its account token.
 
 ## Report a wiped device {#post-api2-device-wiped}
 
@@ -142,7 +143,9 @@ a URL-encoded `token` form field (what the desktop client sends).
 
 **Response `200`** — `{"success": true}`.
 
-The token must be a full, unexpired account token. A pending 2FA token is
+The token must be a full, unexpired account token that was issued with device
+information (`device_id`) at login; a plain `POST /api2/auth-token/` token
+without it answers `400` with `token has no device`. A pending 2FA token is
 refused. The call revokes the token's device sessions and every outstanding
 capability URL (upload/download links) for that account.
 
