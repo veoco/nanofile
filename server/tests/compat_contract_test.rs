@@ -302,3 +302,55 @@ async fn device_wiped_rejects_a_malformed_authorization_header() {
         "a malformed authorization header must not fall back to the form token"
     );
 }
+
+/// A file share token must not open the directory page: the kind is validated
+/// before the password gate, so no password form (or limiter charge) appears for
+/// a token that can never serve this URL.
+#[tokio::test]
+async fn directory_page_with_a_file_token_is_not_found() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "a.txt", b"content")
+        .await;
+    assert_eq!(resp.status(), 200, "upload a.txt");
+    let token = f.create_share_link("/a.txt").await;
+
+    let resp = f.client.get_ui(&format!("/d/{token}/")).await;
+    assert_eq!(resp.status(), 404, "file token on a /d/ page");
+}
+
+/// A lock held by another user rejects a REST delete with 423, the same verdict
+/// Seafile's JSON delete surfaces (`api2/endpoints/repos_batch.py`).
+#[tokio::test]
+async fn deleting_a_file_locked_by_another_user_is_423() {
+    let f = TestFixture::new().await;
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "locked.txt", b"content")
+        .await;
+    assert_eq!(resp.status(), 200, "upload locked.txt");
+
+    let other_user = create_test_user(&f.server.db, "lock-owner@example.com", "password").await;
+    f.server
+        .repos
+        .locked_file
+        .create(
+            &f.repo_id,
+            "locked.txt",
+            other_user,
+            chrono::Utc::now().timestamp(),
+            "lock-owner@example.com",
+        )
+        .await
+        .expect("insert lock");
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api2/repos/{}/file/?p=/locked.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 423, "locked file delete must answer 423");
+}
