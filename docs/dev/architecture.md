@@ -7,7 +7,7 @@ and `inference` itself depends only on its two numeric kernels.
 | Crate | Role |
 |---|---|
 | `base` | Pure domain types, `AppError`, path sanitization. No axum or database dependency unless the `with-axum` / `with-sea-orm` feature enables it. |
-| `infra` | Database entities and connections, configuration, crypto, block storage, serialization, permissions, rate limiting, search indexing, the settings catalog and its events. |
+| `infra` | Database entities and connections, configuration, crypto, block storage, serialization, rate limiting, the settings catalog and its events. |
 | `server` | HTTP handlers and routes, services, `AppState`, the Seafile sync protocol, WebDAV, the web UI, sandbox, tasks and the optional tray. |
 | `inference` | The embedded models' fixed-plan runtime: operator executor, f32 kernels and the generated plans. No ONNX parser, no server dependency. |
 | `migration` | SeaORM migrations. |
@@ -19,7 +19,7 @@ and `inference` itself depends only on its two numeric kernels.
 | `handler` | HTTP endpoints: sync API, REST API, web pages, shares, uploads. |
 | `service` | Business logic: auth, sync, files, shares, activity, mail, search, notifications. |
 | `repository` | Database access for accounts, tokens, commits, files and shares. |
-| `domain` | Shared domain types: credentials, capabilities, commits, file-system objects. |
+| `domain` | Shared domain types: credentials, capabilities, permissions, commits, file-system objects. |
 | `fs` | Seafile file-system objects: tree operations, commits, merge, trash, garbage collection, block verification and migration. |
 | `ui` | Askama-rendered web pages, including the admin console. |
 | `middleware` | Authentication and capabilities, CSP, CSRF, request limits. |
@@ -52,8 +52,8 @@ enters it two ways:
 
 - `TaskSystem::submit` schedules work somebody will ask about by id. It produces a
   job run that can be polled and, for a cancellable job, stopped.
-- `TaskSystem::run_inline` runs request-scoped work under the same concurrency
-  limits and timeouts but keeps no record.
+- `TaskSystem::run_inline` runs request-scoped work under a job's concurrency
+  limit, but keeps no record and does not inherit the job's timeout.
 
 A long-lived event listener has no owner, progress or terminal state, so it is a
 service rather than a job. A job declares whether every run is recorded

@@ -79,9 +79,9 @@ release profile 说明与 `cargo bloat` 命令见[构建](/zh/dev/build#二进�
 
 | Job | 平台 | 内容 |
 |---|---|---|
-| `lint` | Linux | `cargo fmt --check`、clippy、rustdoc、依赖守卫、审计 |
+| `lint` | Linux | `cargo fmt --check`、clippy、rustdoc、依赖守卫 |
 | `lint-platforms` | macOS、Windows | 针对平台 `cfg` 代码的 clippy 与 rustdoc |
-| `tray-check` | Linux、macOS、Windows | `tray` feature 的 clippy、rustdoc 与单元测试 |
+| `tray-check` | Linux、macOS、Windows | `tray` feature 的 clippy 与单元测试 |
 | `tests` | Linux x86_64/arm64、macOS arm64、Windows amd64 | Rust 套件（不含 OCR） |
 | `ocr-tests` | Linux amd64、macOS arm64、Windows amd64 | OCR 用例，并行 |
 | `cross-check` | Linux | 编译并 lint 四个没有 runner 的目标 |

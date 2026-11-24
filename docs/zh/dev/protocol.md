@@ -67,7 +67,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 | `recv-fs`：包格式错误 400，不校验内容 | `sync_api.go:453-517` |
 | 文件/目录对象 id = `sha1(json_dumps(obj, JSON_SORT_KEYS))`；`modifier`/`size` 只出现在文件条目；降序排列 | `seafile-server/common/fs-mgr.c:381-392`、`:1795-1820`、`:1906-1911` |
 | 同库移动是一个提交（先加后删，再提交） | `seafile-server/server/repo-op.c:3161-3245` |
-| 旧版列表：字段、`dir_perm` 取真实权限、目录组+文件组各自按 `name.lower()` 排序 | `seahub/api2/views.py:2380-2462` |
+| 旧版列表：字段、`dir_perm` 由 `check_permission_by_path` 得出、目录组+文件组各自按 `name.lower()` 排序 | `seahub/api2/views.py:2380-2462` |
 | v2.1 列表：`{dirent_list, dir_id, user_perm}`、逐条 `permission`、`parent_dir`、`starred`、`modifier_email` | `seahub/api2/endpoints/dir.py:45-215`、`:343-344` |
 | 列表中被锁定的文件多出 `is_locked`、`locked_by_me`、`lock_owner`、`lock_owner_name`、`lock_time`；未锁定条目不带这些键 | `seafile-client/src/filebrowser/seaf-dirent.cpp:22-44` |
 | `/api/v2.1/search-file/`：`{"data": [{path, size, mtime(ISO), type: file/folder}]}`，无上限，文件名子串匹配 | `seahub/api2/endpoints/search_file.py` |
@@ -75,7 +75,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 | 认证失败体是 `{"detail": …}`；功能错误才是 `{"error_msg": …}` | `seahub/api2/authentication.py:28-33`、`seahub/api2/utils.py:49-51` |
 | 桌面端要求 `oid` 长 40、`dir_perm == "r"` 即只读、逐条 `permission == "r"` | `seafile-client/src/filebrowser/file-browser-requests.cpp:73-96`、`seaf-dirent.cpp:19-45` |
 | 桌面端按服务端返回的顺序渲染列表 | `seafile-client/src/filebrowser/file-table.cpp:926-937` |
-| 桌面端 `/api2/search/` 读取的字段 | `seafile-client/src/api/requests.cpp:939-980` |
+| 桌面端 `/api2/search/` 读取的字段：`repo_id, name, oid, last_modified|mtime, fullpath, size, is_dir` | `seafile-client/src/api/requests.cpp:939-980` |
 | iOS v2.1 列表：`dirent_list`/`dir_id`/`user_perm`，逐条 `permission` 决定子目录可编辑；本地排序 | `seafile-ios/Pod/Classes/SeafDir.m:264-355`、`:160-170`、`:386-409` |
 | iOS search-file 形状（`type == "folder"`、绝对 `path`）；`/api2/search/` 仅在 `seafile-pro`+`file-search` 时使用 | `seafile-ios/Pod/Classes/SeafConnection+Search.m:47-100`、`SeafConnection.m:1321-1338` |
 | Android v2.1 列表模型；逐条 `permission` 生成操作菜单；`modifier_email` | `seadroid/.../ui/repo/RepoService.java:34-38`、`.../framework/db/entities/DirentModel.java:50-78`、`.../ui/repo/sheetaction/BottomSheetMenuManager.java:190-228` |
@@ -109,7 +109,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 - **`_Internal` 在所有列表中隐藏**（普通、递归、WebDAV、`reloaddir`）。上游只在打包/索引的递归遍历里跳过它（仅根级，连同 `images`），因为 seahub 用它存 wiki/seadoc 的内部数据；nanofile 没有这棵树。从 seahub 迁移来的资料库会少看到一项。
 - **`/api/v2.1/search-file/` 有上限**（共享的 200 条预算），上游无界遍历整棵树。两个移动客户端拿到的 `data` 会被截断。
 - **`/api2/search/` 忽略 Pro 专属过滤参数**（`search_type`、`obj_type`、`time_from`、`size_from`、`search_path`、`with_permission`），并且在索引关闭时也可用（只匹配文件名）。
-- **覆盖上传的额度按 `新 - 旧` 计**；上游上传路径按整个新 `Content-Length` 计，`update-branch` 处按 0。
+- **覆盖上传的额度按 `new - old` 计**；上游上传路径按整个新 `Content-Length` 计，`update-branch` 处按 0。
   其它逻辑增长——目录复制、回收站/历史恢复、子库创建、去重后的 sync 提交——同样在提交点计费，
   `repo.size` 与 HEAD 在同一条语句里更新。未提交的块写入按上传 id / 块 id 预留，在提交、放弃或 24 小时
   TTL 到期时释放。

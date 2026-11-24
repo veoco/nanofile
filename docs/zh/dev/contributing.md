@@ -7,15 +7,19 @@ npm ci
 cargo build --bin nanofile
 ```
 
-仓库的验证命令，按 CI 的顺序：
+仓库的验证命令：
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p server --features tray --bin nanofile -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --bins --no-deps --document-private-items
+RUSTDOCFLAGS="-D warnings" cargo doc -p server --features tray --bins --no-deps --document-private-items
 cargo test -p server --features tray --bin nanofile
 cargo machete
 NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
+cargo test --workspace --doc
+node tools/check-comments.mjs
 node --test "server/frontend/**/*.test.js"
 cargo audit
 ```
@@ -38,9 +42,9 @@ CI 会跑带 `-D warnings` 的 `cargo doc`，因此失效的文档内链接或 M
 
 依赖图是构建契约的一部分：
 
-- 不要打开 dev `reqwest` 的默认特性（它的 TLS 会拽入 `aws-lc-rs`）或 dev `image` 的默认格式（会拽入 `rav1e`/`ravif`）。
+- 不要打开 dev `reqwest` 的默认特性（它的 TLS 会拽入 `aws-lc-rs`），也不要新增 dev `image` 条目或重新打开它的默认特性（会拽入 `rav1e`/`ravif`）。
 - TLS 只由 `lettre` 使用（SMTP，rustls/ring）。`sqlx`/`sea-orm` 使用 `runtime-tokio`，并且只连 SQLite。
-- `ci.yml` 会在 `cargo machete` 发现未使用的直接依赖，或 `aws-lc-rs`、`aws-lc-sys`、`rav1e`、`ravif` 重新出现在依赖图里时失败。
+- `ci.yml` 会在 `cargo machete` 发现未使用的直接依赖，或 `aws-lc-rs`、`aws-lc-sys`、`rav1e`、`ravif`、`zstd-sys`、`jieba-rs`、`tract`（及其 `tract-*` crate）、`ort`/`ort-sys`、`onnxruntime`/`onnxruntime-sys`、`openblas-src`、`accelerate-src` 重新出现在依赖图里时失败。
 
 ## 文档
 
@@ -55,7 +59,7 @@ npm run --prefix docs preview   # http://localhost:4173/nanofile/
 ```
 
 - `base` 是 `/nanofile/`；fork 需要改 `docs/.vitepress/config.mts`。
-- 站内链接写 `/guide/<章节>/<页面>`（英文）或 `/zh/guide/<章节>/<页面>`（中文）。指南按章节目录组织——`start`、`use`、`deploy`、`configure`、`admin`、`operate`——新页面放进对应章节目录。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
+- 站内链接写 `/guide/<chapter>/<page>`（英文）或 `/zh/guide/<chapter>/<page>`（中文）。指南按章节目录组织——`start`、`use`、`deploy`、`configure`、`admin`、`operate`——新页面放进对应章节目录。指向 `docs/` 之外的文件时用 GitHub URL，不要用相对路径。
 - 移动页面时，在 `docs/public/` 下加静态重定向，并更新 sidebar、指南索引与 README。
 - 正文里的 `<owner>` 这类尖括号占位符要放进反引号；代码块之外会被当成 HTML。
 - `docs/public/favicon.svg` 是 `server/static/img/favicon.svg` 的副本。

@@ -5,7 +5,7 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 | Crate | 职责 |
 |---|---|
 | `base` | 纯领域类型、`AppError`、路径规范化。默认不依赖 axum 或数据库，除非启用 `with-axum` / `with-sea-orm` feature。 |
-| `infra` | 数据库实体与连接、配置、加密、块存储、序列化、权限、限流、搜索索引、设置目录及其事件。 |
+| `infra` | 数据库实体与连接、配置、加密、块存储、序列化、限流、设置目录及其事件。 |
 | `server` | HTTP handler 与路由、service、`AppState`、Seafile 同步协议、WebDAV、网页界面、沙盒、任务与可选托盘。 |
 | `inference` | 内嵌模型的定计划推理运行时：算子执行器、f32 内核与生成好的计划。无 ONNX 解析器，不依赖 server。 |
 | `migration` | SeaORM 数据库迁移。 |
@@ -17,7 +17,7 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 | `handler` | HTTP 端点：同步 API、REST API、网页、分享、上传。 |
 | `service` | 业务逻辑：认证、同步、文件、分享、动态、邮件、搜索、通知。 |
 | `repository` | 账号、令牌、提交、文件与分享的数据库访问。 |
-| `domain` | 共享领域类型：凭据、能力、提交、文件系统对象。 |
+| `domain` | 共享领域类型：凭据、能力、权限、提交、文件系统对象。 |
 | `fs` | Seafile 文件系统对象：树操作、提交、合并、回收站、垃圾回收、块校验与迁移。 |
 | `ui` | Askama 渲染的网页，包括管理后台。 |
 | `middleware` | 认证与能力、CSP、CSRF、请求上限。 |
@@ -41,7 +41,7 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 `tasks` 是一个作业注册表、一个有界运行存储和一个执行器。工作从两条路进入：
 
 - `TaskSystem::submit` 调度之后会按 id 查询的工作。它产生可轮询的作业运行，可取消的作业还能停止。
-- `TaskSystem::run_inline` 在同样的并发限制与超时下运行请求内工作，但不留记录。
+- `TaskSystem::run_inline` 在作业的并发限制下运行请求内工作，但不留记录，也不继承作业的超时。
 
 常驻事件监听没有所有者、进度或终态，因此它是服务而不是作业。作业自己声明是每次运行都记录（`EveryRun`），还是只记录有内容可报的运行（`Notable`）；手动触发的运行总是记录，失败也总是记录。
 

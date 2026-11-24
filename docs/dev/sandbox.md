@@ -30,11 +30,14 @@ A profile names what the child is allowed to establish:
   byte and a little-endian `u32` options word before the image; OCR does the same
   for an image. A PDF OCR request adds a `u32` page count and that many `u32`
   page numbers before the PDF bytes.
-- **Reply** on stdout: `T` or `U`, a little-endian `u32` length, then that many bytes
-  of UTF-8 — the text, or the reason the document is not indexable. A PDF OCR
-  reply separates one field per requested page with `\u{1e}`. OCR adds `E` for an
-  environment/model failure, which the parent records as retryable rather than as
-  a verdict on the input.
+- **Reply** on stdout: one tag byte, a little-endian `u32` length, then that many
+  bytes of body — the frame is the same for every job, and the tag set depends on
+  the profile. `documents` answers `T` (text) or `U` (not indexable); `ocr` uses
+  `T`/`U` too and adds `E` for an environment/model failure, which the parent
+  records as retryable rather than as a verdict on the input; `images` answers
+  `P`/`J` (a PNG/JPEG thumbnail), `X` (EXIF text) or `U`; `faces` answers `J` (a
+  JSON summary), `R` (refused) or `U` (retry); `media` answers `P`/`J`, `E` or
+  `U`. A PDF OCR reply separates one field per requested page with `\u{1e}`.
 - `--selftest` replaces the request with a report line and no reply.
 - `--probe` runs the probe a serving process runs at startup and exits non-zero
   when the worker is unavailable.
@@ -76,10 +79,11 @@ the files layer and the parent's timeout.
 `faces` and `ocr` are the profiles that run models. Faces has a 90 s wall clock and
 can split a large photo into nine forward passes; OCR has 180 s, loads four models
 once and runs one forward pass for page orientation, detection and each text line.
-The inference runtime is single-threaded, so CPU tracks wall clock (with 5 s of
-hard-limit slack); the wall timeout is still the real bound. Neither starts a
-program or reads a file: HEIC/HEIF/AVIF frames are decoded by the media profile
-first, and only the decoded still is handed to them.
+A PDF request returns the pages read so far at its 150 s soft deadline, inside that
+wall clock. The inference runtime is single-threaded, so CPU tracks wall clock
+(with 5 s of hard-limit slack); the wall timeout is still the real bound. Neither
+starts a program or reads a file: HEIC/HEIF/AVIF frames are decoded by the media
+profile first, and only the decoded still is handed to them.
 
 ## Platform notes
 

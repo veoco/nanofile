@@ -9,8 +9,9 @@ is no hot reload.
 - Templates live in `server/templates/` and are rendered by `server/src/ui/`.
 - Tailwind input is `server/static/css/input.css`; the generated stylesheet is
   `server/static/css/app.css`.
-- The favicon and the generated tray icon come from
-  `server/static/img/favicon.svg`, rasterized at compile time.
+- The favicon is embedded and served as the original SVG from
+  `server/static/img/favicon.svg`. Only a `tray` build rasterizes it, for the
+  tray icon and the Windows exe icon.
 
 ## JavaScript
 
@@ -33,9 +34,9 @@ Node's `--test` runner; without a rendered challenge the entry does nothing.
 ## Internationalization
 
 The UI translations live in `server/locales/` (`en.toml`, `zh.toml`, plus the email
-templates `email_en.toml` / `email_zh.toml`) and are compiled in with
-`include_str!`. `[ui] default_language` selects the fallback when a visitor has no
-preference.
+templates `email_en.toml` / `email_zh.toml`) and are compiled into the binary with
+`include_flate!`, DEFLATE-compressed. `[ui] default_language` selects the fallback
+when a visitor has no preference.
 
 ## Tests
 

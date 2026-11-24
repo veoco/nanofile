@@ -99,9 +99,9 @@ profile notes and the `cargo bloat` command.
 
 | Job | Platforms | What it does |
 |---|---|---|
-| `lint` | Linux | `cargo fmt --check`, clippy, rustdoc, dependency guards, audit |
+| `lint` | Linux | `cargo fmt --check`, clippy, rustdoc, dependency guards |
 | `lint-platforms` | macOS, Windows | clippy and rustdoc for the platform-specific `cfg` code |
-| `tray-check` | Linux, macOS, Windows | clippy, rustdoc and unit tests for the `tray` feature |
+| `tray-check` | Linux, macOS, Windows | clippy and unit tests for the `tray` feature |
 | `tests` | Linux x86_64/arm64, macOS arm64, Windows amd64 | the Rust suite minus OCR |
 | `ocr-tests` | Linux amd64, macOS arm64, Windows amd64 | the OCR cases, in parallel |
 | `cross-check` | Linux | compiles and lints four targets with no runner |

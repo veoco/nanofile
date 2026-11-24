@@ -83,7 +83,7 @@ UI 文案以 `server/locales/en.toml` 与 `server/locales/zh.toml` 为准，不�
 ## 双语页面
 
 - 英文是源语言。中文页面是完整镜像，不是摘要。
-- 保持相同的标题层级和相同的页面集合；checker 会检查这一点。
+- 保持相同的标题层级和相同的页面集合。页面集合由 checker 对每一组强制检查，但标题层级只在指南上比较。
 - 翻译正文；代码、命令、路径和字段名保持不变。
 - 使用中文标点和中文引号。中文正文里不要留 ASCII 引号。
 - 中文由母语者审校；checker 判断不了语义。
@@ -122,7 +122,7 @@ npm run --prefix docs build
 cargo test -p server --test api docs_api_reference
 ```
 
-checker 会遍历 `docs/guide`、`docs/reference` 与 `docs/dev`，比较中英页面集合、指南标题层级、所有内部链接与锚点、sidebar 覆盖，以及 `description` frontmatter。
+checker 会遍历 `docs/guide`、`docs/reference` 与 `docs/dev`，比较中英页面集合、所有内部链接与锚点、sidebar 覆盖，并且在指南上比较标题层级与 `description` frontmatter；缺少 `description` 只是 warning，不是 error。checker 还会校验 compatibility 页的 Summary 计数与它的操作行是否一致。
 
 ## 相关
 

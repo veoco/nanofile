@@ -94,7 +94,8 @@ same change.
 ## Bilingual pages
 
 - English is the source. The Chinese page is a complete mirror, not a summary.
-- Keep the same heading levels and the same set of pages. The checker enforces this.
+- Keep the same heading levels and the same set of pages. The checker enforces the
+  page set for every group, but compares heading levels only on the guide.
 - Translate the prose; keep code, commands, paths and field names unchanged.
 - Use Chinese punctuation and Chinese quotation marks. Do not leave ASCII quotes in
   Chinese prose.
@@ -140,8 +141,10 @@ cargo test -p server --test api docs_api_reference
 ```
 
 The checker walks `docs/guide`, `docs/reference` and `docs/dev`; it compares the
-English and Chinese page sets, the guide heading levels, every internal link and
-anchor, the sidebar coverage and the `description` frontmatter.
+English and Chinese page sets, every internal link and anchor, the sidebar
+coverage and — on the guide only — the heading levels and the `description`
+frontmatter. A missing `description` is a warning, not an error. The checker also
+verifies the compatibility page's Summary counts against its operation rows.
 
 ## Related
 

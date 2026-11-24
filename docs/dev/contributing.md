@@ -7,15 +7,19 @@ npm ci
 cargo build --bin nanofile
 ```
 
-The repository's verification commands, in the order CI runs them:
+The repository's verification commands:
 
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p server --features tray --bin nanofile -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --bins --no-deps --document-private-items
+RUSTDOCFLAGS="-D warnings" cargo doc -p server --features tray --bins --no-deps --document-private-items
 cargo test -p server --features tray --bin nanofile
 cargo machete
 NANOFILE_TEST_FFMPEG_PATH="$(command -v ffmpeg)" cargo test --workspace --no-fail-fast
+cargo test --workspace --doc
+node tools/check-comments.mjs
 node --test "server/frontend/**/*.test.js"
 cargo audit
 ```
@@ -51,11 +55,14 @@ misplaced module documents and the known mojibake.
 The dependency graph is part of the build contract:
 
 - Do not enable the default features of the dev `reqwest` (its TLS pulls in
-  `aws-lc-rs`) or of the dev `image` (its formats pull in `rav1e`/`ravif`).
+  `aws-lc-rs`), and do not add a dev `image` entry or reopen its default features
+  (they pull in `rav1e`/`ravif`).
 - TLS is used only by `lettre` (SMTP, rustls/ring). `sqlx`/`sea-orm` use
   `runtime-tokio` and only connect to SQLite.
 - `ci.yml` fails if `cargo machete` finds an unused direct dependency, or if
-  `aws-lc-rs`, `aws-lc-sys`, `rav1e` or `ravif` reappears in the graph.
+  `aws-lc-rs`, `aws-lc-sys`, `rav1e`, `ravif`, `zstd-sys`, `jieba-rs`, `tract`
+  (and its `tract-*` crates), `ort`/`ort-sys`, `onnxruntime`/`onnxruntime-sys`,
+  `openblas-src` or `accelerate-src` reappears in the graph.
 
 ## Documentation
 

@@ -6,10 +6,12 @@
 
 在每次 push/PR 到 `main`、`master` 或 `develop` 时运行，也可以手动"Run workflow"。路径过滤器决定哪些 job 运行：
 
-- **`lint`**（Linux）—— `cargo fmt --check`、整个 workspace 的 clippy、依赖守卫、rustdoc 与 `cargo audit`。
+- **`lint`**（Linux）—— `cargo fmt --check`、整个 workspace 的 clippy、rustdoc 与依赖守卫。
+- **`comment-hygiene`**（Linux）—— 用 `node tools/check-comments.mjs` 检查错位的模块文档与 mojibake。
 - **`lint-platforms`**（macOS、Windows）—— 针对 Linux runner 永远不会编译的 `cfg` 代码跑 clippy 与 rustdoc。
-- **`tray-check`**（Linux、macOS、Windows）—— 可选 tray feature 的 clippy、rustdoc 与单元测试。
-- **`tests`**（Linux x86_64 与 arm64、macOS arm64、Windows amd64）—— 完整 Rust 套件。
+- **`tray-check`**（Linux、macOS、Windows）—— 可选 tray feature 的 clippy 与单元测试。
+- **`tests`**（Linux x86_64 与 arm64、macOS arm64、Windows amd64）—— Rust 套件（不含 OCR）。
+- **`ocr-tests`**（Linux amd64、macOS arm64、Windows amd64）—— OCR 用例，与主套件并行。
 - **`cross-check`**（Linux）—— 编译并 lint 四个没有 runner 的 Linux 目标（`x86_64-unknown-linux-musl`、`aarch64-unknown-linux-musl`、`loongarch64-unknown-linux-gnu`、`loongarch64-unknown-linux-musl`）。
 - **`frontend-test`** —— `node --test`。
 - **`e2e`** —— 用 debug 二进制跑 Playwright。
@@ -26,13 +28,13 @@ Action 固定到完整 commit SHA，tag 写在行尾注释里，因此被移动�
 `lint` job 会在以下情况失败：
 
 - 有未使用的直接依赖（`cargo machete`），或
-- `aws-lc-rs`、`aws-lc-sys`、`rav1e`、`ravif` 重新进入依赖图。它们会通过 `reqwest` 的 TLS 与 `image` 的格式默认特性被拽回来，因此 `server/Cargo.toml` 的 dev-dependencies 关掉了这些默认特性。
+- `aws-lc-rs`、`aws-lc-sys`、`rav1e`、`ravif`、`zstd-sys`、`jieba-rs`、`tract`（及其 `tract-*` crate）、`ort`/`ort-sys`、`onnxruntime`/`onnxruntime-sys`、`openblas-src`、`accelerate-src` 重新进入依赖图。AWS-LC 经 `reqwest` 的默认 TLS 进来，ravif/rav1e 经 `image` 的默认格式进来（因此 `server/Cargo.toml` 的 dev-dependencies 关掉了这些默认特性），`zstd-sys` 经 `include-flate` 的默认特性进来；其余是项目自研推理运行时刻意替代的推理运行时、分词器与 BLAS 库。
 
-`cargo audit` 不再带忽略项：内置的 HS256 编解码把 RSA/ECDSA 算法及其公告挡在了依赖图之外。
+`cargo audit` 只在发现漏洞时失败；unmaintained crate 只作为 warning 报告。`.cargo/audit.toml` 显式忽略一条公告：`RUSTSEC-2026-0592`，即 `url` 的 `Url::origin()` 栈溢出——服务器从不调用该函数，而补丁会改变带 Windows 路径的 `sqlite://` URL 的解析方式，因此暂不升级。
 
 ### 构建缓存
 
-Rust 构建通过 `Swatinem/rust-cache` 共享，分成两个 `shared-key` 家族：`nanofile` 只放 check 产物（clippy 与 rustdoc，不链接），`nanofile-build` 放链接后的 dev/test 产物。缓存条目不可覆盖——先保存该 key 的 job 决定它之后的内容——因此 job 必须写入与自身产物匹配的家族。check-only 条目落到 build job 的 key 上，会让该 job 每次运行都重编译整棵依赖图。
+Rust 构建通过 `Swatinem/rust-cache` 共享，分成三个 `shared-key` 家族：`nanofile-v2` 只放 check 产物（clippy 与 rustdoc，不链接），`nanofile-build-v2` 放链接后的 dev/test 产物，`nanofile-cross` 放 `cross-check` 写出的交叉目标 check 单元。缓存条目不可覆盖——先保存该 key 的 job 决定它之后的内容——因此 job 必须写入与自身产物匹配的家族。check-only 条目落到 build job 的 key 上，会让该 job 每次运行都重编译整棵依赖图。
 
 ## `nightly.yml`
 
@@ -40,12 +42,12 @@ Rust 构建通过 `Swatinem/rust-cache` 共享，分成两个 `shared-key` 家�
 
 ## `release.yml`
 
-在 `v*.*.*` tag 上运行，或手动指定版本。它构建每个平台与架构，对发布产物跑同一份沙盒 probe，构建多架构容器镜像并发布：
+在 `v*.*.*` tag 上运行，或手动指定版本。它构建每个平台与架构，对原生构建的产物跑同一份沙盒 probe，构建多架构容器镜像并发布：
 
 - 带版本号的镜像（`v<version>`、`v<major>.<minor>`，默认分支上还有 `latest`），
 - 带归档与发布说明的 GitHub Release。
 
-发布归档包含 README。
+交叉构建的产物（musl、arm64 与 loong64）不会在 runner 上实际运行，镜像 probe 也只跑 runner 自身的架构。发布归档包含 README。
 
 ## `docs.yml`
 

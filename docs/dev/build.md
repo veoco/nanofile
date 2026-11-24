@@ -8,8 +8,12 @@ not require a build: see [Installing and first run](/guide/start/getting-started
 - **A stable Rust toolchain.** The workspace uses edition 2024.
 - **Node.js and npm.** Only to provide `esbuild` and Tailwind, see below. CI uses
   Node 24.
-- **Optional: `ffmpeg`.** It only affects media thumbnails; without it, media
-  thumbnails are unavailable and the media tests are skipped.
+- **Optional: `ffmpeg`.** Besides video thumbnails, the helper decodes the
+  HEIC/HEIF/AVIF stills the image crate cannot read, so it also backs those
+  thumbnails, the people-tag scan of those formats and their OCR. Without it
+  those features are unavailable; the media tests skip on a development host,
+  while CI installs the helper on every runner and fails the test if it is
+  missing.
 - **Only for a `tray` build:** a resource compiler on Windows; Linux needs no
   extra system package. See [Optional feature: `tray`](#optional-feature-tray).
 
@@ -26,8 +30,9 @@ not require a build: see [Installing and first run](/guide/start/getting-started
 3. **Tray icons** (only with the `tray` feature) — rasterized from
    `static/img/favicon.svg`, and on Windows embedded as exe resources.
 
-Both tools are looked up in `node_modules/.bin/` of the crate root and the
-workspace root first, then on `PATH`. That is all the `npm ci` below is for.
+Both tools are looked up as a standalone binary first — a file named after the
+tool beside `build.rs`, then `PATH` — and only then in `node_modules/.bin/` of the
+crate root and the workspace root. That is all the `npm ci` below is for.
 
 A frontend change needs a `cargo build`; there is no hot reload. The frontend's
 own conventions are in [Frontend](/dev/frontend).
@@ -47,8 +52,12 @@ cargo build --bin nanofile        # the binary is target/debug/nanofile
 ```
 
 The two profiles differ at startup: a release build **refuses to start** without
-`server.secret_key`, while a debug build generates an ephemeral one, so sessions
-do not survive a restart. See [Security](/guide/admin/security).
+a strong `server.secret_key`, while a debug build generates an ephemeral one. The
+ephemeral key is regenerated on every start, so everything derived from it
+becomes unreadable after a restart: the encrypted sync tokens, TOTP seeds, queued
+mail bodies and saved secrets. Browser sessions are not derived from the master
+key — the database stores only a SHA-256 digest of the random session token — so
+they survive. See [Security](/guide/admin/security).
 
 ## Binary size and the performance probe
 
@@ -145,7 +154,7 @@ cargo zigbuild --release --target aarch64-unknown-linux-musl
 | `x86_64-pc-windows-msvc` | Windows amd64 |
 | `aarch64-apple-darwin` | macOS Apple Silicon |
 
-The toolchain is pinned: `cargo-zigbuild@0.23.4` with zig `0.16.0`, and the
+The toolchain is pinned: `cargo-zigbuild@0.24.1` with zig `0.16.0`, and the
 archive is checked against its SHA-256 before it is unpacked — a replaced CDN or
 tarball cannot inject a toolchain into the build. Zig 0.15+ raises the baseline
 of the binaries it emits to glibc 2.31 / Linux 5.10; keep older hosts working

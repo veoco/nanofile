@@ -6,7 +6,7 @@
 
 - **稳定的 Rust 工具链。** workspace 使用 edition 2024。
 - **Node.js 与 npm。** 只为提供 `esbuild` 与 Tailwind，见下节。CI 使用 Node 24。
-- **可选：`ffmpeg`。** 只影响媒体缩略图；缺少它时媒体缩略图不可用，媒体测试会被跳过。
+- **可选：`ffmpeg`。** 除了视频缩略图，helper 还负责解码 `image` crate 读不了的 HEIC/HEIF/AVIF 静帧，因此这些格式的缩略图、人物标签扫描与 OCR 也依赖它。缺少它时这些功能不可用；媒体测试在开发机上跳过，而 CI 会在每个 runner 上安装 helper，缺失时测试直接失败而不是跳过。
 - **仅 `tray` 构建：** Windows 需要资源编译器；Linux 不需要额外系统包。见下面「可选 feature：`tray`」一节。
 
 ## 前端资源怎么进二进制
@@ -17,7 +17,7 @@
 2. **esbuild**（必需）—— 把 `frontend/entries/` 下的入口打包成 `static/js/*.bundle.js`。找不到 esbuild 时构建**直接失败**（内联在模板里的脚本依赖这些产物）。
 3. **托盘图标**（仅 `tray` feature）—— 从 `static/img/favicon.svg` 光栅化出各尺寸图标，在 Windows 上再嵌入 exe 资源。
 
-两者都先在 crate 根目录与 workspace 根的 `node_modules/.bin/` 里找，再退回 `PATH`。因此下面这条 `npm ci` 只是为了把这两个工具放进去。
+两者都先按独立可执行文件查找——先找 `build.rs` 旁边与工具同名的文件，再找 `PATH`——之后才找 crate 根目录与 workspace 根的 `node_modules/.bin/`。因此下面这条 `npm ci` 只是为了把这两个工具放进去。
 
 改完前端必须重新 `cargo build`，没有热重载。前端本身的约定见[前端](/zh/dev/frontend)。
 
@@ -35,7 +35,7 @@ cargo build --release -p server   # 产物是 target/release/nanofile
 cargo build --bin nanofile        # 产物是 target/debug/nanofile
 ```
 
-两种 profile 在启动行为上有差别：release 构建在没有 `server.secret_key` 时**拒绝启动**，debug 构建会临时生成一个，因此会话无法跨重启保留。见[安全](/zh/guide/admin/security)。
+两种 profile 在启动行为上有差别：release 构建在没有强 `server.secret_key` 时**拒绝启动**，debug 构建则会临时生成一个。临时密钥每次启动都重新生成，因此由它派生的数据在重启后不可读：加密的同步令牌、TOTP 种子、队列邮件正文与已保存的 secret。浏览器会话不由主密钥派生——数据库里只存随机会话令牌的 SHA-256 摘要——因此能跨重启保留。见[安全](/zh/guide/admin/security)。
 
 ## 二进制体积与性能探针
 
@@ -109,7 +109,7 @@ cargo zigbuild --release --target aarch64-unknown-linux-musl
 | `x86_64-pc-windows-msvc` | Windows amd64 |
 | `aarch64-apple-darwin` | macOS Apple Silicon |
 
-工具链是固定的：`cargo-zigbuild@0.23.4` 配 zig `0.16.0`，且归档按 SHA-256 校验后才解压——被替换的 CDN 或 tarball 无法把工具链塞进构建。zig 0.15+ 把产出二进制的基线抬到了 glibc 2.31 / Linux 5.10，要让更老的主机继续可用就加后缀，例如 `--target aarch64-unknown-linux-gnu.2.28`。
+工具链是固定的：`cargo-zigbuild@0.24.1` 配 zig `0.16.0`，且归档按 SHA-256 校验后才解压——被替换的 CDN 或 tarball 无法把工具链塞进构建。zig 0.15+ 把产出二进制的基线抬到了 glibc 2.31 / Linux 5.10，要让更老的主机继续可用就加后缀，例如 `--target aarch64-unknown-linux-gnu.2.28`。
 
 musl 产物是静态链接的，容器镜像（`FROM scratch`）用的就是它们。
 
