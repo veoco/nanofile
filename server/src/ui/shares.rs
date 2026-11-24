@@ -1,4 +1,3 @@
-/// Web UI share handlers — list, create, delete share links.
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},
@@ -6,7 +5,6 @@ use axum::{
     response::{Html, IntoResponse},
 };
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -14,6 +12,10 @@ use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
+use super::shares_data::{LinkScope, load_links};
+
+pub type ShareLinkInfo = super::shares_data::ShareLinkRow;
+pub type UploadLinkInfo = super::shares_data::UploadLinkRow;
 
 #[derive(Template)]
 #[template(path = "shares/list.html")]
@@ -34,35 +36,6 @@ pub struct SharesTemplate {
     pub sharing_enabled: bool,
     pub share_download_enabled: bool,
     pub share_upload_enabled: bool,
-}
-
-pub struct UploadLinkInfo {
-    pub token: String,
-    pub repo_id: String,
-    pub repo_name: String,
-    pub path: String,
-    pub name: String,
-    pub created_at_ts: i64,
-    pub expires_at_ts: Option<i64>,
-    pub has_password: bool,
-    pub view_cnt: i64,
-    pub link_url: String,
-    pub description: Option<String>,
-}
-
-pub struct ShareLinkInfo {
-    pub token: String,
-    pub repo_id: String,
-    pub repo_name: String,
-    pub path: String,
-    pub name: String,
-    pub created_at_ts: i64,
-    pub expires_at_ts: Option<i64>,
-    pub has_password: bool,
-    pub view_cnt: i64,
-    pub s_type: String,
-    pub link_url: String,
-    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -91,97 +64,9 @@ pub async fn list_shares(
         return Err(AppError::NotFound("sharing is turned off".into()));
     }
 
-    let links = if share_download_enabled {
-        state
-            .repos
-            .share_link
-            .find_by_creator_id(user.user_id)
-            .await?
-    } else {
-        Vec::new()
-    };
-    let upload_models = if share_upload_enabled {
-        state
-            .repos
-            .upload_link
-            .find_by_creator_id(user.user_id)
-            .await?
-    } else {
-        Vec::new()
-    };
-
-    let mut repo_ids: Vec<String> = Vec::new();
-    for s in &links {
-        if !repo_ids.contains(&s.repo_id) {
-            repo_ids.push(s.repo_id.clone());
-        }
-    }
-    for u in &upload_models {
-        if !repo_ids.contains(&u.repo_id) {
-            repo_ids.push(u.repo_id.clone());
-        }
-    }
-    // One batched query, not one `find_by_id` per distinct repo (N+1).
-    let mut repo_names: HashMap<String, String> = HashMap::new();
-    if !repo_ids.is_empty() {
-        for r in state.repos.repo.find_by_ids(&repo_ids).await? {
-            repo_names.insert(r.id, r.name);
-        }
-    }
-
-    let share_links: Vec<ShareLinkInfo> = links
-        .into_iter()
-        .map(|s| {
-            let name = s
-                .path
-                .rsplit_once('/')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or_else(|| s.path.clone());
-            ShareLinkInfo {
-                token: s.token.clone(),
-                repo_id: s.repo_id.clone(),
-                repo_name: repo_names.get(&s.repo_id).cloned().unwrap_or_default(),
-                path: s.path.clone(),
-                name,
-                created_at_ts: s.created_at,
-                expires_at_ts: s.expires_at,
-                has_password: s.password.is_some(),
-                view_cnt: s.view_cnt,
-                s_type: s.s_type.clone(),
-                link_url: if s.s_type == "d" {
-                    format!("/d/{}/", s.token)
-                } else {
-                    format!("/f/{}/", s.token)
-                },
-                description: s.description,
-            }
-        })
-        .collect();
-
-    let upload_links: Vec<UploadLinkInfo> = upload_models
-        .into_iter()
-        .map(|u| {
-            let name = u
-                .path
-                .trim_end_matches('/')
-                .rsplit_once('/')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or_else(|| u.path.clone());
-            UploadLinkInfo {
-                token: u.token.clone(),
-                repo_id: u.repo_id.clone(),
-                repo_name: repo_names.get(&u.repo_id).cloned().unwrap_or_default(),
-                path: u.path.clone(),
-                name,
-                created_at_ts: u.created_at,
-                expires_at_ts: u.expires_at,
-                has_password: u.password.is_some(),
-                view_cnt: u.view_cnt,
-                link_url: format!("/u/{}/", u.token),
-                description: u.description,
-            }
-        })
-        .collect();
+    let links = load_links(&state, LinkScope::Own(user.user_id)).await?;
+    let share_links = links.share_links;
+    let upload_links = links.upload_links;
 
     // A `?tab=` naming a switched-off direction falls back to the one that is open,
     // so a bookmark left behind by a stricter setting still lands somewhere useful.
@@ -260,22 +145,11 @@ pub async fn delete_share(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    let link = state
-        .repos
-        .share_link
-        .find_by_token(&token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Share link not found".to_string()))?;
-
-    if link.creator_id != user.user_id {
-        return Err(AppError::Forbidden);
+    let deleted =
+        super::shares_data::delete_share(&state.repos, &token, user.user_id, false).await?;
+    if !deleted {
+        return Err(AppError::NotFound("Share link not found".to_string()));
     }
-
-    state
-        .repos
-        .share_link
-        .delete_by_token_and_user(&token, user.user_id)
-        .await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",
@@ -297,22 +171,17 @@ pub async fn delete_upload(
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    let link = state
-        .repos
-        .upload_link
-        .find_by_token(&token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Upload link not found".to_string()))?;
-
-    if link.creator_id != user.user_id {
-        return Err(AppError::Forbidden);
+    let deleted = super::shares_data::delete_upload(
+        &state.repos,
+        &state.token_manager,
+        &token,
+        user.user_id,
+        false,
+    )
+    .await?;
+    if !deleted {
+        return Err(AppError::NotFound("Upload link not found".to_string()));
     }
-
-    state
-        .repos
-        .upload_link
-        .delete_by_token_and_user(&token, user.user_id)
-        .await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",

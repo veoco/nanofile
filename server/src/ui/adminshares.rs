@@ -3,10 +3,9 @@ use askama::Template;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
 };
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
@@ -14,6 +13,10 @@ use crate::i18n::I18n;
 use base::error::AppError;
 
 use super::auth_extractor::WebUser;
+use super::shares_data::{LinkScope, load_links};
+
+pub type AdminShareLinkInfo = super::shares_data::ShareLinkRow;
+pub type AdminUploadLinkInfo = super::shares_data::UploadLinkRow;
 
 #[derive(Template)]
 #[template(path = "adminshares/list.html")]
@@ -34,37 +37,6 @@ pub struct AdminSharesTemplate {
     pub current_repo_id: Option<String>,
     pub share_download_enabled: bool,
     pub share_upload_enabled: bool,
-}
-
-pub struct AdminShareLinkInfo {
-    pub token: String,
-    pub repo_id: String,
-    pub repo_name: String,
-    pub path: String,
-    pub name: String,
-    pub creator_email: String,
-    pub created_at_ts: i64,
-    pub expires_at_ts: Option<i64>,
-    pub has_password: bool,
-    pub view_cnt: i64,
-    pub s_type: String,
-    pub link_url: String,
-    pub description: Option<String>,
-}
-
-pub struct AdminUploadLinkInfo {
-    pub token: String,
-    pub repo_id: String,
-    pub repo_name: String,
-    pub path: String,
-    pub name: String,
-    pub creator_email: String,
-    pub created_at_ts: i64,
-    pub expires_at_ts: Option<i64>,
-    pub has_password: bool,
-    pub view_cnt: i64,
-    pub link_url: String,
-    pub description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +60,7 @@ pub async fn list_all_shares(
     Query(query): Query<AdminSharesQuery>,
 ) -> Response {
     if !user.is_admin {
-        return Redirect::to("/libraries/").into_response();
+        return axum::response::Redirect::to("/libraries/").into_response();
     }
 
     let success = match query.action.as_deref() {
@@ -114,105 +86,7 @@ async fn render_page(
     error: Option<String>,
     success: Option<String>,
 ) -> Result<Response, AppError> {
-    let share_models = state.repos.share_link.find_all().await?;
-    let upload_models = state.repos.upload_link.find_all().await?;
-
-    let mut creator_ids: Vec<i32> = Vec::new();
-    for s in &share_models {
-        if !creator_ids.contains(&s.creator_id) {
-            creator_ids.push(s.creator_id);
-        }
-    }
-    for u in &upload_models {
-        if !creator_ids.contains(&u.creator_id) {
-            creator_ids.push(u.creator_id);
-        }
-    }
-    let mut creator_emails: HashMap<i32, String> = HashMap::new();
-    for cid in &creator_ids {
-        let u = state.repos.user.find_by_id(*cid).await.unwrap_or(None);
-        creator_emails.insert(*cid, u.map(|u| u.email).unwrap_or_default());
-    }
-
-    let mut repo_ids: Vec<String> = Vec::new();
-    for s in &share_models {
-        if !repo_ids.contains(&s.repo_id) {
-            repo_ids.push(s.repo_id.clone());
-        }
-    }
-    for u in &upload_models {
-        if !repo_ids.contains(&u.repo_id) {
-            repo_ids.push(u.repo_id.clone());
-        }
-    }
-    let mut repo_names: HashMap<String, String> = HashMap::new();
-    for rid in &repo_ids {
-        let r = state.repos.repo.find_by_id(rid).await.unwrap_or(None);
-        repo_names.insert(rid.clone(), r.map(|r| r.name).unwrap_or_default());
-    }
-
-    let share_links: Vec<AdminShareLinkInfo> = share_models
-        .into_iter()
-        .map(|s| {
-            let name = s
-                .path
-                .rsplit_once('/')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or_else(|| s.path.clone());
-            AdminShareLinkInfo {
-                token: s.token.clone(),
-                repo_id: s.repo_id.clone(),
-                repo_name: repo_names.get(&s.repo_id).cloned().unwrap_or_default(),
-                path: s.path.clone(),
-                name,
-                creator_email: creator_emails
-                    .get(&s.creator_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                created_at_ts: s.created_at,
-                expires_at_ts: s.expires_at,
-                has_password: s.password.is_some(),
-                view_cnt: s.view_cnt,
-                s_type: s.s_type.clone(),
-                link_url: if s.s_type == "d" {
-                    format!("/d/{}/", s.token)
-                } else {
-                    format!("/f/{}/", s.token)
-                },
-                description: s.description,
-            }
-        })
-        .collect();
-
-    let upload_links: Vec<AdminUploadLinkInfo> = upload_models
-        .into_iter()
-        .map(|u| {
-            let name = u
-                .path
-                .trim_end_matches('/')
-                .rsplit_once('/')
-                .map(|(_, n)| n.to_string())
-                .unwrap_or_else(|| u.path.clone());
-            AdminUploadLinkInfo {
-                token: u.token.clone(),
-                repo_id: u.repo_id.clone(),
-                repo_name: repo_names.get(&u.repo_id).cloned().unwrap_or_default(),
-                path: u.path.clone(),
-                name,
-                creator_email: creator_emails
-                    .get(&u.creator_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                created_at_ts: u.created_at,
-                expires_at_ts: u.expires_at,
-                has_password: u.password.is_some(),
-                view_cnt: u.view_cnt,
-                link_url: format!("/u/{}/", u.token),
-                description: u.description,
-            }
-        })
-        .collect();
-
+    let links = load_links(state, LinkScope::All).await?;
     let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
 
     let tpl = AdminSharesTemplate {
@@ -221,8 +95,8 @@ async fn render_page(
         user_email: ctx.user_email,
         is_admin: ctx.is_admin,
         csrf_token: Some(ctx.csrf_token),
-        share_links,
-        upload_links,
+        share_links: links.share_links,
+        upload_links: links.upload_links,
         active_page: "adminshares",
         active_tab,
         error,
@@ -250,28 +124,28 @@ pub async fn delete_share(
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
-
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
-        form.get("csrf_token").map(|s| s.as_str()),
+        form.get("csrf_token").map(String::as_str),
     )?;
 
-    // Admin delete — no creator_id check. Zero rows affected means the link is
-    // already gone (stale page, double submit), which is reported as such.
-    let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
-    match state.repos.share_link.delete_by_token(&token).await {
-        Ok(res) if res.rows_affected == 0 => {
-            let msg = I18n::get(user.language.as_deref())
-                .tr("admin.link_not_found")
-                .to_string();
-            return render_page(&state, &user, tab, Some(msg), None).await;
-        }
-        Ok(_) => {}
-        Err(e) => {
-            let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
-            return render_page(&state, &user, tab, Some(msg), None).await;
-        }
+    // Admin delete: no creator check. A stale page or double submit reports the
+    // link as already gone instead of erroring.
+    let tab = normalize_tab(form.get("tab").map(String::as_str));
+    let deleted =
+        match super::shares_data::delete_share(&state.repos, &token, user.user_id, true).await {
+            Ok(deleted) => deleted,
+            Err(e) => {
+                let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
+                return render_page(&state, &user, tab, Some(msg), None).await;
+            }
+        };
+    if !deleted {
+        let msg = I18n::get(user.language.as_deref())
+            .tr("admin.link_not_found")
+            .to_string();
+        return render_page(&state, &user, tab, Some(msg), None).await;
     }
 
     Ok((StatusCode::FOUND, [("Location", deleted_location(&tab))]).into_response())
@@ -287,28 +161,33 @@ pub async fn delete_upload(
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
-
     crate::service::auth::csrf::check_form_csrf(
         &state,
         &user.session_token,
-        form.get("csrf_token").map(|s| s.as_str()),
+        form.get("csrf_token").map(String::as_str),
     )?;
 
-    // Admin delete — no creator_id check. Zero rows affected means the link is
-    // already gone (stale page, double submit), which is reported as such.
-    let tab = normalize_tab(form.get("tab").map(|s| s.as_str()));
-    match state.repos.upload_link.delete_by_token(&token).await {
-        Ok(res) if res.rows_affected == 0 => {
-            let msg = I18n::get(user.language.as_deref())
-                .tr("admin.link_not_found")
-                .to_string();
-            return render_page(&state, &user, tab, Some(msg), None).await;
-        }
-        Ok(_) => {}
+    let tab = normalize_tab(form.get("tab").map(String::as_str));
+    let deleted = match super::shares_data::delete_upload(
+        &state.repos,
+        &state.token_manager,
+        &token,
+        user.user_id,
+        true,
+    )
+    .await
+    {
+        Ok(deleted) => deleted,
         Err(e) => {
             let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
             return render_page(&state, &user, tab, Some(msg), None).await;
         }
+    };
+    if !deleted {
+        let msg = I18n::get(user.language.as_deref())
+            .tr("admin.link_not_found")
+            .to_string();
+        return render_page(&state, &user, tab, Some(msg), None).await;
     }
 
     Ok((StatusCode::FOUND, [("Location", deleted_location(&tab))]).into_response())

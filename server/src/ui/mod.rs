@@ -17,6 +17,7 @@ pub mod repos;
 pub mod search;
 pub mod settings;
 pub mod shares;
+pub mod shares_data;
 pub mod sso;
 pub mod starred;
 pub mod sysadmin;
