@@ -24,12 +24,9 @@ pub fn validate_csrf_token(secret: &[u8], session_token: &str, csrf_token: &str)
     expected.as_bytes().ct_eq(csrf_token.as_bytes()).into()
 }
 
-pub fn extract_session_token(cookie_str: &str) -> Option<&str> {
-    cookie_str
-        .split(';')
-        .map(|s| s.trim())
-        .find(|s| s.starts_with("seahub-session="))
-        .and_then(|s| s.strip_prefix("seahub-session="))
+/// The `seahub-session` cookie's value, parsed like every other cookie consumer.
+pub fn session_token(headers: &HeaderMap) -> Option<String> {
+    crate::middleware::cookies::cookie_value(headers, "seahub-session")
 }
 
 /// Validate a form-field CSRF token for an authenticated user; missing or invalid
@@ -127,25 +124,16 @@ fn validate_link_unlock(secret: &[u8], token: &str, password_version: &str, valu
 /// minting the cookie itself 鈥?and a cookie minted before a password change no
 /// longer matches the current version.
 pub fn has_link_unlock_cookie(
-    cookie_header: Option<&str>,
+    headers: &HeaderMap,
     cookie_name: &str,
     token: &str,
     password_version: &str,
     secret: &[u8],
 ) -> bool {
-    let prefix = format!("{cookie_name}=");
-    let Some(cookie) = cookie_header else {
+    let Some(value) = crate::middleware::cookies::cookie_value(headers, cookie_name) else {
         return false;
     };
-    let Some(value) = cookie
-        .split(';')
-        .map(|s| s.trim())
-        .find(|s| s.starts_with(&prefix))
-        .and_then(|s| s.strip_prefix(&prefix))
-    else {
-        return false;
-    };
-    validate_link_unlock(secret, token, password_version, value)
+    validate_link_unlock(secret, token, password_version, &value)
 }
 
 /// `Set-Cookie` value that unlocks a password-protected link for this browser.
@@ -173,13 +161,13 @@ pub fn link_unlock_cookie(
 /// value cannot be forged by a client that never entered the password, and it
 /// stops validating once the link's password changes.
 pub fn has_valid_upload_link_cookie(
-    cookie_header: Option<&str>,
+    headers: &HeaderMap,
     token: &str,
     password_version: &str,
     secret: &[u8],
 ) -> bool {
     has_link_unlock_cookie(
-        cookie_header,
+        headers,
         &upload_link_cookie_name(token),
         token,
         password_version,
@@ -234,18 +222,27 @@ mod tests {
         assert!(!validate_csrf_token(secret, "session", "wrong-token"));
     }
 
+    fn cookie_headers(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            axum::http::HeaderValue::from_str(value).expect("header value"),
+        );
+        headers
+    }
+
     #[test]
-    fn test_extract_session_token() {
+    fn test_session_token() {
         assert_eq!(
-            extract_session_token("seahub-session=abc123; other=val"),
+            session_token(&cookie_headers("seahub-session=abc123; other=val")).as_deref(),
             Some("abc123")
         );
         assert_eq!(
-            extract_session_token("other=val; seahub-session=xyz789"),
+            session_token(&cookie_headers("other=val; seahub-session=xyz789")).as_deref(),
             Some("xyz789")
         );
-        assert_eq!(extract_session_token("no-cookie-here"), None);
-        assert_eq!(extract_session_token(""), None);
+        assert_eq!(session_token(&cookie_headers("no-cookie-here")), None);
+        assert_eq!(session_token(&HeaderMap::new()), None);
     }
 
     #[test]
@@ -361,21 +358,22 @@ mod tests {
         let token = "link-token";
         let cookie_name = share_link_cookie_name(token);
         let old_cookie = link_unlock_cookie(&cookie_name, token, "old-hash", secret, false);
+        let old_headers = cookie_headers(&old_cookie);
 
         assert!(has_link_unlock_cookie(
-            Some(&old_cookie),
+            &old_headers,
             &cookie_name,
             token,
             "old-hash",
             secret
         ));
         assert!(
-            !has_link_unlock_cookie(Some(&old_cookie), &cookie_name, token, "new-hash", secret),
+            !has_link_unlock_cookie(&old_headers, &cookie_name, token, "new-hash", secret),
             "a cookie minted before the password change must not unlock the link"
         );
         assert!(
             !has_link_unlock_cookie(
-                Some(&format!("{cookie_name}=1")),
+                &cookie_headers(&format!("{cookie_name}=1")),
                 &cookie_name,
                 token,
                 "old-hash",
@@ -384,7 +382,7 @@ mod tests {
             "a plaintext cookie value must be rejected"
         );
         assert!(
-            !has_link_unlock_cookie(None, &cookie_name, token, "old-hash", secret),
+            !has_link_unlock_cookie(&HeaderMap::new(), &cookie_name, token, "old-hash", secret),
             "a missing Cookie header has no unlock"
         );
     }
@@ -436,8 +434,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_multiple_cookies() {
-        let cookie = "seahub-session=my-token; other=cookie; seahub-session=second";
-        assert_eq!(extract_session_token(cookie), Some("my-token"));
+    fn test_session_token_picks_the_first_of_multiple_cookies() {
+        let headers =
+            cookie_headers("seahub-session=my-token; other=cookie; seahub-session=second");
+        assert_eq!(session_token(&headers).as_deref(), Some("my-token"));
     }
 }

@@ -477,7 +477,7 @@ pub async fn get_upload_link_upload_url_v21(
     // issued before a password change no longer mints an upload token.
     if link.password.is_some()
         && !crate::service::auth::csrf::has_valid_upload_link_cookie(
-            headers.get("cookie").and_then(|v| v.to_str().ok()),
+            &headers,
             &token,
             link.password.as_deref().unwrap_or(""),
             &state.csrf_secret,

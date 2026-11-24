@@ -4,7 +4,6 @@ use axum::{
     http::{HeaderMap, StatusCode, request::Parts},
     response::{IntoResponse, Response},
 };
-use axum_extra::headers::{Cookie, Header};
 
 use crate::AppState;
 use crate::domain::api_key::KeyAuthority;
@@ -551,31 +550,10 @@ fn extract_auth_header_token(headers: &axum::http::HeaderMap) -> Option<String> 
 
 /// The value of one cookie from a request's `Cookie` headers.
 ///
-/// One parser for every caller: the Web UI extractor and this module each scanned the header
-/// themselves before, so a header the HTTP library can decode (quoted values, several `Cookie`
-/// headers) authenticated on one surface and not the other.
-///
-/// `Cookie::decode` is the primary path because it knows those rules, but it rejects the whole
-/// header on a segment it cannot parse — and a browser will happily send one. The plain scan stays
-/// as a fallback so a malformed neighbour does not turn a working session into a 401.
-pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    if let Ok(cookie) = Cookie::decode(&mut headers.get_all("cookie").iter())
-        && let Some(value) = cookie.get(name)
-    {
-        return Some(value.to_string());
-    }
-    headers
-        .get_all("cookie")
-        .iter()
-        .filter_map(|value| value.to_str().ok())
-        .flat_map(|header| header.split(';'))
-        .map(str::trim)
-        .find_map(|pair| {
-            pair.strip_prefix(name)
-                .and_then(|rest| rest.strip_prefix('='))
-                .map(str::to_string)
-        })
-}
+/// Kept as a re-export so existing callers inside this module and the UI
+/// extractor do not have to know where the parser lives; the implementation is
+/// shared with the CSRF checks ([`crate::middleware::cookies::cookie_value`]).
+pub use crate::middleware::cookies::cookie_value;
 
 /// The `seahub-session` cookie's value, if the request carries one.
 pub fn session_cookie_value(headers: &HeaderMap) -> Option<String> {
@@ -792,11 +770,11 @@ async fn note_key_usage(repos: &Repositories, key_id: i32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthRejection, cookie_value, extract_url_repo_id, route_decision};
+    use super::{AuthRejection, extract_url_repo_id, route_decision};
     use crate::domain::api_key::{KeyAuthority, RepoCeiling};
     use crate::domain::capability::{Capability, CapabilitySet};
     use crate::domain::credential::Credential;
-    use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+    use axum::http::{Method, StatusCode};
     use axum::response::IntoResponse;
     use std::collections::HashMap;
 
@@ -822,50 +800,6 @@ mod tests {
             body["error_msg"].as_str().is_some_and(|m| !m.is_empty()),
             "a rejection must name the reason: {body:?}"
         );
-    }
-
-    /// The cookie parser finds the session cookie in the header shapes a browser actually sends,
-    /// and still finds it next to a segment `Cookie::decode` rejects.
-    #[test]
-    fn the_session_cookie_is_found_whatever_the_header_shape() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "cookie",
-            HeaderValue::from_static("seahub-session=first; sfcsrftoken=x"),
-        );
-        assert_eq!(
-            cookie_value(&headers, "seahub-session").as_deref(),
-            Some("first")
-        );
-
-        // A segment without `=` makes the strict decoder reject the whole header; the scan still
-        // finds the session cookie, so a malformed neighbour does not log the browser out.
-        headers.insert(
-            "cookie",
-            HeaderValue::from_static("garbage; seahub-session=plain"),
-        );
-        assert_eq!(
-            cookie_value(&headers, "seahub-session").as_deref(),
-            Some("plain")
-        );
-
-        // Split across two headers, as a request that accumulated cookies can be.
-        let mut headers = HeaderMap::new();
-        headers.append("cookie", HeaderValue::from_static("a=1"));
-        headers.append("cookie", HeaderValue::from_static("seahub-session=second"));
-        assert_eq!(
-            cookie_value(&headers, "seahub-session").as_deref(),
-            Some("second")
-        );
-
-        // A cookie whose name merely ends with the one asked for is not a match.
-        let mut headers = HeaderMap::new();
-        headers.insert("cookie", HeaderValue::from_static("xseahub-session=nope"));
-        assert_eq!(cookie_value(&headers, "seahub-session"), None);
-
-        let mut headers = HeaderMap::new();
-        headers.insert("cookie", HeaderValue::from_static("other=1"));
-        assert_eq!(cookie_value(&headers, "seahub-session"), None);
     }
 
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";

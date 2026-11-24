@@ -1,6 +1,7 @@
 //! Axum middleware and extractors — authentication, permission checking.
 
 pub mod auth;
+pub mod cookies;
 pub mod repo_extractor;
 pub mod route_audit;
 
@@ -142,16 +143,13 @@ pub fn require_csrf_for_cookie_session(
     if headers.contains_key(axum::http::header::AUTHORIZATION) {
         return Ok(());
     }
-    let Some(cookie) = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-    else {
+    // The same parser authentication uses: a session cookie in a second `Cookie`
+    // header must not authenticate while this check believes there is no session
+    // and silently skips CSRF.
+    let Some(session) = cookies::cookie_value(headers, "seahub-session") else {
         return Ok(());
     };
-    let Some(session) = crate::service::auth::csrf::extract_session_token(cookie) else {
-        return Ok(());
-    };
-    if crate::service::auth::csrf::validate_csrf_header(headers, csrf_secret, session) {
+    if crate::service::auth::csrf::validate_csrf_header(headers, csrf_secret, &session) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -528,5 +526,55 @@ mod ip_tests {
             effective_client_ip(&addr, &hdrs, &["private".into()]),
             "203.0.113.9"
         );
+    }
+}
+
+#[cfg(test)]
+mod csrf_cookie_tests {
+    use super::require_csrf_for_cookie_session;
+    use axum::http::{HeaderMap, HeaderValue};
+    use base::error::AppError;
+
+    const SECRET: &[u8] = b"test-csrf-secret";
+
+    fn csrf_headers(session: &str, token: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.append("cookie", HeaderValue::from_static("sfcsrftoken=x"));
+        headers.append(
+            "cookie",
+            HeaderValue::from_str(&format!("seahub-session={session}")).unwrap(),
+        );
+        if let Some(token) = token {
+            headers.insert("x-csrftoken", HeaderValue::from_str(token).unwrap());
+        }
+        headers
+    }
+
+    /// No session cookie at all: the helper has nothing to protect and stays out
+    /// of the way of anonymous requests.
+    #[test]
+    fn no_cookie_skips_the_check() {
+        assert!(require_csrf_for_cookie_session(&HeaderMap::new(), SECRET).is_ok());
+    }
+
+    /// A session split across two `Cookie` headers is visible to authentication;
+    /// it must be visible to the CSRF check too. This is the fail-open shape the
+    /// single-header scan used to miss.
+    #[test]
+    fn a_session_in_a_second_cookie_header_is_still_protected() {
+        let headers = csrf_headers("sess", None);
+        let result = require_csrf_for_cookie_session(&headers, SECRET);
+        assert!(
+            matches!(result, Err(AppError::Forbidden)),
+            "a session in the second Cookie header must still require CSRF, got {result:?}"
+        );
+    }
+
+    /// With the matching token the same split-header request passes.
+    #[test]
+    fn a_session_in_a_second_cookie_header_accepts_its_token() {
+        let token = crate::service::auth::csrf::generate_csrf_token(SECRET, "sess");
+        let headers = csrf_headers("sess", Some(&token));
+        assert!(require_csrf_for_cookie_session(&headers, SECRET).is_ok());
     }
 }

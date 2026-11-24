@@ -156,7 +156,7 @@ pub async fn upload_link_view(
     // an unlock too, so the redirect back here is not bounced to the form.
     let cookie_ok = link.password.is_some()
         && crate::service::auth::csrf::has_valid_upload_link_cookie(
-            headers.get("cookie").and_then(|v| v.to_str().ok()),
+            &headers,
             &token,
             link.password.as_deref().unwrap_or(""),
             &state.csrf_secret,

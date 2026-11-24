@@ -129,7 +129,7 @@ fn share_link_unlocked(
     }
     let cookie_name = crate::service::auth::csrf::share_link_cookie_name(token);
     crate::service::auth::csrf::has_link_unlock_cookie(
-        headers.get("cookie").and_then(|v| v.to_str().ok()),
+        headers,
         &cookie_name,
         token,
         password_version,
