@@ -2,6 +2,7 @@
 // in the common bundle because their triggers appear outside the file browser.
 import { __t } from "./i18n.js";
 import { getCookie } from "./utils.js";
+import { copyText } from "./clipboard.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
 import { showPreviewFailure } from "./preview-failure.js";
@@ -107,8 +108,9 @@ document.addEventListener("click", function (e) {
         text = (target.textContent || "").trim();
     }
     if (!text) return;
-    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(function () {});
-    if (btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
+    copyText(text).then(function (copied) {
+        if (copied && btn.dataset.copyMsg) Toast.success(__t(btn.dataset.copyMsg));
+    });
 });
 
 // `error` does not bubble, so capture at the document level. A picture or player that cannot

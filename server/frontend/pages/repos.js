@@ -2,6 +2,7 @@
 // by data-* event delegation.
 import { __t } from "../core/i18n.js";
 import { getCookie } from "../core/utils.js";
+import { copyText, flashCopied } from "../core/clipboard.js";
 import { registerModalClose } from "../core/modal.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
@@ -60,18 +61,9 @@ function hideEditDialog() {
     document.getElementById('edit-overlay').classList.add('hidden');
 }
 function copyWebdavUrl() {
-    copyToClipboard(document.getElementById('webdav-url').textContent, 'copy-url-btn');
-}
-function copyToClipboard(text, btnId) {
-    navigator.clipboard.writeText(text).catch(function () {});
-    flashCopiedBtn(btnId);
-}
-function flashCopiedBtn(id) {
-    var btn = document.getElementById(id);
-    if (btn._copyTimer) { clearTimeout(btn._copyTimer); }
-    var orig = btn.textContent;
-    btn.textContent = __t('webdav.copied');
-    btn._copyTimer = setTimeout(function () { btn.textContent = orig; btn._copyTimer = null; }, 1500);
+    copyText(document.getElementById('webdav-url').textContent).then(function (copied) {
+        if (copied) flashCopied(document.getElementById('copy-url-btn'), __t('webdav.copied'));
+    });
 }
 function submitEdit(form) {
     var repoId = document.getElementById('edit-repo-id').value;
@@ -143,10 +135,9 @@ function numOrNull(id) {
 
 function copyRepoWebdav(btn) {
     var url = webdavBaseUrl + '/dav/' + btn.getAttribute('data-repo-id') + '/';
-    if (navigator.clipboard) {
-        navigator.clipboard.writeText(url).catch(function () {});
-    }
-    Toast.success(__t('webdav.copied'));
+    copyText(url).then(function (copied) {
+        if (copied) Toast.success(__t('webdav.copied'));
+    });
 }
 
 // Every library is already in the DOM (a user's list is bounded), so filter and sort are pure

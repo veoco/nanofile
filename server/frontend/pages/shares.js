@@ -89,8 +89,9 @@ document.addEventListener("click", function (e) {
             });
             if (resp.ok) {
                 overlay.classList.add("hidden");
-                if (window.refreshFileList) window.refreshFileList();
-                else window.location.reload();
+                // The shares page has no file list to refresh; a reload is the
+                // only way a new link/expiry shows up in the server-rendered rows.
+                window.location.reload();
             } else {
                 var text = await resp.text().catch(function () { return resp.statusText; });
                 errorDiv.textContent = text;

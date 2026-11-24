@@ -2,6 +2,8 @@
 // The page is server-rendered so it works without JavaScript; this module only
 // adds two conveniences: copying the freshly minted secret and pre-ticking the
 // capability checkboxes of a chosen preset.
+import { __t } from "../core/i18n.js";
+import { copyText, flashCopied } from "../core/clipboard.js";
 
 (function () {
     "use strict";
@@ -11,14 +13,10 @@
         if (!input) return;
         input.select();
         input.setSelectionRange(0, input.value.length);
-        navigator.clipboard.writeText(input.value).catch(function () {});
-        var btn = document.getElementById("copy-new-key-btn");
-        if (!btn) return;
-        var original = btn.textContent;
-        btn.textContent = __t("apikey.copied");
-        setTimeout(function () {
-            btn.textContent = original;
-        }, 1500);
+        copyText(input.value).then(function (copied) {
+            if (!copied) return;
+            flashCopied(document.getElementById("copy-new-key-btn"), __t("apikey.copied"));
+        });
     }
 
     // A preset only ticks boxes; the server still validates and expands the

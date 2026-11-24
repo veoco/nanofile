@@ -2,6 +2,7 @@
 // in browser.html), plus the share/upload link URL copy helpers.
 import { __t } from "../core/i18n.js";
 import { apiFetch } from "../core/api.js";
+import { copyText } from "../core/clipboard.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 
@@ -141,20 +142,20 @@ var openUploadLinkDialog;
   openUploadLinkDialog = open;
 })();
 
-export function copyUploadLinkUrl() {
-  var input = document.getElementById('ul-link-url');
+function copyFieldValue(id) {
+  var input = document.getElementById(id);
   if (!input) return;
   input.select();
   input.setSelectionRange(0, 99999);
-  navigator.clipboard.writeText(input.value).catch(function () {});
+  copyText(input.value);
+}
+
+export function copyUploadLinkUrl() {
+  copyFieldValue('ul-link-url');
 }
 
 export function copyShareLinkUrl() {
-  var input = document.getElementById('share-link-url');
-  if (!input) return;
-  input.select();
-  input.setSelectionRange(0, 99999);
-  navigator.clipboard.writeText(input.value).catch(function () {});
+  copyFieldValue('share-link-url');
 }
 
 // Upload Link button in right panel — only for directories
