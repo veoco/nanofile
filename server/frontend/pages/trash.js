@@ -1,7 +1,7 @@
 // trash — tab switching (deleted files / deleted libraries), emptying the file
 // trash of one library, and restoring or permanently deleting a whole library.
 import { __t } from "../core/i18n.js";
-import { getCookie } from "../core/utils.js";
+import { mutate } from "../core/api.js";
 import { registerModalClose } from "../core/modal.js";
 import { switchTab } from "../core/tabs.js";
 import { ConfirmDialog } from "../core/confirm.js";
@@ -23,16 +23,10 @@ async function cleanTrash() {
         { confirmText: __t('common.delete'), variant: 'danger' }
     );
     if (!confirmed) return;
-    var csrfToken = getCookie('sfcsrftoken');
-    if (!csrfToken) {
-        window.location.href = '/accounts/login/';
-        return;
-    }
-    fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash/', {
+    mutate('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash/', {
         method: 'DELETE',
-        credentials: 'same-origin',
-        headers: { 'X-CSRFToken': csrfToken },
     }).then(function (r) {
+        if (!r) return;
         if (r.ok) window.location.reload();
         else Toast.error(__t('trash.clean_failed'));
     }).catch(function () {
@@ -49,22 +43,11 @@ async function cleanTrash() {
  * cookie.
  */
 async function deletedReposRequest(method, path, body, flag) {
-    var csrfToken = getCookie('sfcsrftoken');
-    if (!csrfToken) {
-        window.location.href = '/accounts/login/';
-        return;
-    }
-    var opts = {
-        method: method,
-        credentials: 'same-origin',
-        headers: { 'X-CSRFToken': csrfToken },
-    };
-    if (body) {
-        opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
-        opts.body = body;
-    }
+    var headers = {};
+    if (body) headers['Content-Type'] = 'application/x-www-form-urlencoded';
     try {
-        var resp = await fetch(path, opts);
+        var resp = await mutate(path, { method: method, body: body, headers: headers });
+        if (!resp) return;
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         window.location.href = '/trash/?tab=libraries&' + flag + '=true';
     } catch (err) {

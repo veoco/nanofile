@@ -2,7 +2,7 @@
 // rename, batch delete/move/copy, directory picker, zip download, reindex.
 import { __t } from "../core/i18n.js";
 import { getCookie, escapeHtml, escapeAttr, parentDirOf } from "../core/utils.js";
-import { apiFetch } from "../core/api.js";
+import { apiFetch, mutate } from "../core/api.js";
 import { formatHistorySize } from "../core/format.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
@@ -26,19 +26,11 @@ document.addEventListener("click", async function (e) {
   );
   if (!confirmed) return;
 
-  var csrfToken = getCookie("sfcsrftoken");
-  if (!csrfToken) {
-    window.location.href = "/accounts/login/";
-    return;
-  }
-
   var apiPath = buildEntryApiPath(repoId, path, entryType);
 
   try {
-    var res = await fetch(apiPath, {
-      method: "DELETE",
-      headers: { "X-CSRFToken": csrfToken },
-    });
+    var res = await mutate(apiPath, { method: "DELETE" });
+    if (!res) return;
     if (res.ok) {
       clearSelection();
       refreshFileList();

@@ -1,13 +1,13 @@
 // repos — library list interactions (create/edit/delete, filter, sort and the row menu), driven
 // by data-* event delegation.
 import { __t } from "../core/i18n.js";
-import { getCookie } from "../core/utils.js";
+import { mutate } from "../core/api.js";
 import { copyText, flashCopied } from "../core/clipboard.js";
 import { registerModalClose } from "../core/modal.js";
 import { Toast } from "../core/toast.js";
 import { ConfirmDialog } from "../core/confirm.js";
 import { registerRowMenu, addMenuItem, addMenuSeparator } from "../core/row-menu.js";
-import { nextSortOrder } from "../browser/view-logic.js";
+import { applySortIndicators, nextSortOrder } from "../browser/view-logic.js";
 
 var reposPageEl = document.getElementById("repos-page");
 var webdavBaseUrl = reposPageEl ? (reposPageEl.dataset.webdavBaseUrl || "") : "";
@@ -25,15 +25,11 @@ function submitCreate(form) {
     if (!name) return false;
     hideCreateDialog();
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
-    fetch('/api2/repos/', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-            'Content-Type': 'application/json;charset=utf-8',
-            'X-CSRFToken': csrfToken,
-        },
-        body: JSON.stringify({ name: name }),
+    mutate('/api2/repos/', {
+        headers: { 'X-CSRFToken': csrfToken },
+        body: { name: name },
     }).then(function (resp) {
+        if (!resp) return;
         if (resp.ok) {
             window.location.reload();
         } else {
@@ -74,20 +70,16 @@ function submitEdit(form) {
     var csrfToken = form.querySelector('[name="csrf_token"]').value || '';
     var historyLimit = numOrNull('edit-history-limit');
     var historyTtlDays = numOrNull('edit-history-ttl-days');
-    fetch('/api2/repos/' + repoId + '/?op=update', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: {
-            'Content-Type': 'application/json;charset=utf-8',
-            'X-CSRFToken': csrfToken,
-        },
-        body: JSON.stringify({
+    mutate('/api2/repos/' + repoId + '/?op=update', {
+        headers: { 'X-CSRFToken': csrfToken },
+        body: {
             repo_name: newName,
             description: newDesc,
             history_limit: historyLimit,
             history_ttl_days: historyTtlDays,
-        }),
+        },
     }).then(function (resp) {
+        if (!resp) return;
         if (resp.ok) {
             window.location.reload();
         } else {
@@ -102,9 +94,6 @@ function submitEdit(form) {
 async function deleteRepo(btn) {
     var repoId = btn.getAttribute('data-repo-id');
     var repoName = btn.getAttribute('data-repo-name');
-    var csrfToken = getCookie('sfcsrftoken');
-    if (!csrfToken) { window.location.href = '/accounts/login/'; return; }
-
     var confirmed = await ConfirmDialog.confirm(
         __t('common.are_you_sure'),
         __t('repo.delete_confirm', { name: repoName }),
@@ -112,11 +101,8 @@ async function deleteRepo(btn) {
     );
     if (!confirmed) return;
 
-    fetch('/api2/repos/' + repoId + '/', {
-        method: 'DELETE',
-        credentials: 'same-origin',
-        headers: { 'X-CSRFToken': csrfToken },
-    }).then(function (resp) {
+    mutate('/api2/repos/' + repoId + '/', { method: 'DELETE' }).then(function (resp) {
+        if (!resp) return;
         if (resp.ok) {
             window.location.reload();
         } else {
@@ -198,14 +184,8 @@ function compareRepos(a, b) {
 
 // Like the file list's sort UI: the active field carries `on` and the current direction is lit.
 function applySortUI() {
-    if (!sortGroup) return;
-    sortGroup.querySelectorAll(".js-repo-sort-btn").forEach(function (btn) {
-        var on = btn.dataset.sort === listState.key;
-        btn.classList.toggle("on", on);
-        var up = btn.querySelector(".js-sort-arrow-up");
-        var down = btn.querySelector(".js-sort-arrow-down");
-        if (up) up.style.fill = on && listState.order === "asc" ? "var(--color-accent)" : "var(--color-ink-3)";
-        if (down) down.style.fill = on && listState.order === "desc" ? "var(--color-accent)" : "var(--color-ink-3)";
+    applySortIndicators(sortGroup, listState.key, listState.order, {
+        btnSelector: ".js-repo-sort-btn",
     });
 }
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { apiFetch } from "./api.js";
+import { apiFetch, mutate, requireLogin } from "./api.js";
 
 function okRes(overrides) {
   return Object.assign(
@@ -130,4 +130,59 @@ test("returns the response as-is when ok", async () => {
 
   var out = await apiFetch("/api/x");
   assert.equal(out, res);
+});
+
+test("mutate redirects to login when the CSRF cookie is missing", async () => {
+  globalThis.document = { cookie: "" };
+  var navigated = "";
+  globalThis.window = { location: { href: "" } };
+  globalThis.window.location.href = "";
+  globalThis.fetch = async () => {
+    throw new Error("should not fetch");
+  };
+
+  var out = await mutate("/api/x");
+  assert.equal(out, null);
+  assert.equal(globalThis.window.location.href, "/accounts/login/");
+});
+
+test("mutate JSON-encodes objects and adds the CSRF header", async () => {
+  globalThis.document = { cookie: "sfcsrftoken=tok" };
+  globalThis.window = { location: { href: "" } };
+  var captured;
+  globalThis.fetch = async (url, options) => {
+    captured = options;
+    return okRes();
+  };
+
+  await mutate("/api/x", { body: { a: 1 } });
+  assert.equal(captured.method, "POST");
+  assert.equal(captured.headers["X-CSRFToken"], "tok");
+  assert.equal(captured.body, '{"a":1}');
+  assert.equal(
+    captured.headers["Content-Type"],
+    "application/json;charset=utf-8",
+  );
+});
+
+test("mutate leaves form bodies and explicit headers alone", async () => {
+  globalThis.document = { cookie: "sfcsrftoken=tok" };
+  globalThis.window = { location: { href: "" } };
+  var captured;
+  globalThis.fetch = async (url, options) => {
+    captured = options;
+    return okRes();
+  };
+
+  await mutate("/api/x", {
+    method: "DELETE",
+    body: "a=b",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  });
+  assert.equal(captured.method, "DELETE");
+  assert.equal(captured.body, "a=b");
+  assert.equal(
+    captured.headers["Content-Type"],
+    "application/x-www-form-urlencoded",
+  );
 });

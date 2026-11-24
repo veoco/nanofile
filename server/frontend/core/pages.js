@@ -1,7 +1,7 @@
 // pages — page-scoped interactions shared across all pages (trash restore, repo list filter),
 // in the common bundle because their triggers appear outside the file browser.
 import { __t } from "./i18n.js";
-import { getCookie } from "./utils.js";
+import { mutate } from "./api.js";
 import { copyText } from "./clipboard.js";
 import { Toast } from "./toast.js";
 import { ConfirmDialog } from "./confirm.js";
@@ -28,17 +28,11 @@ document.addEventListener("submit", async function (e) {
   var body = {};
   body[commitId] = [path];
 
-  var csrfToken = getCookie("sfcsrftoken");
   try {
-    var resp = await fetch('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash2/revert/', {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRFToken': csrfToken,
-      },
-      body: JSON.stringify(body),
+    var resp = await mutate('/api/v2.1/repos/' + encodeURIComponent(repoId) + '/trash2/revert/', {
+      body: body,
     });
+    if (!resp) return;
     if (resp.ok) {
       window.location.reload();
     } else {

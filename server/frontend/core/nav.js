@@ -2,7 +2,7 @@
 // quick search, keyboard shortcuts, and the star toggle. Loaded once for all
 // pages (side effects only).
 import { __t } from "./i18n.js";
-import { getCookie } from "./utils.js";
+import { mutate } from "./api.js";
 import { formatFileSize } from "./format.js";
 
 const menuToggle = document.querySelector(".js-mobile-menu-toggle");
@@ -179,12 +179,6 @@ document.addEventListener("click", async function (e) {
   const repoId = btn.dataset.repoId;
   const path = btn.dataset.path;
   const currentlyStarred = btn.dataset.starred === "true";
-  const csrfToken = getCookie("sfcsrftoken");
-  if (!csrfToken) {
-    window.location.href = "/accounts/login/";
-    return;
-  }
-
   btn.disabled = true;
 
   try {
@@ -194,21 +188,13 @@ document.addEventListener("click", async function (e) {
         encodeURIComponent(repoId) +
         "&path=" +
         encodeURIComponent(path);
-      const res = await fetch(url, {
-        method: "DELETE",
-        headers: { "X-CSRFToken": csrfToken },
-      });
-      if (res.ok) setStarState(btn, false);
+      const res = await mutate(url, { method: "DELETE" });
+      if (res && res.ok) setStarState(btn, false);
     } else {
-      const res = await fetch("/api/v2.1/starred-items/", {
-        method: "POST",
-        headers: {
-          "X-CSRFToken": csrfToken,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ repo_id: repoId, path: path }),
+      const res = await mutate("/api/v2.1/starred-items/", {
+        body: { repo_id: repoId, path: path },
       });
-      if (res.ok) setStarState(btn, true);
+      if (res && res.ok) setStarState(btn, true);
     }
   } catch (ignored) {
   } finally {
