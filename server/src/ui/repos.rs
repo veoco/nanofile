@@ -1,4 +1,4 @@
-/// Web UI repo handlers — list repos.
+//! Web UI repo handlers — list repos.
 use askama::Template;
 use axum::{extract::State, response::Html};
 use std::sync::Arc;

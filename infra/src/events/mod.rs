@@ -1,5 +1,5 @@
-/// Global broadcast channel for repo HEAD updates: `create_commit` fires events and
-/// the notification module subscribes, avoiding `AppState` in the storage layer.
+//! Global broadcast channel for repo HEAD updates: `create_commit` fires events and
+//! the notification module subscribes, avoiding `AppState` in the storage layer.
 use std::sync::LazyLock;
 use tokio::sync::broadcast;
 

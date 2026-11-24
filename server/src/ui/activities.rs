@@ -1,4 +1,4 @@
-/// Web UI file activities page.
+//! Web UI file activities page.
 use askama::Template;
 use axum::{extract::State, response::Html};
 use std::collections::HashMap;

@@ -1,9 +1,9 @@
-/// A generic sliding-window rate limiter for non-login endpoints (password reset,
-/// registration, TOTP verification, …).
-///
-/// Tracks attempts per key within a window and returns a human-readable message when
-/// limited. `max_attempts == 0` disables it, matching every config field's
-/// "(0 = unlimited)"; callers must not turn 0 into 1.
+//! A generic sliding-window rate limiter for non-login endpoints (password reset,
+//! registration, TOTP verification, …).
+//!
+//! Tracks attempts per key within a window and returns a human-readable message when
+//! limited. `max_attempts == 0` disables it, matching every config field's
+//! "(0 = unlimited)"; callers must not turn 0 into 1.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};

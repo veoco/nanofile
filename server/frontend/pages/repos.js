@@ -192,7 +192,7 @@ function applySortUI() {
 function applySort() {
     if (repoListEl) {
         var rows = repoRows().sort(compareRepos);
-// The server renders the default order, so rows are usually in place; re-appending would flicker.
+        // The server renders the default order, so rows are usually in place; re-appending would flicker.
         var moved = rows.some(function (row, i) { return repoListEl.children[i] !== row; });
         if (moved) {
             rows.forEach(function (row) { repoListEl.appendChild(row); });
@@ -266,7 +266,7 @@ if (sortGroup) {
     sortGroup.addEventListener("click", function (e) {
         var btn = e.target.closest(".js-repo-sort-btn");
         if (!btn) return;
-// The same field flips direction; a new field starts ascending, like the file list.
+        // The same field flips direction; a new field starts ascending, like the file list.
         listState.order = nextSortOrder(btn.dataset.sort, listState.key, listState.order);
         listState.key = btn.dataset.sort;
         applySort();

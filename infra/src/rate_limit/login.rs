@@ -1,8 +1,8 @@
-/// In-memory login attempt rate limiter.
-///
-/// Tracks failures by key (IP or `ip:username`), locks out after a threshold in a
-/// window, and counts distinct failed accounts per address so credential spraying is
-/// caught even when a success keeps resetting the per-address counter.
+//! In-memory login attempt rate limiter.
+//!
+//! Tracks failures by key (IP or `ip:username`), locks out after a threshold in a
+//! window, and counts distinct failed accounts per address so credential spraying is
+//! caught even when a success keeps resetting the per-address counter.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};

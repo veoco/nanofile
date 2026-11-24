@@ -1,8 +1,8 @@
-/// WebUser extractor — cookie-based auth for the Web UI.
-///
-/// Reads the `seahub-session` cookie, validates it against the `api_token`
-/// table and returns the user. On failure it redirects to `/accounts/login/`
-/// instead of 401, so browsers see the login page rather than a raw error.
+//! WebUser extractor — cookie-based auth for the Web UI.
+//!
+//! Reads the `seahub-session` cookie, validates it against the `api_token`
+//! table and returns the user. On failure it redirects to `/accounts/login/`
+//! instead of 401, so browsers see the login page rather than a raw error.
 use axum::{
     extract::FromRequestParts,
     http::{HeaderMap, request::Parts},

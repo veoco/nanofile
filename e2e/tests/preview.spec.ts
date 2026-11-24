@@ -246,7 +246,7 @@ test("the video dialog is settled before the clip loads", async ({ page }) => {
     };
     new MutationObserver(() => {
       if (!video.classList.contains("hidden")) {
-// Recorded when the player is revealed, before metadata can arrive, then again once it has.
+        // Recorded when the player is revealed, before metadata can arrive, then again once it has.
         snap("revealed");
         video.addEventListener("loadedmetadata", () => snap("metadata"), { once: true });
       }

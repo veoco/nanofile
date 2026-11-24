@@ -14,8 +14,8 @@ export function bmpFixture(width: number, height: number): Buffer {
   const pixels = Buffer.alloc(rowSize * height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-// A dithered gradient: enough entropy that a PNG of it is large and a JPEG is not, which the
-// thumbnail assertions in `views.spec.ts` rely on.
+      // A dithered gradient: enough entropy that a PNG of it is large and a JPEG is not, which the
+      // thumbnail assertions in `views.spec.ts` rely on.
       const dither = ((x * 7 + y * 13) % 17) - 8;
       const r = clamp(Math.round((x / width) * 200) + dither);
       const g = clamp(Math.round((y / height) * 200) + dither);

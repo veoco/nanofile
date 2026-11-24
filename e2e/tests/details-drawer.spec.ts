@@ -216,13 +216,6 @@ test("Escape and the close button both dismiss the drawer", async ({ page }) => 
 // concerned, and a library needs pictures before it has month groups at all.
 const PNG = png1x1();
 
-/**
-* Move every file whose name starts with `prefix` to a fixed calendar month.
- *
- * The gallery's month headers can reach the strip the drawer covers, and staging a month boundary
- * needs files in two months. Nothing in the API sets a dirent's mtime, so this edits the temp DB;
- * the prefixes are unique to this repo so the patch cannot touch another spec's files.
- */
 const MONTH_PREFIXES = ["dg1-", "dg2-"] as const;
 
 // The drawer is an overlay, so nothing inside the scroller may paint over it.

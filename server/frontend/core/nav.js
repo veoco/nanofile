@@ -42,8 +42,8 @@ if (userMenu && userButton) {
     var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
     var menuItem = "block px-4 h-8 leading-8 text-[13px] text-ink hover:bg-raised";
     if (isAdmin) {
-// System management first: the settings pages hold every runtime-editable setting, including
-// the email configuration the email page no longer owns.
+      // System management first: the settings pages hold every runtime-editable setting, including
+      // the email configuration the email page no longer owns.
       var settingsLink = document.createElement("a");
       settingsLink.href = "/sysadmin/settings/";
       settingsLink.className = menuItem;
@@ -62,8 +62,8 @@ if (userMenu && userButton) {
       shareLink.textContent = __t('ui.share_management');
       dropdown.appendChild(shareLink);
 
-// Task management is two pages behind one entry, the way system management is ten: this lands
-// on the run list, and its tab bar leads to the registered tasks.
+      // Task management is two pages behind one entry, the way system management is ten: this lands
+      // on the run list, and its tab bar leads to the registered tasks.
       var taskLink = document.createElement("a");
       taskLink.href = "/sysadmin/tasks/";
       taskLink.className = menuItem;
@@ -165,8 +165,8 @@ function setStarState(btn, starred) {
   var row = btn.closest(".js-entry-row");
   if (row) {
     row.dataset.starred = starred ? "true" : "false";
-// Grid/gallery tiles keep their action chips visible while starred, so the state is readable
-// without hovering every tile.
+    // Grid/gallery tiles keep their action chips visible while starred, so the state is readable
+    // without hovering every tile.
     row.classList.toggle("starred", starred);
   }
 }

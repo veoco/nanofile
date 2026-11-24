@@ -1,4 +1,4 @@
-/// Web UI file browser handlers.
+//! Web UI file browser handlers.
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},

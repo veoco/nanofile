@@ -1,4 +1,4 @@
-/// Web UI two-factor authentication handlers.
+//! Web UI two-factor authentication handlers.
 use askama::Template;
 use axum::{
     Form,

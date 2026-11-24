@@ -1,4 +1,4 @@
-/// Web UI auth handlers — login page, login submission, TOTP verification, logout.
+//! Web UI auth handlers — login page, login submission, TOTP verification, logout.
 use askama::Template;
 use axum::{
     Form,

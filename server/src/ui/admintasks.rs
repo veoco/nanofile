@@ -1,6 +1,6 @@
-/// Admin Web UI — the task pages: what is running, and what is registered.
-/// Two pages rather than one: the run list is about this moment, the registry
-/// about the jobs themselves, which only change when the server does.
+//! Admin Web UI — the task pages: what is running, and what is registered.
+//! Two pages rather than one: the run list is about this moment, the registry
+//! about the jobs themselves, which only change when the server does.
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},

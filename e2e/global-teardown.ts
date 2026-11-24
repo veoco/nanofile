@@ -14,8 +14,8 @@ export default async function globalTeardown() {
   try {
     const info = JSON.parse(fs.readFileSync(p, "utf-8")) as { pid: number; tmpRoot: string };
     try {
-// `SIGTERM` is a real signal only on unix; Windows rejects the name and terminates either way.
-// The teardown cannot make its own kill graceful, so it does not pretend to.
+      // `SIGTERM` is a real signal only on unix; Windows rejects the name and terminates either way.
+      // The teardown cannot make its own kill graceful, so it does not pretend to.
       process.kill(info.pid);
       await waitForExit(info.pid);
     } catch {

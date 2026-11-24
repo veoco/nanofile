@@ -57,7 +57,7 @@ export async function refreshFileList() {
         container.outerHTML = html;
         document.dispatchEvent(new CustomEvent("nanofile:list-refreshed"));
         initInfiniteScroll();
-// A full refresh starts at page 1, so do not leave the user at the bottom.
+        // A full refresh starts at page 1, so do not leave the user at the bottom.
         var scroller = listScroller();
         if (scroller) scroller.scrollTop = 0;
       } else {
@@ -136,9 +136,9 @@ export async function loadMoreEntries() {
     );
     if (!newContainer) { btn.disabled = false; if (spinner) spinner.classList.add("hidden"); return; }
 
-// Append new content. A page boundary usually falls inside a month, so merge the incoming
-// first group into the last on-screen group when the heading matches, or the month heading
-// prints twice and its count splits.
+    // Append new content. A page boundary usually falls inside a month, so merge the incoming
+    // first group into the last on-screen group when the heading matches, or the month heading
+    // prints twice and its count splits.
     if (view === "gallery") {
       newContainer.querySelectorAll(".nf-gal-group").forEach(function (g) {
         var existing = container.querySelectorAll(".nf-gal-group");

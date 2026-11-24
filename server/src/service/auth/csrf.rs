@@ -1,8 +1,8 @@
-/// CSRF protection using HMAC-derived tokens.
-///
-/// Token = HMAC-SHA256(server_secret, session_token): stateless and derived from
-/// the existing session, so no extra cookie is needed. Unauthenticated endpoints
-/// (login, register, password reset) validate Origin/Referer instead.
+//! CSRF protection using HMAC-derived tokens.
+//!
+//! Token = HMAC-SHA256(server_secret, session_token): stateless and derived from
+//! the existing session, so no extra cookie is needed. Unauthenticated endpoints
+//! (login, register, password reset) validate Origin/Referer instead.
 use axum::http::HeaderMap;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;

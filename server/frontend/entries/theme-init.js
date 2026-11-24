@@ -20,7 +20,7 @@
     }
     var view = localStorage.getItem("fileViewMode");
     if (view !== "grid" && view !== "gallery") view = "list";
-// Always publish the view mode: the active-button CSS is keyed on `html[data-view]`.
+    // Always publish the view mode: the active-button CSS is keyed on `html[data-view]`.
     root.dataset.view = view;
   } catch (e) {
     // localStorage can be unavailable (private mode, blocked cookies); the

@@ -88,15 +88,15 @@ test("completing the setup writes the configuration and starts the server", asyn
     const context = await browser.newContext();
     const page = await context.newPage();
     await page.goto(own.setupUrl);
-// The server must record what the page prefilled: the default data directory depends on
-// whether the binary's directory already has a `data/`, so the test takes the page's answer.
+    // The server must record what the page prefilled: the default data directory depends on
+    // whether the binary's directory already has a `data/`, so the test takes the page's answer.
     const dataDir = await page.inputValue('input[name="data_dir"]');
     await page.fill('input[name="email"]', "first@example.com");
     await page.fill('input[name="password"]', "first-password-1");
     await page.fill('input[name="password_confirm"]', "first-password-1");
 
-// The prefilled address is the page's own; if the configured port was taken, the page fell
-// back to a random loopback port and the fields must name that instead.
+    // The prefilled address is the page's own; if the configured port was taken, the page fell
+    // back to a random loopback port and the fields must name that instead.
     if (url.port !== "8082") {
       await page.fill('input[name="addr"]', url.hostname);
       await page.fill('input[name="port"]', url.port);

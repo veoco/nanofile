@@ -1,4 +1,4 @@
-/// Admin Web UI — share management (view/delete all share and upload links).
+//! Admin Web UI — share management (view/delete all share and upload links).
 use askama::Template;
 use axum::{
     extract::{Path, Query, State},

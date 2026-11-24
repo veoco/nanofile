@@ -1,10 +1,10 @@
-/// Nanofile build script: three generation steps.
-///   1. Tailwind CSS: `static/css/input.css` -> `static/css/app.css` (optional; a placeholder
-///      is written when Tailwind is unavailable).
-///   2. esbuild JS: `frontend/entries/*.js` -> `static/js/*.bundle.js` (required, so inline
-///      template scripts keep working).
-///   3. Tray icons (`tray` feature): rasterized from `static/img/favicon.svg`; on Windows the
-///      version resources are embedded via winresource.
+//! Nanofile build script: three generation steps.
+//!   1. Tailwind CSS: `static/css/input.css` -> `static/css/app.css` (optional; a placeholder
+//!      is written when Tailwind is unavailable).
+//!   2. esbuild JS: `frontend/entries/*.js` -> `static/js/*.bundle.js` (required, so inline
+//!      template scripts keep working).
+//!   3. Tray icons (`tray` feature): rasterized from `static/img/favicon.svg`; on Windows the
+//!      version resources are embedded via winresource.
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

@@ -1,4 +1,4 @@
-/// Web UI starred-items page.
+//! Web UI starred-items page.
 use askama::Template;
 use axum::{extract::State, response::Html};
 use std::sync::Arc;

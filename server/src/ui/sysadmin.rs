@@ -1,4 +1,4 @@
-/// Web UI admin page — user management.
+//! Web UI admin page — user management.
 use askama::Template;
 use axum::{
     Form,

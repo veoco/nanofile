@@ -98,8 +98,8 @@ function install(s) {
       }
       return;
     }
-// An item was activated or anything else clicked — dismiss. The delegated handler still sees
-// the item's `data-*` values, because a detached element keeps its attributes.
+    // An item was activated or anything else clicked — dismiss. The delegated handler still sees
+    // the item's `data-*` values, because a detached element keeps its attributes.
     if (s.menu && !e.target.closest(".nf-menu")) close(false);
     if (s.menu && e.target.closest(".nf-menu-item")) close(false);
   });

@@ -115,7 +115,7 @@ document.addEventListener("error", function (e) {
     var kind = el.hasAttribute("data-preview-image") ? "image"
         : el.hasAttribute("data-preview-media") ? "media" : null;
     if (!kind || !el.parentElement) return;
-// `MEDIA_ERR_ABORTED` comes from re-pointing `src` or calling `load()`, not a decode failure.
+    // `MEDIA_ERR_ABORTED` comes from re-pointing `src` or calling `load()`, not a decode failure.
     if (kind === "media" && el.error && el.error.code === 1) return;
     showPreviewFailure(el.parentElement, kind, el.getAttribute("data-download-url") || "");
 }, true);

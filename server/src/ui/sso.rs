@@ -1,7 +1,7 @@
-/// SSO local-browser flow UI handlers.
-///
-/// `GET /client-sso/{token}/` records the first visit and bounces through the
-/// web login; `.../complete/` mints the API token the client polls for.
+//! SSO local-browser flow UI handlers.
+//!
+//! `GET /client-sso/{token}/` records the first visit and bounces through the
+//! web login; `.../complete/` mints the API token the client polls for.
 use askama::Template;
 use axum::extract::{Form, Path, State};
 use axum::http::{HeaderMap, StatusCode};

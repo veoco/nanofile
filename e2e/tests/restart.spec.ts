@@ -35,7 +35,7 @@ test("the restart button applies a saved restart-only setting", async ({ browser
   try {
     await page.goto("/sysadmin/settings/server/");
 
-// A restart-only value left to the settings table; the port is environment-owned and not editable.
+    // A restart-only value left to the settings table; the port is environment-owned and not editable.
     const row = page.locator('[data-setting="server.max_json_body_mb"]');
     await expect(row.locator("span.badge", { hasText: "Needs a restart" })).toBeVisible();
     const field = row.locator('input[name="server.max_json_body_mb"]');
@@ -86,16 +86,16 @@ test("the restart button applies a saved restart-only setting", async ({ browser
       page.locator('[data-setting="server.max_json_body_mb"] input[name="server.max_json_body_mb"]'),
     ).toHaveValue("7");
 
-// The full-text writer is process state: the rebuilt generation must keep it, not fail its
-// exclusive lock and fall back to filename-only search.
+    // The full-text writer is process state: the rebuilt generation must keep it, not fail its
+    // exclusive lock and fall back to filename-only search.
     await page.goto("/sysadmin/tasks/registered/");
     await expect(page.locator('[data-task="index-commit"]')).toBeVisible();
     await expect(page.locator('[data-task="index-backfill"]')).toBeVisible();
     await expect(page.locator('[data-task-skipped="index-commit"]')).toHaveCount(0);
     await expect(page.locator('[data-task-skipped="index-backfill"]')).toHaveCount(0);
 
-// The log is where an operator looks, so the restart has to be in it. Each instance logs into
-// its own directory, so this path comes from the handle rather than a shared literal.
+    // The log is where an operator looks, so the restart has to be in it. Each instance logs into
+    // its own directory, so this path comes from the handle rather than a shared literal.
     const log = fs.readFileSync(handle.logPath, "utf-8");
     expect(log).toContain("Restart requested from the admin UI");
     expect(log).toContain("Restarting the server in place");

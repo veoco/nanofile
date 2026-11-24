@@ -239,8 +239,8 @@ export function openRightPanel(d) {
   var shareList = ct.querySelector(".js-rp-share-links-list");
   if (shareSection && shareList) {
     if (d.repoId && d.path) {
-// Show the section immediately with the loading hint in the reserved row, so the layout does
-// not shift when links arrive; only the list content is swapped.
+      // Show the section immediately with the loading hint in the reserved row, so the layout does
+      // not shift when links arrive; only the list content is swapped.
       shareSection.classList.remove("hidden");
       shareList.innerHTML = '<div class="js-rp-share-links-loading text-[11px] text-ink-3 italic">' + escapeHtml(__t('fb.loading')) + '</div>';
       fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
@@ -286,13 +286,13 @@ export function openRightPanel(d) {
     var recordId = d.recordId;
     var allTags = [];   // [{id, name, labelKey, color}]
     var fileTagIds = []; // tag ids currently attached
-// Set when the user saves; the initial load (reflecting pre-save state) must not roll it back.
+    // Set when the user saves; the initial load (reflecting pre-save state) must not roll it back.
     var userMutated = false;
 
     function renderTagChips() {
       tagsList.innerHTML = "";
-// With no tags, render the hint inside the chip row so there is no blank reserved area and the
-// row height stays stable.
+      // With no tags, render the hint inside the chip row so there is no blank reserved area and the
+      // row height stays stable.
       if (fileTagIds.length === 0) {
         tagsList.innerHTML =
           '<span class="js-rp-no-tags text-[11px] text-ink-3 italic">' +
@@ -383,8 +383,8 @@ export function openRightPanel(d) {
             body: JSON.stringify({ tags_data: [{ _tag_name: name, _tag_color: color }] }),
           }).then(function (r) { return r.json(); }).then(function (data) {
             var created = (data.tags || [])[0];
-// Mark the panel user-mutated so an in-flight initial load is discarded, not overwriting the
-// tag just created.
+            // Mark the panel user-mutated so an in-flight initial load is discarded, not overwriting the
+            // tag just created.
             userMutated = true;
             var createdTag = { id: created._id, name: created._tag_name, labelKey: created._tag_key || "", color: created._tag_color };
             allTags.push(createdTag);

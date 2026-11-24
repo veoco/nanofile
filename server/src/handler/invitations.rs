@@ -1,5 +1,5 @@
-/// Web UI invitation code management handlers — admin only: list and generate under
-/// `/settings/invitations/`, delete under `/settings/invitations/{id}/delete`.
+//! Web UI invitation code management handlers — admin only: list and generate under
+//! `/settings/invitations/`, delete under `/settings/invitations/{id}/delete`.
 use askama::Template;
 use axum::{
     extract::{Form, Path, State},

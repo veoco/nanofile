@@ -1,4 +1,4 @@
-/// Web UI module — a Seahub-compatible management interface.
+//! Web UI module — a Seahub-compatible management interface.
 pub mod activities;
 pub mod adminshares;
 pub mod admintasks;

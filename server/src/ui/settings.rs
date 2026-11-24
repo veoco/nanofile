@@ -1,6 +1,6 @@
-/// Web UI settings handlers — the account, its security, and its credentials.
-///
-/// One shell with a shared navigation; each page owns one subject.
+//! Web UI settings handlers — the account, its security, and its credentials.
+//!
+//! One shell with a shared navigation; each page owns one subject.
 use askama::Template;
 use axum::{
     Form,
