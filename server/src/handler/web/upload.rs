@@ -248,24 +248,26 @@ impl AuthContext {
     /// Validate a short-lived upload/update token: token 鈫?op 鈫?write permission
     /// 鈫?library key, in that order.
     async fn from_token(state: &AppState, raw: &str, kind: TokenKind) -> Result<Self, AppError> {
-        let token = state.token_manager.validate(raw).ok_or_else(|| {
-            AppError::BadRequest(format!("invalid or expired {} token", kind.op()))
-        })?;
-        if token.op != kind.op() {
-            return Err(AppError::BadRequest(format!(
-                "token not valid for {}",
-                kind.op()
-            )));
-        }
-        // An upload-link token must not outlive the link it was minted from: the
-        // token's own TTL is one hour, while the link may expire (or have been
-        // shortened) before that. The deadline is captured at mint time, so this
-        // needs no extra query on the upload path.
-        if let Some(expires_at) = token.upload_link_expires_at
-            && chrono::Utc::now().timestamp() > expires_at
-        {
-            return Err(AppError::BadRequest("upload link has expired".into()));
-        }
+        let ops = [kind.op()];
+        let token = crate::service::auth::capability::validate_capability(
+            state,
+            raw,
+            crate::service::auth::capability::TokenPolicy {
+                ops: &ops,
+                // The family's 400 wording is wire-visible (clients parse the
+                // message), so it stays per-kind instead of generic.
+                invalid_message: match kind {
+                    TokenKind::Upload => "invalid or expired upload token",
+                    TokenKind::Update => "invalid or expired update token",
+                },
+                wrong_op_message: match kind {
+                    TokenKind::Upload => "token not valid for upload",
+                    TokenKind::Update => "token not valid for update",
+                },
+                check_upload_link_expiry: true,
+            },
+        )
+        .await?;
         crate::domain::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &token.repo_id,
@@ -2343,20 +2345,19 @@ async fn block_auth(
     state: &AppState,
     token: &str,
 ) -> Result<(crate::service::auth::access_token::AccessToken, i32), AppError> {
-    let info = state
-        .token_manager
-        .validate(token)
-        .ok_or_else(|| AppError::BadRequest("invalid or expired upload token".into()))?;
-
-    if info.op != "upload-blks" && info.op != "update-blks" {
-        return Err(AppError::BadRequest(
-            "token not valid for block upload".into(),
-        ));
-    }
-
-    // A capability URL must stop working when the account is deactivated, like
-    // every other token consumer (`/download-api`, `/upload-api`, `/zip`).
-    super::download::ensure_token_user_active(state, info.user_id).await?;
+    let info = crate::service::auth::capability::validate_capability(
+        state,
+        token,
+        crate::service::auth::capability::TokenPolicy {
+            ops: &["upload-blks", "update-blks"],
+            invalid_message: "invalid or expired upload token",
+            wrong_op_message: "token not valid for block upload",
+            // A block-upload token can also come from an upload link; the link's
+            // own expiry is part of the capability.
+            check_upload_link_expiry: true,
+        },
+    )
+    .await?;
 
     // Re-check write permission: the token was issued against the caller's
     // membership, but that may have been revoked since (matches download). The

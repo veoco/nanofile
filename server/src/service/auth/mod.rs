@@ -2,6 +2,7 @@ pub mod access_token;
 pub mod account_state;
 pub mod backup_codes;
 pub mod bootstrap;
+pub mod capability;
 pub mod csrf;
 pub mod email_verification;
 pub mod hs256;

@@ -81,13 +81,17 @@ impl DownloadAuth {
         raw: &str,
         kind: DownloadTokenKind,
     ) -> Result<Self, AppError> {
-        let token = state
-            .token_manager
-            .validate(raw)
-            .ok_or_else(|| AppError::BadRequest(kind.invalid_message().into()))?;
-        if token.op != kind.op() {
-            return Err(AppError::BadRequest(kind.wrong_op_message().into()));
-        }
+        let token = crate::service::auth::capability::validate_capability(
+            state,
+            raw,
+            crate::service::auth::capability::TokenPolicy {
+                ops: &[kind.op()],
+                invalid_message: kind.invalid_message(),
+                wrong_op_message: kind.wrong_op_message(),
+                check_upload_link_expiry: false,
+            },
+        )
+        .await?;
         // Permissions may have been revoked between token issuance and use.
         crate::domain::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
@@ -345,10 +349,6 @@ pub async fn block_download(
     Path((token, file_id, block_id)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
     let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::Blocks).await?;
-
-    // A capability URL must stop working when the account is deactivated, like
-    // the other token consumers (`/download-api`, `/upload-api`, `/zip`).
-    ensure_token_user_active(&state, auth.user_id).await?;
 
     let repo_id = &auth.repo_id;
 
