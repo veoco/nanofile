@@ -10,7 +10,7 @@ test.beforeAll(async () => {
   state = readState();
   repoId = await seedRepo(state.baseURL, state.adminToken, "public-upload-repo");
   uploadToken = await createUploadLink(state.baseURL, state.adminToken, repoId, "/subdir");
-  pwUploadToken = await createUploadLink(state.baseURL, state.adminToken, repoId, "/subdir", "secret");
+  pwUploadToken = await createUploadLink(state.baseURL, state.adminToken, repoId, "/subdir", { password: "secret" });
 });
 
 async function listSubdir(): Promise<string[]> {

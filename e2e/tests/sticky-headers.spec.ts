@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, createRepo, uploadFile } from "../helpers/api";
+import { png1x1 } from "../helpers/image";
 import { backdateFileMtimes } from "../helpers/mtime";
 
 let state: ReturnType<typeof readState>;
@@ -7,10 +8,7 @@ let repoId: string;
 
 // Enough entries to scroll: the scroller is a little over 15 rows tall at the viewport.
 const ROWS = 30;
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
+const PNG = png1x1();
 
 test.beforeAll(async () => {
   state = readState();

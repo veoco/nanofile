@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { readState, seedRepo } from "../helpers/api";
+import { readState, seedRepo, createShareLink, createUploadLink } from "../helpers/api";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -9,33 +9,6 @@ test.beforeAll(async () => {
   repoId = await seedRepo(state.baseURL, state.adminToken, "shares-repo");
 });
 
-async function createShareLink(path: string, description: string): Promise<void> {
-  const res = await fetch(`${state.baseURL}/api/v2.1/share-links/`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${state.adminToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ repo_id: repoId, path, description }),
-  });
-  if (!res.ok) {
-    throw new Error(`create share link failed: ${res.status} ${await res.text()}`);
-  }
-}
-
-async function createUploadLink(path: string, description: string): Promise<void> {
-  const res = await fetch(`${state.baseURL}/api/v2.1/upload-links/`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${state.adminToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({ repo_id: repoId, path, description }),
-  });
-  if (!res.ok) {
-    throw new Error(`create upload link failed: ${res.status} ${await res.text()}`);
-  }
-}
 
 const shareRow = (page: import("@playwright/test").Page, text: string) =>
   page.locator("#tab-share-links .nf-prow").filter({ hasText: text });
@@ -46,8 +19,8 @@ const uploadRow = (page: import("@playwright/test").Page, text: string) =>
 test("shares page lists share and upload links in their tabs", async ({ page }) => {
   const shareDesc = `share-desc-${Date.now()}`;
   const uploadDesc = `upload-desc-${Date.now()}`;
-  await createShareLink("/alpha.txt", shareDesc);
-  await createUploadLink("/subdir", uploadDesc);
+  await createShareLink(state.baseURL, state.adminToken, repoId, "/alpha.txt", { description: shareDesc });
+  await createUploadLink(state.baseURL, state.adminToken, repoId, "/subdir", { description: uploadDesc });
 
   await page.goto("/shares/");
   await expect(shareRow(page, shareDesc)).toBeVisible();
@@ -60,7 +33,7 @@ test("shares page lists share and upload links in their tabs", async ({ page }) 
 test("edit a share link description", async ({ page }) => {
   const original = `orig-desc-${Date.now()}`;
   const updated = `updated-desc-${Date.now()}`;
-  await createShareLink("/bravo.txt", original);
+  await createShareLink(state.baseURL, state.adminToken, repoId, "/bravo.txt", { description: original });
   await page.goto("/shares/");
   const row = shareRow(page, original);
   await row.locator(".js-share-edit-btn").click();
@@ -74,7 +47,7 @@ test("edit a share link description", async ({ page }) => {
 
 test("delete a share link", async ({ page }) => {
   const desc = `del-desc-${Date.now()}`;
-  await createShareLink("/charlie.txt", desc);
+  await createShareLink(state.baseURL, state.adminToken, repoId, "/charlie.txt", { description: desc });
   await page.goto("/shares/");
   const row = shareRow(page, desc);
   await expect(row).toBeVisible();

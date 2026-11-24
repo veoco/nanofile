@@ -1,16 +1,13 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
 import { expandDetails } from "../helpers/details";
-import { bmpFixture, pngFixture } from "../helpers/image";
+import { bmpFixture, png1x1, pngFixture } from "../helpers/image";
 import { tinyMp4 } from "../helpers/video";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
 
-const PNG_1x1 = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-  "base64",
-);
+const PNG_1x1 = png1x1();
 
 // Minimal 8kHz mono 16-bit PCM WAV (44-byte header + 1 silent sample).
 function minimalWav(): Buffer {

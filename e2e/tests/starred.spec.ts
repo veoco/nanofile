@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { readState, seedRepo } from "../helpers/api";
+import { readState } from "../helpers/api";
+import { seedAndOpenRepo } from "../helpers/files";
 
 let state: ReturnType<typeof readState>;
 
@@ -7,15 +8,9 @@ test.beforeAll(async () => {
   state = readState();
 });
 
-async function openFreshRepo(page: import("@playwright/test").Page): Promise<string> {
-  const repoId = await seedRepo(state.baseURL, state.adminToken, `starred-${Date.now()}`);
-  await page.goto(`/libraries/${repoId}/files`);
-  await page.waitForSelector(".js-entry-row");
-  return repoId;
-}
 
 test("star a file from the row action", async ({ page }) => {
-  await openFreshRepo(page);
+  await seedAndOpenRepo(page, state, "starred");
   const star = page.locator(
     '.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"] [data-toggle-star]',
   );
@@ -25,7 +20,7 @@ test("star a file from the row action", async ({ page }) => {
 });
 
 test("toggle star from the right panel", async ({ page }) => {
-  await openFreshRepo(page);
+  await seedAndOpenRepo(page, state, "starred");
   await page
     .locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="bravo.txt"] > div:first-child')
     .click();
@@ -40,7 +35,7 @@ test("toggle star from the right panel", async ({ page }) => {
 });
 
 test("starred page lists the starred file", async ({ page }) => {
-  await openFreshRepo(page);
+  await seedAndOpenRepo(page, state, "starred");
   // The star toggle is fire-and-forget; wait for the POST to land before
   // navigating away, otherwise the /starred/ page may not list the item.
   const starResp = page.waitForResponse(
@@ -60,7 +55,7 @@ test("starred page lists the starred file", async ({ page }) => {
 });
 
 test("unstar a file from the starred page", async ({ page }) => {
-  const repoId = await openFreshRepo(page);
+  const repoId = await seedAndOpenRepo(page, state, "starred");
   const starResp = page.waitForResponse(
     (r) => r.url().includes("/api/v2.1/starred-items/") && r.request().method() === "POST",
   );

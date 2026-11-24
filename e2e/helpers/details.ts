@@ -40,3 +40,22 @@ export async function clickRowAction(
   await openRowMenu(page, name);
   await page.locator(`.nf-menu ${selector}`).first().click();
 }
+
+/** The visible row for one entry. Hidden grid/gallery views carry duplicates, so
+ * the selector must stay scoped to the visible list. */
+export const fileRow = (page: Page, name: string) =>
+  page.locator(
+    `.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"]`,
+  );
+
+/** Click the row's icon area rather than the file-name link (selection vs open). */
+export const fileRowIcon = (page: Page, name: string) =>
+  fileRow(page, name).locator("> div:first-child");
+
+export async function selectRow(page: Page, name: string): Promise<void> {
+  await fileRowIcon(page, name).click();
+}
+
+export async function dblclickRow(page: Page, name: string): Promise<void> {
+  await fileRowIcon(page, name).dblclick();
+}

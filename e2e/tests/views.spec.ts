@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, seedRepo, uploadFile } from "../helpers/api";
-import { bmpFixture } from "../helpers/image";
+import { bmpFixture, png1x1 } from "../helpers/image";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -99,10 +99,7 @@ test("gallery keeps only pictures, names every tile, and counts the month", asyn
 }) => {
 // A valid 1×1 PNG so the tile exercises the thumbnail path, plus audio and documents that must
 // not appear in the contact sheet.
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-    "base64",
-  );
+  const png = png1x1();
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "photo.png", png);
   await uploadFile(state.baseURL, state.adminToken, repoId, "/", "song.mp3", Buffer.alloc(64, 9));
 

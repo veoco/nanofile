@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { stubClipboard } from "../helpers/stub";
 
 test("generate and delete an invitation code", async ({ page }) => {
   await page.goto("/settings/invitations/");
@@ -21,18 +22,7 @@ test("copy a code out of its row", async ({ page }) => {
   // select 32 characters by hand. Record what would be written rather than
   // reading the real clipboard, which needs a browser permission the rest of
   // the suite does not ask for.
-  await page.addInitScript(() => {
-    (window as any).__copied = [];
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: {
-        writeText: (text: string) => {
-          (window as any).__copied.push(text);
-          return Promise.resolve();
-        },
-      },
-    });
-  });
+  await stubClipboard(page);
 
   await page.goto("/settings/invitations/");
   const email = `copy-${Date.now()}@test.local`;

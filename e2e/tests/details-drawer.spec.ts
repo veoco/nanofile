@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readState, createRepo, seedRepo, uploadFile } from "../helpers/api";
+import { png1x1 } from "../helpers/image";
 import { expandDetails } from "../helpers/details";
 import { backdateFileMtimes } from "../helpers/mtime";
 import { localStamp } from "../helpers/time";
@@ -213,10 +214,7 @@ test("Escape and the close button both dismiss the drawer", async ({ page }) => 
 
 // A valid 1×1 PNG: real media as far as the gallery's entry filter is
 // concerned, and a library needs pictures before it has month groups at all.
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
+const PNG = png1x1();
 
 /**
 * Move every file whose name starts with `prefix` to a fixed calendar month.

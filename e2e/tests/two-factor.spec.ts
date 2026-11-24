@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { stubClipboard } from "../helpers/stub";
 import crypto from "node:crypto";
 import { createAdminUser, loginViaUI, readState } from "../helpers/api";
 import { BASE_URL } from "../helpers/server";
@@ -57,18 +58,7 @@ test("enable 2FA, log in with a backup code, then disable it", async ({ browser 
   try {
     // Record clipboard writes rather than reading the real clipboard, which
     // would need a browser permission this suite does not ask for.
-    await page.addInitScript(() => {
-      (window as any).__copied = [];
-      Object.defineProperty(navigator, "clipboard", {
-        configurable: true,
-        value: {
-          writeText: (text: string) => {
-            (window as any).__copied.push(text);
-            return Promise.resolve();
-          },
-        },
-      });
-    });
+    await stubClipboard(page);
 
     // This spec enables 2FA, which revokes the account's other credentials: use
     // a throw-away account so the shared admin token every parallel worker uses

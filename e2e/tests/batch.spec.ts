@@ -1,5 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
-import { readState, seedRepo } from "../helpers/api";
+import { readState } from "../helpers/api";
+import { fileRow } from "../helpers/details";
+import { seedAndOpenRepo } from "../helpers/files";
 
 let state: ReturnType<typeof readState>;
 
@@ -8,7 +10,7 @@ test.beforeAll(async () => {
 });
 
 const row = (page: Page, name: string) =>
-  page.locator(`.js-file-list-view:not(.hidden) .js-entry-row[data-name="${name}"]`);
+  fileRow(page, name);
 
 async function multiSelect(page: Page, names: string[]) {
   await page.keyboard.down("Control");
@@ -20,14 +22,9 @@ async function multiSelect(page: Page, names: string[]) {
   await page.keyboard.up("Control");
 }
 
-async function openFreshRepo(page: Page, suffix: string): Promise<void> {
-  const repoId = await seedRepo(state.baseURL, state.adminToken, `batch-${suffix}-${Date.now()}`);
-  await page.goto(`/libraries/${repoId}/files`);
-  await page.waitForSelector(".js-entry-row");
-}
 
 test("batch delete removes the selected files", async ({ page }) => {
-  await openFreshRepo(page, "delete");
+  await seedAndOpenRepo(page, state, "batch-delete");
   await multiSelect(page, ["alpha.txt", "bravo.txt"]);
   await expect(page.locator("#js-selection-actions")).toBeVisible();
   await page.locator("#js-selection-actions .js-batch-delete").click();
@@ -38,7 +35,7 @@ test("batch delete removes the selected files", async ({ page }) => {
 });
 
 test("batch move relocates the selected files into a subdirectory", async ({ page }) => {
-  await openFreshRepo(page, "move");
+  await seedAndOpenRepo(page, state, "batch-move");
   await multiSelect(page, ["charlie.txt", "delta.txt"]);
   await page.locator("#js-selection-actions .js-batch-move").click();
   await expect(page.locator("#dir-picker-overlay")).toBeVisible();
@@ -54,7 +51,7 @@ test("batch move relocates the selected files into a subdirectory", async ({ pag
 });
 
 test("batch copy duplicates a file into a subdirectory", async ({ page }) => {
-  await openFreshRepo(page, "copy");
+  await seedAndOpenRepo(page, state, "batch-copy");
   await multiSelect(page, ["alpha.txt"]);
   await page.locator("#js-selection-actions .js-batch-copy").click();
   await expect(page.locator("#dir-picker-overlay")).toBeVisible();
@@ -75,7 +72,7 @@ test("batch copy duplicates a file into a subdirectory", async ({ page }) => {
 });
 
 test("batch reindex reindexes the selected files", async ({ page }) => {
-  await openFreshRepo(page, "reindex");
+  await seedAndOpenRepo(page, state, "batch-reindex");
   await multiSelect(page, ["alpha.txt", "bravo.txt"]);
   const btn = page.locator(".js-rp-multi-content .js-batch-reindex");
   await expect(btn).toBeVisible();

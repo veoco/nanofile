@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
 import { login, readState } from "../helpers/api";
+import { png1x1 } from "../helpers/image";
 import { ADMIN_PASSWORD } from "../helpers/server";
 
 // The settings pages share one shell with a sidebar, so every test starts from
@@ -50,10 +51,7 @@ test("update the display name", async ({ page }) => {
 
 test("upload an avatar", async ({ page }) => {
   await page.goto("/settings/profile/");
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-    "base64",
-  );
+  const png = png1x1();
   await page.setInputFiles("input[name='avatar']", {
     name: "avatar.png",
     mimeType: "image/png",

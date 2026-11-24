@@ -181,15 +181,21 @@ export async function loginViaUI(page: Page, email: string, password: string): P
   await page.waitForURL(/\/libraries\//, { timeout: 15_000 });
 }
 
+export interface LinkOptions {
+  password?: string;
+  description?: string;
+}
+
 export async function createShareLink(
   baseURL: string,
   token: string,
   repoId: string,
   path: string,
-  password?: string,
+  options?: LinkOptions,
 ): Promise<string> {
   const body: Record<string, string> = { repo_id: repoId, path };
-  if (password) body.password = password;
+  if (options?.password) body.password = options.password;
+  if (options?.description !== undefined) body.description = options.description;
   const res = await fetch(`${baseURL}/api/v2.1/share-links/`, {
     method: "POST",
     headers: {
@@ -207,10 +213,11 @@ export async function createUploadLink(
   token: string,
   repoId: string,
   path: string,
-  password?: string,
+  options?: LinkOptions,
 ): Promise<string> {
   const body: Record<string, string> = { repo_id: repoId, path };
-  if (password) body.password = password;
+  if (options?.password) body.password = options.password;
+  if (options?.description !== undefined) body.description = options.description;
   const res = await fetch(`${baseURL}/api/v2.1/upload-links/`, {
     method: "POST",
     headers: {

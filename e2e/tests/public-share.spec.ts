@@ -11,7 +11,7 @@ test.beforeAll(async () => {
   state = readState();
   repoId = await seedRepo(state.baseURL, state.adminToken, "public-share-repo");
   fileToken = await createShareLink(state.baseURL, state.adminToken, repoId, "/alpha.txt");
-  pwFileToken = await createShareLink(state.baseURL, state.adminToken, repoId, "/bravo.txt", "secret");
+  pwFileToken = await createShareLink(state.baseURL, state.adminToken, repoId, "/bravo.txt", { password: "secret" });
   dirToken = await createShareLink(state.baseURL, state.adminToken, repoId, "/");
 });
 

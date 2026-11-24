@@ -98,3 +98,8 @@ export function pngFixture(width: number, height: number): Buffer {
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }
+
+/** A valid 1x1 PNG for specs that only need "is an image". */
+export function png1x1(): Buffer {
+  return pngFixture(1, 1);
+}

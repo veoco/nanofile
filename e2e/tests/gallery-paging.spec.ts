@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readState, createRepo, uploadFile } from "../helpers/api";
+import { png1x1 } from "../helpers/image";
 
 let state: ReturnType<typeof readState>;
 let repoId: string;
@@ -12,10 +13,7 @@ const MEDIA = 201;
 
 // A valid 1×1 PNG: real media as far as the gallery's entry filter is
 // concerned, and cheap enough to upload 201 of them.
-const PNG = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-  "base64",
-);
+const PNG = png1x1();
 
 test.beforeAll(async () => {
   state = readState();
