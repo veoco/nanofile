@@ -650,25 +650,17 @@ pub fn install_default_jobs(
                             .backfill_pass(Some(&ctx), &cursor)
                             .await
                             .map_err(|e| map_abort(&ctx, e))?;
-                        ctx.set_detail("checked", serde_json::json!(report.files_checked));
-                        ctx.set_detail("repos", serde_json::json!(report.repos_scanned));
-                        ctx.set_detail("indexed", serde_json::json!(report.counts.indexed));
-                        if report.counts.indexed == 0 && report.counts.failed == 0 {
-                            return Ok(Outcome::idle(format!(
-                                "checked {} image(s) in {} librar(ies), nothing to tag",
-                                report.files_checked, report.repos_scanned
-                            )));
-                        }
-                        Ok(Outcome::success(
-                            format!(
-                                "Checked {} image(s) in {} librar(ies): tagged {}, skipped {}, failed {}",
-                                report.files_checked,
-                                report.repos_scanned,
-                                report.counts.indexed,
-                                report.counts.skipped,
-                                report.counts.failed
-                            ),
-                            Some(report.counts.total()),
+                        Ok(finish_backfill(
+                            &ctx,
+                            report.files_checked,
+                            report.repos_scanned,
+                            report.counts.indexed,
+                            report.counts.skipped,
+                            report.counts.failed,
+                            report.counts.total(),
+                            "image",
+                            "nothing to tag",
+                            "tagged",
                         ))
                     }
                 }
@@ -713,25 +705,17 @@ pub fn install_default_jobs(
                         .backfill_pass(Some(&ctx), &cursor)
                         .await
                         .map_err(|e| map_abort(&ctx, e))?;
-                    ctx.set_detail("checked", serde_json::json!(report.files_checked));
-                    ctx.set_detail("repos", serde_json::json!(report.repos_scanned));
-                    ctx.set_detail("indexed", serde_json::json!(report.counts.indexed));
-                    if report.counts.indexed == 0 && report.counts.failed == 0 {
-                        return Ok(Outcome::idle(format!(
-                            "checked {} file(s) in {} librar(ies), nothing to index",
-                            report.files_checked, report.repos_scanned
-                        )));
-                    }
-                    Ok(Outcome::success(
-                        format!(
-                            "Checked {} file(s) in {} librar(ies): indexed {}, skipped {}, failed {}",
-                            report.files_checked,
-                            report.repos_scanned,
-                            report.counts.indexed,
-                            report.counts.skipped + report.counts.gone,
-                            report.counts.failed
-                        ),
-                        Some(report.counts.indexed),
+                    Ok(finish_backfill(
+                        &ctx,
+                        report.files_checked,
+                        report.repos_scanned,
+                        report.counts.indexed,
+                        report.counts.skipped + report.counts.gone,
+                        report.counts.failed,
+                        report.counts.indexed,
+                        "file",
+                        "nothing to index",
+                        "indexed",
                     ))
                 }
             }
@@ -909,6 +893,42 @@ struct IndexFilesParams {
 
 /// Map a pass that stopped at a checkpoint onto a cancellation: the pipeline
 /// reports an abort as opaque, and only the job body knows it was cancelled.
+/// Shared tail of the two backfill jobs.
+///
+/// The index and face-tag passes report the same counters and the same three
+/// outcomes; only the nouns, the idle verb and which counter counts as progress
+/// differ. Their task bodies were mirrors of each other, so a wording or detail
+/// change had to be made twice.
+#[allow(clippy::too_many_arguments)]
+fn finish_backfill(
+    ctx: &crate::tasks::context::JobContext,
+    files_checked: u64,
+    repos_scanned: u64,
+    indexed: u64,
+    skipped: u64,
+    failed: u64,
+    progress: u64,
+    unit: &str,
+    idle_verb: &str,
+    done_verb: &str,
+) -> Outcome {
+    ctx.set_detail("checked", serde_json::json!(files_checked));
+    ctx.set_detail("repos", serde_json::json!(repos_scanned));
+    ctx.set_detail("indexed", serde_json::json!(indexed));
+    if indexed == 0 && failed == 0 {
+        return Outcome::idle(format!(
+            "checked {files_checked} {unit}(s) in {repos_scanned} librar(ies), {idle_verb}"
+        ));
+    }
+    Outcome::success(
+        format!(
+            "Checked {files_checked} {unit}(s) in {repos_scanned} librar(ies): \
+             {done_verb} {indexed}, skipped {skipped}, failed {failed}"
+        ),
+        Some(progress),
+    )
+}
+
 fn map_abort(ctx: &crate::tasks::context::JobContext, e: base::error::AppError) -> JobFailure {
     if ctx.is_cancelled() {
         JobFailure::Cancelled
