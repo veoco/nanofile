@@ -427,10 +427,7 @@ pub fn install_default_jobs(
         let mut policy = GcPolicy::new(gc_config.min_block_age_secs);
         // `Config::validate` has already rejected anything but the two known
         // words; the fallback here is the safe one, never the cheap one.
-        policy.mode = match gc_config.mode.trim().to_ascii_lowercase().as_str() {
-            "incremental" => crate::fs::core::gc::GcMode::Incremental,
-            _ => crate::fs::core::gc::GcMode::Audit,
-        };
+        policy.mode = gc_config.mode.parse().unwrap_or_default();
         policy.pending_ttl_secs = gc_config.pending_ttl_hours.saturating_mul(3600);
         policy.audit_interval_secs = gc_config.audit_interval_hours.saturating_mul(3600);
         jobs.push(job_with_trigger(

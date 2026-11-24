@@ -60,6 +60,31 @@ pub enum GcMode {
     Incremental,
 }
 
+impl std::str::FromStr for GcMode {
+    type Err = String;
+
+    /// The one parser for both the configuration word and `--mode`; the safe plan
+    /// is the fallback at call sites that may have skipped validation.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "audit" => Ok(Self::Audit),
+            "incremental" => Ok(Self::Incremental),
+            _ => Err(format!(
+                "gc mode {value:?} is not one of audit, incremental"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for GcMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Audit => "audit",
+            Self::Incremental => "incremental",
+        })
+    }
+}
+
 /// What one pass did, or — when it was a dry run — what it would have done.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct GcReport {
@@ -1144,6 +1169,21 @@ impl GcManager {
 mod tests {
     use super::*;
     use infra::storage::BlockStorageBackend;
+
+    /// The safe plan is the fallback, and `--mode` accepts the same words as the
+    /// configuration file.
+    #[test]
+    fn gc_mode_words_roundtrip() {
+        for (word, expected) in [
+            ("audit", GcMode::Audit),
+            ("Incremental", GcMode::Incremental),
+        ] {
+            let parsed: GcMode = word.parse().expect("valid word");
+            assert_eq!(parsed, expected, "{word:?}");
+        }
+        assert!("fast".parse::<GcMode>().is_err());
+        assert_eq!(GcMode::default(), GcMode::Audit);
+    }
 
     const REPO: &str = "test-repo";
     use sea_orm::{ConnectionTrait, Database, DatabaseBackend, Statement};

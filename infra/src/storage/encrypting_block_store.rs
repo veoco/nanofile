@@ -20,14 +20,43 @@ use crate::storage::BlockStorageBackend;
 use crate::storage::DynBlockStorage;
 
 /// Runtime at-rest encryption mode. Decided once at startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BlockEncryptionMode {
     /// Legacy: store bytes as received (plaintext, or client-encrypted CBC).
+    #[default]
     Off,
     /// Every newly written block is encrypted; every read is decrypted.
     On,
     /// New writes encrypted; reads accept both encrypted and legacy plaintext.
     Lazy,
+}
+
+impl std::str::FromStr for BlockEncryptionMode {
+    type Err = String;
+
+    /// The one parser for the configuration word: the validator and the runtime
+    /// mapper both call it, so a value cannot be accepted by one and silently
+    /// mapped to `Off` by the other.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" => Ok(Self::Off),
+            "on" => Ok(Self::On),
+            "lazy" => Ok(Self::Lazy),
+            _ => Err(format!(
+                "block_encryption_mode {value:?} is not one of off, on, lazy"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for BlockEncryptionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Lazy => "lazy",
+        })
+    }
 }
 
 /// Wraps an inner block store with server-side at-rest encryption.
@@ -338,6 +367,21 @@ mod tests {
     use crate::crypto::block_encryption::{MAGIC, TAG_LEN};
     use crate::storage::block_store::BlockStorage;
     use std::sync::Arc;
+
+    /// One parser for the configuration word (validator and runtime mapper share it).
+    #[test]
+    fn encryption_mode_words_roundtrip() {
+        for (word, expected) in [
+            ("off", BlockEncryptionMode::Off),
+            ("ON", BlockEncryptionMode::On),
+            (" lazy ", BlockEncryptionMode::Lazy),
+        ] {
+            let parsed: BlockEncryptionMode = word.parse().expect("valid word");
+            assert_eq!(parsed, expected, "{word:?}");
+            assert_eq!(parsed.to_string(), expected.to_string());
+        }
+        assert!("enabled".parse::<BlockEncryptionMode>().is_err());
+    }
 
     const MASTER: [u8; 32] = [0x42; 32];
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";

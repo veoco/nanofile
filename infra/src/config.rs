@@ -1108,57 +1108,44 @@ impl StorageConfig {
     pub fn block_encryption_mode(
         &self,
     ) -> crate::storage::encrypting_block_store::BlockEncryptionMode {
-        use crate::storage::encrypting_block_store::BlockEncryptionMode;
-        match self
-            .block_encryption_mode
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "on" => BlockEncryptionMode::On,
-            "lazy" => BlockEncryptionMode::Lazy,
-            _ => BlockEncryptionMode::Off,
-        }
+        self.block_encryption_mode.parse().unwrap_or_default()
     }
 
     /// Reject a mode the runtime parser would read as `off` only because of a
     /// typo or stray whitespace. Case and surrounding whitespace are accepted.
     pub fn validate_block_encryption_mode(&self) -> Result<(), String> {
-        match self
-            .block_encryption_mode
-            .trim()
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "off" | "on" | "lazy" => Ok(()),
-            _ => Err(format!(
-                "storage.block_encryption_mode = {:?} is not one of off, on, lazy",
-                self.block_encryption_mode
-            )),
-        }
+        self.block_encryption_mode
+            .parse::<crate::storage::encrypting_block_store::BlockEncryptionMode>()
+            .map(|_| ())
+            .map_err(|_| {
+                format!(
+                    "storage.block_encryption_mode = {:?} is not one of off, on, lazy",
+                    self.block_encryption_mode
+                )
+            })
     }
 
     /// Parse `block_flush` into the runtime policy. Callers must have validated it
     /// (see [`Self::validate_block_flush`]): an unknown value reads as `Always`
     /// here, but a typo must not silently weaken durability at startup.
     pub fn block_flush(&self) -> crate::storage::block_store::BlockFlush {
-        use crate::storage::block_store::BlockFlush;
-        match self.block_flush.trim().to_ascii_lowercase().as_str() {
-            "os" => BlockFlush::Os,
-            _ => BlockFlush::Always,
-        }
+        self.block_flush
+            .parse()
+            .unwrap_or(crate::storage::block_store::BlockFlush::Always)
     }
 
     /// Reject a flush policy the runtime parser would read as `always` only because
     /// of a typo or stray whitespace. Case and surrounding whitespace are accepted.
     pub fn validate_block_flush(&self) -> Result<(), String> {
-        match self.block_flush.trim().to_ascii_lowercase().as_str() {
-            "always" | "os" => Ok(()),
-            _ => Err(format!(
-                "storage.block_flush = {:?} is not one of always, os",
-                self.block_flush
-            )),
-        }
+        self.block_flush
+            .parse::<crate::storage::block_store::BlockFlush>()
+            .map(|_| ())
+            .map_err(|_| {
+                format!(
+                    "storage.block_flush = {:?} is not one of always, os",
+                    self.block_flush
+                )
+            })
     }
 }
 

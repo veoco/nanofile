@@ -85,6 +85,29 @@ pub enum BlockFlush {
     Os,
 }
 
+impl std::str::FromStr for BlockFlush {
+    type Err = String;
+
+    /// One parser for the configuration word (validator and runtime mapper both
+    /// call it).
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "always" => Ok(Self::Always),
+            "os" => Ok(Self::Os),
+            _ => Err(format!("block_flush {value:?} is not one of always, os")),
+        }
+    }
+}
+
+impl std::fmt::Display for BlockFlush {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Always => "always",
+            Self::Os => "os",
+        })
+    }
+}
+
 #[derive(Debug)]
 pub struct BlockStorage {
     base_dir: PathBuf,
@@ -855,6 +878,22 @@ impl BlockStorageBackend for BlockStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The configuration word has one parser; the validator and runtime mapper
+    /// both call it.
+    #[test]
+    fn block_flush_words_roundtrip() {
+        for (word, expected) in [
+            ("always", BlockFlush::Always),
+            ("OS", BlockFlush::Os),
+            (" os ", BlockFlush::Os),
+        ] {
+            let parsed: BlockFlush = word.parse().expect("valid word");
+            assert_eq!(parsed, expected, "{word:?}");
+            assert_eq!(parsed.to_string(), expected.to_string());
+        }
+        assert!("never".parse::<BlockFlush>().is_err());
+    }
 
     /// A fixed repository id for tests; two of them assert isolation.
     const REPO: &str = "cfcab3e0-9eb4-4c4f-92d0-87db2cd8290d";

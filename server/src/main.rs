@@ -786,18 +786,11 @@ fn main() -> anyhow::Result<()> {
                 // The configured mode is this run's default; `--mode` overrides it. The
                 // fallback is the safe plan (audit), never the cheap one, in case the
                 // configuration was not validated on this path.
-                policy.mode = match config.gc.mode.trim().to_ascii_lowercase().as_str() {
-                    "incremental" => server::fs::core::gc::GcMode::Incremental,
-                    _ => server::fs::core::gc::GcMode::Audit,
-                };
+                policy.mode = config.gc.mode.parse().unwrap_or_default();
                 if let Some(mode) = mode {
-                    policy.mode = match mode.trim().to_ascii_lowercase().as_str() {
-                        "audit" => server::fs::core::gc::GcMode::Audit,
-                        "incremental" => server::fs::core::gc::GcMode::Incremental,
-                        other => {
-                            anyhow::bail!("unknown --mode {other:?}: expected audit or incremental")
-                        }
-                    };
+                    policy.mode = mode.parse().map_err(|_| {
+                        anyhow::anyhow!("unknown --mode {mode:?}: expected audit or incremental")
+                    })?;
                     // An explicit mode is what the operator asked for this run; the
                     // schedule's periodic audit must not override it.
                     policy.audit_interval_secs = 0;
