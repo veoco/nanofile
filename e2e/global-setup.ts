@@ -63,7 +63,6 @@ export default async function globalSetup() {
     await context.storageState({ path: storageState });
     await browser.close();
 
-    // Persist shared state for tests.
     // Deliberately no adminPassword: the password is a repository constant in
     // helpers/server.ts, and writing it to test-results/ just spreads it into
     // artifacts that people attach to bug reports.

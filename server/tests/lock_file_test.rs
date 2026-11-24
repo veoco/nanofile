@@ -458,7 +458,6 @@ async fn test_foreign_lock_blocks_changes_to_the_locked_path() {
 
     let writer = add_writer(&f, "writer@example.com").await;
 
-    // Edit.
     let (_, resp) = sync_commit_unchecked(
         &f.client,
         &writer,
@@ -475,7 +474,6 @@ async fn test_foreign_lock_blocks_changes_to_the_locked_path() {
         "the official client parses this body"
     );
 
-    // Delete.
     let (_, resp) = sync_commit_unchecked(
         &f.client,
         &writer,

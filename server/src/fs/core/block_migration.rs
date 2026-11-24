@@ -448,7 +448,6 @@ mod tests {
             .unwrap();
         assert_eq!(first.copied, 1);
 
-        // Second run: the legacy tree is gone, so nothing happens.
         let second = BlockLayoutMigration::run(&db, &block_dir, MigrationMode::Apply)
             .await
             .unwrap();

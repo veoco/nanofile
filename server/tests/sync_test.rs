@@ -322,7 +322,6 @@ async fn test_put_commit_rejects_oversized_body() {
 async fn test_readonly_member_cannot_write_to_repo() {
     let f = TestFixture::new().await;
 
-    // Grant a second user read-only access.
     let ro_id = common::create_test_user(&f.server.db, "readonly@test.com", "password").await;
     common::add_repo_member(&f.server.db, &f.repo_id, ro_id, "r").await;
 
@@ -331,14 +330,12 @@ async fn test_readonly_member_cannot_write_to_repo() {
     let ro_token = body["token"].as_str().unwrap();
     let ro_sync_token = get_sync_token(&f.client, ro_token, &f.repo_id).await;
 
-    // Read-only members keep read access...
     let resp = f
         .client
         .permission_check(&ro_sync_token, &f.repo_id, "download")
         .await;
     assert_eq!(resp.status(), 200);
 
-    // ...but must not be able to write.
     let block_id = "0".repeat(40);
     let resp = f
         .client

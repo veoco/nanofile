@@ -350,9 +350,6 @@ async fn test_form_pages_include_csrf_tokens() {
         "file browser page should have csrf_token in delete/rename forms"
     );
 
-    // 3. Trash page — csrf_token is used by JS fetch (read from cookie via apiFetch).
-    //    The restore/clean forms now use the Seafile API directly, not form POST.
-    //    Verify the page at least renders.
     let trash_resp = ui_client
         .get(format!("{}/trash/", server.base_url))
         .send()
@@ -360,11 +357,6 @@ async fn test_form_pages_include_csrf_tokens() {
         .unwrap();
     assert_eq!(trash_resp.status(), 200, "trash page should render");
 
-    // 4. Settings pages. The area is split into one page per subject, so each
-    //    page that posts has to carry the token: the account forms live on
-    //    /settings/profile/ and the password form on /settings/security/,
-    //    while the overview still publishes one so anything that reads a token
-    //    off "the settings page" keeps working.
     for path in ["/settings/", "/settings/profile/", "/settings/security/"] {
         let html = ui_client
             .get(format!("{}{}", server.base_url, path))

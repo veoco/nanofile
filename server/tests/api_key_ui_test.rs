@@ -62,7 +62,6 @@ async fn a_key_can_be_created_edited_and_revoked_from_the_page() {
     let csrf = csrf_token(&client, &page).await;
     assert!(!csrf.is_empty(), "the page must embed a CSRF token");
 
-    // Create: one checkbox per granted capability, one selector per library.
     let resp = client
         .post(format!("{}/settings/api-keys/create/", f.server.base_url))
         .form(&[
@@ -111,7 +110,6 @@ async fn a_key_can_be_created_edited_and_revoked_from_the_page() {
         assert!(reloaded.contains("page-key"), "the key itself remains");
     }
 
-    // Edit: narrow it to read-only and rename it.
     let reloaded = client
         .get(&page)
         .send()
@@ -163,7 +161,6 @@ async fn a_key_can_be_created_edited_and_revoked_from_the_page() {
         .unwrap();
     assert!(body.contains("page-key-2"));
 
-    // Revoke: the key disappears.
     let csrf = csrf_token(&client, &page).await;
     let resp = client
         .post(format!(

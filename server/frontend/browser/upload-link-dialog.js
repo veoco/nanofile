@@ -158,18 +158,15 @@ export function copyShareLinkUrl() {
   copyFieldValue('share-link-url');
 }
 
-// Upload Link button in right panel — only for directories
 document.addEventListener('click', function (e) {
   var btn = e.target.closest('#rp-upload-link-btn');
   if (!btn) return;
   var meta = document.querySelector('meta[name="repo-id"]');
   var repoId = meta ? meta.getAttribute('content') : '';
-  // Find selected file entry
   var selectedRow = document.querySelector('.selected[data-type]');
   var path = selectedRow ? selectedRow.getAttribute('data-path') : '';
   var type = selectedRow ? selectedRow.getAttribute('data-type') : '';
   if (!repoId || !path) return;
-  // Only allow upload links for directories
   if (type !== 'dir') {
     Toast.error(__t('fb.upload_links_dir_only'));
     return;

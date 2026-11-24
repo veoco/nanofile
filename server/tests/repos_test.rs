@@ -592,7 +592,6 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
         .await;
     assert_eq!(resp.status(), 403, "history must require membership");
 
-    // Owner still has access.
     let resp = f
         .client
         .get(

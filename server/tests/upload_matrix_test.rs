@@ -170,8 +170,6 @@ async fn download(f: &TestFixture, path: &str) -> Option<Vec<u8>> {
     Some(resp.bytes().await.unwrap().to_vec())
 }
 
-// ── /upload-api/{token} and /upload-aj/{token} ────────────────────────────────
-
 /// `-api` answers the id as plain text; `ret-json` switches to the JSON array.
 /// The desktop and Android clients store the plain body verbatim.
 #[tokio::test]
@@ -541,8 +539,6 @@ async fn upload_link_is_add_only() {
     assert_eq!(dir_names(&f, "/sub").await.len(), 2);
 }
 
-// ── session (cookie + CSRF) uploads and updates ───────────────────────────────
-
 /// The session upload requires the double-submit CSRF token; with it the same
 /// body succeeds and answers the array.
 #[tokio::test]
@@ -617,8 +613,6 @@ async fn session_upload_without_cookie_redirects() {
         .to_string();
     assert!(location.contains("/accounts/login/"), "got {location:?}");
 }
-
-// ── updates ──────────────────────────────────────────────────────────────────
 
 /// Every update endpoint answers 441 when the target does not exist.
 #[tokio::test]
@@ -803,8 +797,6 @@ async fn update_directory_target_conflicts() {
     assert_eq!(resp.status(), 409);
 }
 
-// ── block endpoints ──────────────────────────────────────────────────────────
-
 /// `update-blks-api` only accepts the commit phase (`commitonly`); a block-only
 /// body is a 400, like the Go fileserver's "Only commit supported".
 #[tokio::test]
@@ -880,8 +872,6 @@ async fn raw_blks_answers_success() {
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["success"], true, "got {body}");
 }
-
-// ── v1 direct upload ─────────────────────────────────────────────────────────
 
 /// `/api2/repos/{id}/file/` streams one multipart file, rejects `Content-Range`
 /// (chunking belongs to the token endpoints) and requires the `file` part.

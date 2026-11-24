@@ -53,7 +53,7 @@ async function waitForExit(pid: number, timeoutMs = 10_000): Promise<void> {
 function assertNoUnclassifiedRoutes(resultsDir: string): void {
   const logs = serverLogs(resultsDir);
   if (logs.length === 0) {
-    return; // no log to audit
+    return;
   }
 
   const hits: string[] = [];

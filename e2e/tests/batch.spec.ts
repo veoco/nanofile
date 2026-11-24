@@ -39,12 +39,10 @@ test("batch move relocates the selected files into a subdirectory", async ({ pag
   await multiSelect(page, ["charlie.txt", "delta.txt"]);
   await page.locator("#js-selection-actions .js-batch-move").click();
   await expect(page.locator("#dir-picker-overlay")).toBeVisible();
-  // Pick the only directory (subdir) in the picker, then confirm the move.
   await page.locator("#dir-picker-list .js-picker-dir").first().click();
   await page.locator(".js-picker-confirm").click();
   await expect(row(page, "charlie.txt")).toHaveCount(0);
   await expect(row(page, "delta.txt")).toHaveCount(0);
-  // Navigate into subdir and verify the files landed there.
   await page.locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="subdir"] a').first().click();
   await page.waitForSelector('.js-file-list-view:not(.hidden) .js-entry-row[data-name="charlie.txt"]');
   await expect(row(page, "delta.txt")).toBeVisible();
@@ -63,9 +61,7 @@ test("batch copy duplicates a file into a subdirectory", async ({ page }) => {
   );
   await page.locator(".js-picker-confirm").click();
   await copyDone;
-  // Original stays in place…
   await expect(row(page, "alpha.txt")).toBeVisible();
-  // …and a copy appears in the subdirectory.
   await page.locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="subdir"] a').first().click();
   await page.waitForSelector('.js-file-list-view:not(.hidden) .js-entry-row[data-name="alpha.txt"]');
   await expect(row(page, "alpha.txt")).toBeVisible();
@@ -77,7 +73,6 @@ test("batch reindex reindexes the selected files", async ({ page }) => {
   const btn = page.locator(".js-rp-multi-content .js-batch-reindex");
   await expect(btn).toBeVisible();
   await btn.click();
-  // The button is disabled while the reindex runs, then re-enabled.
   await expect(btn).toBeDisabled();
   await expect(btn).toBeEnabled({ timeout: 20_000 });
 });

@@ -667,7 +667,6 @@ async fn test_put_over_a_collection_is_method_not_allowed() {
     .await;
     assert_eq!(resp.status(), 405);
 
-    // The collection is still a collection.
     let resp = dav(
         &client,
         "PROPFIND",
@@ -1339,7 +1338,6 @@ async fn test_delete_key_revokes_access() {
         207
     );
 
-    // Delete → access revoked.
     let resp = client
         .delete(format!("{base}/api2/api-keys/{key_id}/"))
         .bearer_auth(&f.api_token)

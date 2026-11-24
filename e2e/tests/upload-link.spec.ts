@@ -55,7 +55,6 @@ test("delete an upload link from the dialog", async ({ page }) => {
   await createUploadLink(page);
   await page.locator("#ul-delete-btn").click();
   await page.locator(".js-confirm-ok").click();
-  // After deletion the dialog returns to its create state.
   await expect(page.locator("#ul-create-form")).toBeVisible();
   await expect(page.locator("#ul-link-display")).toBeHidden();
 });

@@ -1,7 +1,6 @@
 import { test, expect, type Browser } from "@playwright/test";
 import { localStamp } from "../helpers/time";
 
-// Registration flows must start unauthenticated.
 test.use({ storageState: { cookies: [], origins: [] } });
 
 async function mintInvitationCode(

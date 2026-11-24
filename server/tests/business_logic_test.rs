@@ -350,7 +350,6 @@ async fn test_download_token_revoked_permission() {
     // permission predicate reads.
     common::remove_repo_member(&f.server.db, &f.repo_id, uid2).await;
 
-    // User2 tries to use the previously-obtained download token (step B).
     // The download URL is a full absolute URL like
     // "http://127.0.0.1:{port}/download-api/{token}".  Use a raw reqwest
     // client to fetch it directly (TestClient would double-prefix base_url).

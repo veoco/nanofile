@@ -929,7 +929,6 @@ async fn test_share_link_create_form_encoded_desktop() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token = body["token"].as_str().unwrap();
     assert!(!token.is_empty());
-    // The response link must be an absolute URL.
     let link = body["link"].as_str().unwrap_or("");
     assert!(
         link.starts_with("http://") || link.starts_with("https://"),
@@ -939,7 +938,6 @@ async fn test_share_link_create_form_encoded_desktop() {
     let expire = body["expire_date"].as_i64().unwrap_or(0);
     assert!(expire > 0, "expire_date should be set from expiration_time");
 
-    // The shared link should be downloadable.
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "shared download should succeed");
 }

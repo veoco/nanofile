@@ -31,7 +31,6 @@ test("a second account sees none of the first account's libraries", async ({ bro
 
     await expect(repoItem(page, "admin-private")).toHaveCount(0);
 
-    // The API agrees: the other account's library list does not include it.
     const resp = await page.request.get("/api2/repos/");
     expect(resp.status()).toBe(200);
     const repos = (await resp.json()) as Array<{ id: string }>;
@@ -50,7 +49,6 @@ test("a second account is refused on another account's library", async ({ browse
     const dir = await page.request.get(`/api2/repos/${privateRepoId}/dir/?p=/`);
     expect(dir.status()).toBe(403);
 
-    // The web UI does not render the entries either.
     await page.goto(`/libraries/${privateRepoId}/files`);
     await expect(
       page.locator('.js-file-list-view:not(.hidden) .js-entry-row[data-name="secret.txt"]'),

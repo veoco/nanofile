@@ -734,7 +734,6 @@ document.addEventListener("click", async function (e) {
   }
 });
 
-// Right panel download — ZIP for directories
 document.addEventListener("click", function (e) {
   var link = e.target.closest(".js-rp-download");
   if (!link) return;

@@ -71,8 +71,8 @@ async fn test_list_devices_with_data() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let token2 = body["token"].as_str().unwrap();
 
-    // List devices — should see both. The response is the whole inventory, so
-    // select the client entries before counting.
+    // The response is the whole inventory, so select the client entries before
+    // counting.
     let resp = client.get("/api2/devices/", Some(token1)).await;
     assert_eq!(resp.status(), 200);
 

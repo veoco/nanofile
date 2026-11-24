@@ -656,7 +656,6 @@ async fn verifying_2fa_revokes_other_credentials_and_keeps_the_session() {
         "enabling 2FA must drop every device-trust token"
     );
 
-    // The acting session survives...
     assert_eq!(
         client
             .get(format!("{}/settings/", f.server.base_url))
@@ -667,7 +666,6 @@ async fn verifying_2fa_revokes_other_credentials_and_keeps_the_session() {
         200,
         "the session that enabled 2FA must stay usable"
     );
-    // ...but the credentials it did not come with are gone.
     assert_eq!(
         f.client.ping(&f.api_token).await.status(),
         401,

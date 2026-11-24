@@ -246,7 +246,7 @@ export function openRightPanel(d) {
       fetch("/api/v2.1/share-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          if (reqId !== rpReqId) return; // stale response
+          if (reqId !== rpReqId) return;
           var links = data || [];
           shareList.innerHTML = "";
           if (links.length === 0) {
@@ -342,7 +342,7 @@ export function openRightPanel(d) {
       apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/tags/?start=0&limit=1000").then(function (r) { return r.json(); }),
       apiFetch("/api/v2.1/repos/" + encodeURIComponent(repoId) + "/metadata/record/?parent_dir=" + encodeURIComponent(parentDir) + "&name=" + encodeURIComponent(fileName) + "&file_name=" + encodeURIComponent(fileName)).then(function (r) { return r.json(); }),
     ]).then(function (results) {
-      if (tagsReqId !== rpReqId || userMutated) return; // stale response
+      if (tagsReqId !== rpReqId || userMutated) return;
       var tagData = results[0] || {};
       var recData = results[1] || {};
       allTags = (tagData.results || []).map(function (t) {
@@ -360,7 +360,7 @@ export function openRightPanel(d) {
       fileTagIds = (rec._tags || []).map(function (l) { return l.row_id; });
       renderTagChips();
     }).catch(function () {
-      if (tagsReqId !== rpReqId || userMutated) return; // stale response
+      if (tagsReqId !== rpReqId || userMutated) return;
       renderTagChips(); // fileTagIds is empty → shows the "no tags" hint
     });
 
@@ -430,7 +430,7 @@ export function openRightPanel(d) {
       fetch("/api/v2.1/upload-links/?repo_id=" + encodeURIComponent(d.repoId) + "&path=" + encodeURIComponent(d.path))
         .then(function (r) { return r.json(); })
         .then(function (data) {
-          if (reqId !== rpReqId) return; // stale response
+          if (reqId !== rpReqId) return;
           var links = data || [];
           ulList.innerHTML = "";
           if (links.length === 0) {
@@ -470,7 +470,7 @@ export function openRightPanel(d) {
     fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (reqId !== rpReqId) return; // stale response
+        if (reqId !== rpReqId) return;
         if (data.content) {
           indexContent.textContent = data.content;
           indexContent.classList.remove("hidden");
@@ -493,7 +493,7 @@ export function openRightPanel(d) {
     fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
       .then(function (r) { return r.json(); })
       .then(function (data) {
-        if (reqId !== rpReqId) return; // stale response
+        if (reqId !== rpReqId) return;
         exifContent.innerHTML = "";
         if (data && typeof data === "object" && !Array.isArray(data)) {
           var fields = getExifFields(data);

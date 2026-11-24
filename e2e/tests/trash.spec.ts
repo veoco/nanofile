@@ -74,9 +74,7 @@ test("restore brings a deleted file back", async ({ page }) => {
   const { repoId, name } = await deleteAndOpenTrash(page, "restore");
   await trashRow(page, name).locator(".js-restore-form button[type='submit']").click();
   await page.locator(".js-confirm-ok").click();
-  // The trash page reloads and no longer lists the restored file.
   await expect(trashRow(page, name)).toHaveCount(0);
-  // The file is back in the library browser.
   await page.goto(`/libraries/${repoId}/files`);
   await page.waitForSelector(".js-entry-row");
   await expect(

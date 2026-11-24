@@ -9,9 +9,6 @@ export async function openRepo(page: Page, repoId: string): Promise<void> {
 
 /**
  * Seed a fresh library and open it in one step.
- *
- * Nearly every file-browser spec starts this way; `openFreshRepo` had been
- * copied into the specs that needed a name suffix and a repos one.
  */
 export async function seedAndOpenRepo(
   page: Page,

@@ -63,7 +63,6 @@ function showConfirmDialog(title, message, opts) {
   okBtn.parentNode.replaceChild(newOk, okBtn);
 
   confirmOverlay.classList.remove("hidden");
-  // Focus the cancel button by default
   setTimeout(function () {
     confirmOverlay.querySelector(".js-confirm-cancel").focus();
   }, 100);

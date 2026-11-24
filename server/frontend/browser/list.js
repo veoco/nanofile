@@ -140,13 +140,6 @@ export async function loadMoreEntries() {
 // first group into the last on-screen group when the heading matches, or the month heading
 // prints twice and its count splits.
     if (view === "gallery") {
-      // The groups the template renders are `.nf-gal-group`; this used to read
-      // the gallery's pre-rebuild class name, matched nothing, and so the
-      // gallery never grew past its first page.
-      // A page boundary usually falls inside a month, so the incoming page's
-      // first group is the tail of the month already on screen; appending it
-      // as-is would print that month's heading twice and split its count, so
-      // merge its tiles into the last group when the heading matches.
       newContainer.querySelectorAll(".nf-gal-group").forEach(function (g) {
         var existing = container.querySelectorAll(".nf-gal-group");
         var last = existing[existing.length - 1];
@@ -212,7 +205,6 @@ function onFileListScroll() {
     var view = getVisibleViewContainer();
     if (!view) return;
     var rect = view.getBoundingClientRect();
-    // Trigger when the view bottom is within 300px of the viewport bottom
     if (rect.bottom - window.innerHeight < 300) {
       loadMoreEntries();
     }

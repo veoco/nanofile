@@ -200,7 +200,6 @@ test("the list filters and sorts without a round trip", async ({ page }) => {
   await expect(page.locator("#repo-list > li:visible")).toHaveCount(0);
   await expect(page.locator("#repo-no-match")).toContainText(`${name}-no-such-thing`);
 
-  // Escape clears the field again.
   await page.locator("#repo-filter").press("Escape");
   await expect(page.locator("#repo-list > li:visible")).toHaveCount(total);
 

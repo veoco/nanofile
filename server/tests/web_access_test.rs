@@ -981,7 +981,6 @@ async fn test_upload_blks_commit_cannot_replace_a_directory() {
         "a file must not replace a directory, even with replace=1"
     );
 
-    // The directory and its child must still be there.
     let listing = f
         .client
         .get(

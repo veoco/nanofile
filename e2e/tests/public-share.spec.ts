@@ -55,7 +55,6 @@ test("directory share lists entries and navigates into subdirectories", async ({
   await subdir.click();
   await expect(page).toHaveURL(/\/d\/.*\/\?p=\/subdir/);
   await expect(page.locator("a.nf-prow", { hasText: "nested.txt" })).toBeVisible();
-  // A parent (".. (parent)") link is available.
   await expect(page.locator("a.nf-prow", { hasText: /\(parent\)/ })).toBeVisible();
 });
 

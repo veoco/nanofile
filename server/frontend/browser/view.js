@@ -14,7 +14,6 @@ export function setMode(m) {
   var sortSection = document.querySelector(".js-sort-section");
   if (!listView || !gridView) return;
 
-  // Hide sort buttons (Name/Modified/Size) in gallery mode
   if (sortSection) sortSection.classList.toggle("hidden", m === "gallery");
 
   // Reset all to hidden; which view is shown is decided here, which view is
@@ -54,7 +53,6 @@ document.addEventListener("click", function (e) {
   if (btn) { switchTo("gallery"); }
 });
 
-// Initialize mode from localStorage on page load
 var mode = localStorage.getItem("fileViewMode") || "list";
 setMode(mode);
 
@@ -102,7 +100,6 @@ document.addEventListener("click", function (e) {
   if (entryTag) { e.stopPropagation(); applyTagFilter(entryTag.dataset.tag); }
 });
 
-// Initialize sort UI from server-rendered data attributes
 initSortUI();
 
 // After a partial list refresh, re-apply the sort UI (server replaced the

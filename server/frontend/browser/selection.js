@@ -155,7 +155,6 @@ document.addEventListener("click", function (e) {
     return;
   }
 
-  // Ignore clicks on links and buttons within rows
   if (e.target.closest("a") || e.target.closest("button")) return;
 
   var name = row.dataset.name;
@@ -264,7 +263,6 @@ function updateSelectionPanel() {
     }
     return;
   }
-  // Multiple items selected
   openMultiSelectPanel(getSelectedItems());
 }
 
@@ -305,7 +303,6 @@ document.addEventListener("touchstart", function (e) {
   touchStartTarget = row;
 
   touchLongPressTimer = setTimeout(function () {
-    // Long press detected — enter multi-select mode
     touchLongPressTimer = null;
 
     selState = reduceSelection(selState, { type: "setTouchMode", value: true });
@@ -313,7 +310,6 @@ document.addEventListener("touchstart", function (e) {
     var name = row.dataset.name;
     if (!name) return;
 
-    // Toggle this item
     selState = reduceSelection(selState, {
       type: "click",
       name: name,
@@ -327,7 +323,6 @@ document.addEventListener("touchstart", function (e) {
 
     suppressClick = true;
 
-    // Haptic feedback if available
     if (navigator.vibrate) navigator.vibrate(20);
   }, TOUCH_LONG_PRESS_MS);
 }, { passive: true });

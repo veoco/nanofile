@@ -41,7 +41,6 @@ test("a reset link arrives by mail and the new password replaces the old one", a
   await expect(confirm.getByText("All done")).toBeVisible();
   await visitor.close();
 
-  // The old password no longer works…
   const oldLogin = await browser.newContext();
   const oldPage = await oldLogin.newPage();
   await oldPage.goto("/accounts/login/");
@@ -51,7 +50,6 @@ test("a reset link arrives by mail and the new password replaces the old one", a
   await expect(oldPage.locator('[role="alert"]')).toBeVisible();
   await oldLogin.close();
 
-  // …and the new one does.
   const { close } = await signInAs(browser, email, "changed-password-456");
   await close();
 });

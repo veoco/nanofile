@@ -291,8 +291,6 @@ async fn test_register_admin_allowed() {
     assert_eq!(resp.status(), 200);
 }
 
-// ── Self-registration in invitation mode ────────────────────────────────────
-//
 // The invitation code is the trust proof in this mode, but the address is still
 // the account's login name and may receive notification mail, so it must pass
 // the same parser open registration uses. It is also stored trimmed: an
@@ -358,7 +356,6 @@ async fn test_invitation_registration_rejects_invalid_email() {
         );
     }
 
-    // The refusals did not consume the code...
     let record = f
         .server
         .repos
@@ -372,7 +369,6 @@ async fn test_invitation_registration_rejects_invalid_email() {
         "a rejected address must not consume the invitation code"
     );
 
-    // ...so a valid address still registers with the same code.
     let resp = register_with_invitation(&f, "invited@example.com", code).await;
     assert_eq!(
         resp.status(),

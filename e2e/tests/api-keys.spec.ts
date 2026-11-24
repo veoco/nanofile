@@ -88,7 +88,6 @@ test("a preset ticks the matching capabilities", async ({ page }) => {
   await expect(box("file.write")).not.toBeChecked();
   await expect(box("library.read")).not.toBeChecked();
 
-  // Switching to a write preset also selects the write side.
   await page.locator("#apikey-preset").selectOption("webdav_rw");
   await expect(box("webdav.write")).toBeChecked();
   await expect(box("file.write")).not.toBeChecked();

@@ -1,7 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { ADMIN_EMAIL, ADMIN_PASSWORD } from "../helpers/server";
 
-// Login flows must start unauthenticated.
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test("unauthenticated access redirects to login", async ({ page }) => {

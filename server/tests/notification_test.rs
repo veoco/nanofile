@@ -109,7 +109,6 @@ async fn test_subscribe_receives_repo_update() {
     }
 }
 
-/// Test that the WebSocket upgrade endpoint is reachable.
 #[tokio::test]
 async fn test_websocket_upgrade_works() {
     let f = TestFixture::new_with_notification().await;
@@ -123,8 +122,6 @@ async fn test_websocket_upgrade_works() {
     );
 }
 
-/// Test that locking/unlocking via the sync API succeeds and the
-/// notification manager is properly initialized (regression test).
 #[tokio::test]
 async fn test_lock_with_notification_enabled() {
     let f = TestFixture::new_with_notification().await;
@@ -156,9 +153,6 @@ async fn test_lock_with_notification_enabled() {
     assert_eq!(resp.status(), 200);
 }
 
-/// Test that the server sends WebSocket Ping frames when keepalive is
-/// enabled. The client (tokio-tungstenite) auto-responds with Pong, so
-/// we only verify that Ping frames arrive at the application layer.
 #[tokio::test]
 async fn test_server_sends_ping() {
     let _server = TestServer::start_with_custom_keepalive(1, 10).await;
@@ -176,7 +170,7 @@ async fn test_server_sends_ping() {
             msg = ws_stream.next() => {
                 match msg {
                     Some(Ok(Message::Ping(_))) => {
-                        break; // ✅ received a ping — test passes
+                        break;
                     }
                     Some(Ok(_)) => {
                     }
@@ -195,8 +189,6 @@ async fn test_server_sends_ping() {
     }
 }
 
-/// Test that when the client is responsive (auto-pongs), the server keeps
-/// the connection alive well past the client_timeout threshold.
 #[tokio::test]
 async fn test_keepalive_keeps_connection_alive() {
     let _server = TestServer::start_with_custom_keepalive(1, 3).await;
@@ -233,9 +225,6 @@ async fn test_keepalive_keeps_connection_alive() {
     }
 }
 
-/// Test that the global WebSocket connection cap is enforced: once the limit
-/// is reached, further upgrade requests are rejected with a plain 503 (no
-/// WebSocket is established).
 #[tokio::test]
 async fn test_websocket_global_limit_rejected() {
     let _server = TestServer::start_with_notification_limits(NotifLimits {
@@ -246,7 +235,6 @@ async fn test_websocket_global_limit_rejected() {
     .await;
     let ws_url = _server.base_url.replace("http", "ws") + "/notification";
 
-    // First connection succeeds and stays open.
     let (_ws, _) = tokio_tungstenite::connect_async(&ws_url).await.unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
@@ -260,8 +248,6 @@ async fn test_websocket_global_limit_rejected() {
     }
 }
 
-/// Test that the per-IP WebSocket connection cap is enforced: two concurrent
-/// connections from the same client IP are rejected once the cap is reached.
 #[tokio::test]
 async fn test_websocket_per_ip_limit_rejected() {
     let _server = TestServer::start_with_notification_limits(NotifLimits {
@@ -285,8 +271,6 @@ async fn test_websocket_per_ip_limit_rejected() {
     }
 }
 
-/// Test that an unauthenticated connection (no valid `subscribe` within the
-/// configured window) is dropped by the server.
 #[tokio::test]
 async fn test_websocket_subscribe_timeout_closes_connection() {
     let _server = TestServer::start_with_notification_limits(NotifLimits {

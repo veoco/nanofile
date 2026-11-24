@@ -28,7 +28,6 @@ test("open the file history dialog", async ({ page }) => {
 
 test("history lists every revision with download and restore actions", async ({ page }) => {
   await clickRowAction(page, "alpha.txt", ".js-history-btn");
-  // Two uploads → two revision entries, each with a Download link + Restore button.
   const revisions = page.locator(".js-history-list .js-history-restore");
   await expect(revisions).toHaveCount(2);
   await expect(page.locator('.js-history-list a[download]')).toHaveCount(2);
@@ -51,7 +50,6 @@ test("restore an older revision reverts the file content", async ({ page }) => {
   await page.locator(".js-history-list .js-history-restore").last().click();
   await page.locator(".js-confirm-ok").click();
   await expect(page.locator("#history-dialog-overlay")).toBeHidden();
-  // The API view of the file should now match the restored revision.
   const res = await page.request.get(`/repos/${repoId}/files/alpha.txt`);
   expect(res.ok()).toBeTruthy();
   expect(await res.text()).toBe(ORIGINAL);

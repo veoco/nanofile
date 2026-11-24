@@ -677,7 +677,6 @@ impl TestClient {
 
     pub async fn download_file(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
         let url_str = self.download_url(token, repo_id, path).await;
-        // Step B: follow the download URL to get the raw file bytes
         self.client.get(&url_str).send().await.unwrap()
     }
 
@@ -1315,7 +1314,6 @@ impl TestClient {
     }
 
     pub async fn unstar_item(&self, token: &str, repo_id: &str, path: &str) -> reqwest::Response {
-        // URL-encode the path for the query parameter
         let encoded: String = path
             .chars()
             .map(|c| match c {

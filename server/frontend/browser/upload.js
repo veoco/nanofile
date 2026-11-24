@@ -659,12 +659,10 @@ function uploadRowHtml(item) {
         '</div>';
 }
 
-// Update the progress dialog.
-///
-/// Progress events arrive every ~50 ms; rebuilding the whole body on each one reset the width
-/// transition, reset the body's scroll position, and — worst — replaced the pause/cancel buttons
-/// between mousedown and mouseup, so the click landed on a detached node and was swallowed. Only a
-/// change in what is *shown* (a file's state, or the action set) rebuilds anything now.
+// Progress events arrive every ~50 ms; rebuilding the whole body on each one reset the width
+// transition, reset the body's scroll position, and — worst — replaced the pause/cancel buttons
+// between mousedown and mouseup, so the click landed on a detached node and was swallowed. Only a
+// change in what is *shown* (a file's state, or the action set) rebuilds anything now.
 export function updateProgressDialog() {
     var dialog = document.getElementById('upload-dialog');
     if (!dialog) return;

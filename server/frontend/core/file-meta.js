@@ -30,7 +30,6 @@ export function getExifFields(data) {
     "PixelYDimension": __t('exif.height'),
     "Orientation": __t('exif.orientation')
   };
-  // Simple value formatters for certain fields (unquote is from utils)
   var formatters = {
     "ISOSpeed": function (v) { return unquote(v); },
     "ExposureTime": function (v) { return unquote(v); },

@@ -35,7 +35,6 @@ test("upload link uploads a file into the source directory", async ({ page }) =>
   });
   await expect(page.locator(".file-item .status.done").first()).toBeVisible({ timeout: 15_000 });
 
-  // The file landed in the shared directory.
   await expect
     .poll(async () => (await listSubdir()).includes(filename), { timeout: 15_000 })
     .toBe(true);

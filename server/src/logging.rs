@@ -515,7 +515,6 @@ mod tests {
         log.write_chunk(&[b'a'; 60]);
         assert_eq!(std::fs::read(&path).unwrap().len(), 60);
 
-        // Second chunk crosses the cap → current file becomes .1.
         log.write_chunk(&[b'b'; 60]);
         assert_eq!(
             std::fs::read(backup_path(&path, 1)).unwrap(),

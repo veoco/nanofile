@@ -190,7 +190,6 @@ async fn a_non_canonical_head_is_reported_and_repaired() {
     assert_eq!(finding.stored_id, old_root);
     assert_ne!(finding.canonical_id, old_root);
 
-    // entries.
     let mut sorted = read_fs_dir_data(f.server.repos.as_ref(), &f.repo_id, &old_root)
         .await
         .unwrap();

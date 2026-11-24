@@ -307,7 +307,6 @@ async fn test_v21_file_create() {
         .await;
     assert!(up.status().is_success());
 
-    // Create an empty file
     let resp = f
         .client
         .post_json(

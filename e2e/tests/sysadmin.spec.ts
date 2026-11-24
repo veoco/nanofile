@@ -18,7 +18,6 @@ const userRow = (page: import("@playwright/test").Page, email: string) =>
 
 test("create a new user", async ({ page }) => {
   const email = await createUserViaAdmin(page, "su-create", "password-123");
-  // New users are active by default.
   await expect(userRow(page, email)).toContainText("Active");
 });
 
