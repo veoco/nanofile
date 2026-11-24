@@ -58,7 +58,7 @@ impl AuthUser {
         .await
     }
 
-    /// [`require_repo_read`] for a write on a library named outside the URL path.
+    /// [`Self::require_repo_read`] for a write on a library named outside the URL path.
     pub async fn require_repo_write(
         &self,
         state: &AppState,
