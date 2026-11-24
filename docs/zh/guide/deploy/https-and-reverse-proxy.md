@@ -117,7 +117,7 @@ trusted_proxies = ["private"]
 每项可填具体 IP、CIDR 网段，或关键字：
 
 - `loopback` —— `127.0.0.1` 与 `::1`；
-- `private` —— RFC 1918 / 私有网段；
+- `private` —— RFC 1918 / 私有网段，同时也包含 loopback、link-local 与 unique-local 地址；
 - `link-local`、`unique-local` —— 对应的 IPv6 网段。
 
 列表越窄越好。范围过宽等于信任所有能从这些地址访问服务器的机器。
@@ -135,7 +135,7 @@ trusted_proxies = ["private"]
 
 - **502/504** —— 代理连不上 `127.0.0.1:8082`；检查 `server.addr`、`server.port` 和服务器是否在运行。
 - **偶发 502、过一会儿自己好** —— 请求落在了服务器刚退掉的空闲上游连接上；见上面 Caddy 的 `keepalive` 说明，或把 `server.header_read_timeout_secs` 调到大于客户端的轮询间隔。
-- **重定向循环** —— 代理发的是 `X-Forwarded-Proto: http`，或 `site_url` 写的是 `https` 而代理转发的是明文 HTTP；修正头或地址。
+- **登录与表单 POST 被拒** —— `site_url` 的 scheme 与浏览器实际使用的 scheme 不一致（例如 `site_url` 写 `https`，而用户通过明文 HTTP 访问）。Origin 校验失败；服务端不读 `X-Forwarded-Proto`，请把 `site_url` 对齐真实对外地址。
 - **WebSocket 断开** —— 缺少 `Upgrade`/`Connection` 头，或代理把它们剥掉了。
 - **上传到固定大小就失败** —— 代理的请求体上限小于文件；nginx 里设 `client_max_body_size 0`，其他代理找等价设置。
 - **所有人都是同一个 IP** —— `trusted_proxies` 为空，或没有包含代理地址；见上。

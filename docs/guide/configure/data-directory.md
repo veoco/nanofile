@@ -21,7 +21,10 @@ The first-run setup decides this once:
 - it records the result as **absolute** paths in `~/.nanofile/config.toml`.
 
 Relative paths in a configuration file you write yourself keep resolving against
-the binary's directory.
+the binary's directory. Compatibility exception: when one of those relative state
+paths already exists under the process's working directory, the whole group is
+kept as configured (relative to the working directory) so an older deployment does
+not move its data.
 
 ## Layout
 
@@ -43,7 +46,8 @@ The parts are not alike, which matters when you back up or clean up:
 | `nanofile.db` | accounts, the library structure, share links and settings are gone | no |
 | `blocks/` | all file content is gone | no |
 | `index/` | search matches names only | yes, by re-indexing |
-| `thumbnails/`, `avatars/` | thumbnails and avatars regenerate | yes |
+| `thumbnails/` | thumbnails regenerate from `blocks/` | yes |
+| `avatars/` | the uploaded avatar originals are gone; derived sizes rebuild from them while they exist, but the originals cannot be recovered | no |
 | `temp/` | nothing (upload staging) | does not need backing up |
 
 They are set by `block_dir`, `temp_dir`, `thumbnail_dir` and `avatar_dir` under

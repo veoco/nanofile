@@ -46,10 +46,12 @@ running as the same user. The per-platform mechanisms and the probe are in
   parsing inside the server process. Documents skipped while it was off are
   recorded as retryable and re-indexed once it is back on — so an outage leaves no
   permanently unsearchable file behind.
-- **To see what this host actually gives, read the admin "Sandbox" page**: one
-  band per profile, one row per protection, and a state badge per band. The people
-  tag band is measured only while the feature is on; with it off the band says so
-  and points at its switch, because the detector's probe runs a forward pass.
+- **To see what this host actually gives, read the admin "Sandbox" page**: four
+  bands — documents, media, faces and OCR — each with one row per protection and a
+  state badge. The images profile (image decoding, EXIF and avatars) has no band of
+  its own. The people tag band is measured only while the feature is on; with it
+  off the band says so and points at its switch, because the detector's probe runs
+  a forward pass.
   The OCR band is measured only while both the index and `[ocr] enabled` are on;
   it loads four models, so a feature nobody enabled does not pay for its probe.
   Each row says what the item is, whether it is in place, how much it matters and

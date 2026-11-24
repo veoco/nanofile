@@ -90,8 +90,8 @@ picked up when it is back on. See [Sandbox](/guide/admin/sandbox).
 before OCR was enabled; re-index that library. Enabling OCR later only re-examines
 files the index had skipped.
 
-**Everything is slow.** Lower the OCR `max_side`, raise `min_score`, or turn OCR off;
-check Task Management for queued tasks. See [Monitoring](/guide/operate/monitoring).
+**Everything is slow.** Lower the OCR `max_side` or turn OCR off; check Task
+Management for queued tasks. See [Monitoring](/guide/operate/monitoring).
 
 ## Thumbnails and media
 
@@ -109,12 +109,11 @@ once the helper is available.
 ## Email
 
 **Mail is not going out.** Check that `email.enabled` is on and the SMTP fields are
-right, then send a test message from **System Settings → Email Management**. See
+right, then send a test message from **Email Management**. See
 [Email notifications](/guide/configure/email).
 
-**Messages stay failed.** Read the failure in the email queue or on Task Management;
-a message is retried up to `email.max_attempts` and then stays failed until you retry
-or delete it.
+**Messages stay failed.** Read the failure in the email queue; a message is retried
+up to `email.max_attempts` and then stays failed until you retry or delete it.
 
 **Open registration returns 404.** Open registration requires working mail. While
 outbound mail is off, paused or incomplete, the registration page answers 404 and the

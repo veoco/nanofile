@@ -37,13 +37,15 @@ Running in the background sends the log to stdout, so read it with
 
 ## Garbage collection
 
-Deleting a file does **not** hand the disk back immediately. A block is collected
+Garbage collection is **off by default** (`gc.enabled = false`): until it is
+enabled, nothing is reclaimed and total disk usage only grows. With it on,
+deleting a file does **not** hand the disk back immediately: a block is collected
 on the next GC run only when no commit references it any more **and** it is older
 than `gc.min_block_age_secs`:
 
 | Key | Effect |
 |---|---|
-| `gc.enabled` | whether garbage collection runs. |
+| `gc.enabled` | whether garbage collection runs (default `false`). |
 | `gc.interval_hours` | how often it runs. |
 | `gc.mode` | how a pass finds orphaned blocks: `audit` lists every library and diffs it against what its retained commits reference; `incremental` deletes only what history pruning just orphaned and needs no listing. |
 | `gc.pending_ttl_hours` | how long a block an upload wrote but never committed is kept. It must be at least the resumable-upload lifetime; `0` disables the block sweep, leaves those blocks to an audit, and still drops the ledger rows after 30 days. |
@@ -86,7 +88,10 @@ them.
 
 A single file or a selection can be re-indexed from the web interface: the
 **re-index** button in the details drawer, or the bulk **re-index** when several
-entries are selected. A whole-site rebuild is `POST /api2/reindex/`.
+entries are selected. `POST /api2/reindex/` rebuilds a single library: its body is
+`{"repo_id": ...}` and only the library owner or an administrator may call it.
+There is no whole-site endpoint; rebuild each library in turn, or set
+`index.backfill_enabled` and restart the server to backfill every library.
 
 Indexing depends on document extraction inside the sandbox (PDF, Office, images,
 …). While the sandbox is off, documents are not indexed — they are recorded as
@@ -102,7 +107,9 @@ See [Text in images and PDFs](/guide/use/ocr).
 
 ## Block and directory verification
 
-All three commands are **read-only by default**; they only write with `--repair`:
+`verify-blocks` and `verify-dir-order` are **read-only by default** and only write
+with `--repair`. `migrate-blocks` is the opposite: it migrates straight away, and
+only `--dry-run` makes it report without writing:
 
 | Command | When to use it |
 |---|---|
@@ -116,9 +123,9 @@ re-upload it. Full options are in [Command line](/reference/cli).
 
 ## Task Management
 
-Background jobs and load measurements are on **System Settings → Task Management**;
-see [Monitoring](/guide/operate/monitoring) for what each page shows and what to
-watch.
+Background jobs and load measurements are on **Task Management** — in the user
+menu, next to System Settings; see [Monitoring](/guide/operate/monitoring) for
+what each page shows and what to watch.
 
 ## Common problems
 

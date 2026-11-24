@@ -49,7 +49,7 @@ description: 排查启动、同步、搜索、媒体、邮件、上传与反向�
 
 **混合 PDF 仍缺扫描页。** 它是在开启 OCR 之前按文本层索引的；重建该资料库索引。之后才开启 OCR 只会重新检查被索引跳过的文件。
 
-**整体很慢。** 调低 OCR 的 `max_side`、调高 `min_score`，或关闭 OCR；看任务管理里有没有排队任务。见[监控](/zh/guide/operate/monitoring)。
+**整体很慢。** 调低 OCR 的 `max_side`，或关闭 OCR；看任务管理里有没有排队任务。见[监控](/zh/guide/operate/monitoring)。
 
 ## 缩略图与媒体
 
@@ -61,9 +61,9 @@ description: 排查启动、同步、搜索、媒体、邮件、上传与反向�
 
 ## 邮件
 
-**邮件发不出。** 先确认 `email.enabled` 已开、SMTP 各项填对，再从**系统设置 → 邮件管理**发一封测试邮件。见[邮件通知](/zh/guide/configure/email)。
+**邮件发不出。** 先确认 `email.enabled` 已开、SMTP 各项填对，再从**邮件管理**发一封测试邮件。见[邮件通知](/zh/guide/configure/email)。
 
-**邮件一直停在失败状态。** 在邮件队列或任务管理里看失败原因；邮件按 `email.max_attempts` 重试，超过次数后停在失败状态，等你在队列里重试或删除。
+**邮件一直停在失败状态。** 在邮件队列里看失败原因；邮件按 `email.max_attempts` 重试，超过次数后停在失败状态，等你在队列里重试或删除。
 
 **开放注册返回 404。** 开放注册依赖可用的邮件。邮件关闭、暂停或配置不完整时，注册页返回 404，登录页隐藏创建账户链接。见[用户与分享](/zh/guide/admin/users-and-sharing)。
 

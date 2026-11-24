@@ -12,20 +12,27 @@ description: 运行已发布镜像、挂载数据目录并使用 compose。
 下面两条示例都设置了 `NANOFILE_*` 变量，因此视为已配置。若容器**完全不带**环境变量启动，则会进入首次初始化：
 
 - 初始化页面的地址会打印到容器 stdout，用 `docker logs <名称>` 即可取到。
-- 该地址是 `127.0.0.1`，且页面本身不带 TLS。远程主机请做端口转发（最简单的是 SSH 隧道），不要把它直接暴露出去。
-- 镜像里没有 `HOME`，初始化无处写 `~/.nanofile/config.toml`。这种场景请自己传 `--config` 并设置 `HOME`。
+- 初始化页监听配置里的监听地址（默认 `0.0.0.0:8082`，即所有网卡），而打印出来的 URL 是 `127.0.0.1`，页面本身不带 TLS。远程主机请用防火墙限制端口，或用 SSH 隧道访问，不要把它直接暴露出去。
+- 镜像里没有 `HOME`，工作目录又是 `/`，uid 1000 无法写入，初始化因此无处写 `~/.nanofile/config.toml`。给它一个可写的 HOME 与工作目录，例如 `-e HOME=/data -w /data`，配置就会写到 `/data/.nanofile/config.toml`。
+- 不想走初始化时，挂载一个**已经存在**的配置文件并用 `--config` 传入它的路径（显式指定的配置文件必须存在，否则拒绝启动），再用下面的 `adduser` 建管理员。
 
 变量跳过设置页时，在容器里创建第一个管理员：
 
 ```bash
-docker exec nanofile /nanofile adduser --email admin@example.com
+docker exec -it nanofile /nanofile adduser --email admin@example.com
+```
+
+交互式密码提示需要终端；不带 `-it` 时进程会在读密码之前退出。脚本里改用标准输入喂密码：
+
+```bash
+printf '%s\n' 'secret123' | docker exec -i nanofile /nanofile adduser --email admin@example.com --password-stdin
 ```
 
 或者挂载带 `[admin_init]` 的配置文件。生产环境把 `latest` 换成版本 tag；`latest` 会随每次发布移动。
 
 ## 主密钥
 
-主密钥生成一次并长期保存。它用于加密会话、邮件与静态块。更换后所有会话登出、同步客户端失效、已加密块无法解密。
+主密钥生成一次并长期保存。它派生 CSRF 签名密钥、同步令牌/TOTP/邮件队列的加密密钥、通知 JWT 密钥（未显式配置时）以及静态块密钥（未设置 `storage.encryption_key` 时）。会话不由它派生（会话 token 是随机值、库里只存 SHA-256 摘要），所以轮换不会让浏览器登出；但同步客户端会失效，上述数据在换回旧密钥前无法读出。
 
 ```bash
 mkdir -p data

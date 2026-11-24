@@ -29,12 +29,16 @@ and the keys you are most likely to set by hand.
 Highest first:
 
 1. An environment variable (`NANOFILE_*`).
-2. The config file.
-3. The value saved at "System Settings".
+2. The value saved at "System Settings", for a key that has one.
+3. The config file — for keys with no saved value, plus every key listed in
+   `config_override_keys`, or every key at all under `config_policy = "override"`.
 4. The built-in default.
 
 Environment variables always win and are never written back to the file, which is
-what container deployments rely on.
+what container deployments rely on. Under the default
+`config_policy = "bootstrap"`, a saved value beats the file: once an administrator
+saves a key in the interface, the file's value for that key stops mattering. See
+the `[settings]` layer below.
 
 ## Where the config file is looked for
 
@@ -62,7 +66,7 @@ quietly served a different database on a different port.
 | `server.site_url` | The external URL (HTTPS domain). Controls the `Secure` cookie attribute, enables HSTS and builds share links. |
 | `server.addr` / `server.port` | Listener. Default `0.0.0.0:8082`. |
 | `server.secret_key` | The master key. File-only; see [Security](/guide/admin/security). |
-| `storage.block_dir`, `storage.temp_dir`, `storage.thumbnail_dir`, `storage.avatar_dir`, `index.index_dir` | State directories. Relative paths resolve against the binary's directory; absolute paths place state elsewhere. |
+| `storage.block_dir`, `storage.temp_dir`, `storage.thumbnail_dir`, `storage.avatar_dir`, `index.index_dir` | State directories. Relative paths resolve against the binary's directory; absolute paths place state elsewhere. Compatibility exception: if a relative path in this group already exists under the current working directory, the whole relative group is kept as configured, so an older deployment keeps its data where it is. |
 | `storage.block_encryption_mode` | `off`, `on` or `lazy`. File-only: it decides how existing ciphertext is read. |
 | `storage.block_flush` | `os` (the default) leaves flushing to the OS, as Seafile does. `always` fsyncs every block, so each upload waits for a device-level flush and concurrent clients can stall for minutes. File-only. |
 
@@ -77,14 +81,17 @@ sends larger chunks.
 
 ## When a change takes effect
 
-Most settings apply immediately. The listener, transfer limits and cache
-directories apply at the next start. Every settings row says which case it is.
+Most settings apply immediately. The listener, most transfer and request limits
+and cache directories apply at the next start; a few limits, such as
+`server.max_chunk_size_mb`, are live. Every settings row says which case it is.
 
 The **Restart server** button in the settings page's header restarts the server in
-place: the process, the tray icon and the listening port stay the same, but the
-settings table, database connections, caches and background tasks are rebuilt, so
-every "needs a restart" row takes effect immediately. The administrator's session
-survives.
+place: the process and the tray icon stay the same, and the listening socket is
+kept only when the saved address and port did not change. A changed address is
+rebound; if the new one cannot be bound, the settings page shows a banner and the
+old socket keeps serving. The settings table, database connections, caches and
+background tasks are rebuilt, so every "needs a restart" row takes effect
+immediately. The administrator's session survives.
 
 The log level and file caps, and whether the desktop tray exists and in which
 language, are decided before the process starts. Those are marked "needs a full
@@ -103,24 +110,28 @@ setting means. It is not editable from the interface.
 - `config_override_keys` lists keys the file keeps winning for under
   `"bootstrap"`.
 - `refresh_interval_secs` re-reads the saved settings so a change made elsewhere
-  (or restored from a backup) is picked up without a restart. `0` disables it.
+  (or restored from a backup) is picked up without a restart — for the settings
+  that apply immediately. A row that needs a restart still needs one. `0` disables
+  the periodic read.
 
 ## Task Management
 
-**System Settings → Task Management** shows the server's load measurements, the
-background runs and the registered jobs. See [Monitoring](/guide/operate/monitoring)
-for what each page shows and what to watch.
+**Task Management** — in the user menu, alongside System Settings — shows the
+server's load measurements, the background runs and the registered jobs. See
+[Monitoring](/guide/operate/monitoring) for what each page shows and what to
+watch.
 
 ## Sections
 
 `[server]` networking and feature switches; `[database]` connection;
 `[storage]` directories and quotas; `[auth]` login, password and rate limits;
-`[ui]` language; `[email]` mail; `[admin_init]` first-start admin;
-`[logging]` logs; `[gc]` garbage collection; `[index]` search; `[face_tags]`
-automatic people tags; `[ocr]` text in images and scanned PDFs for the search index;
-`[sandbox]` the confinement over untrusted parsing; `[notification]`
-notifications; `[tasks]` background tasks; `[settings]` how the file and the
-saved settings layer.
+`[ui]` language; `[sync]` sync-protocol hardening (`verify_fs_objects`,
+`max_tree_depth`, `max_tree_visits`); `[email]` mail; `[admin_init]` first-start
+admin; `[logging]` logs; `[gc]` garbage collection; `[index]` search;
+`[face_tags]` automatic people tags; `[ocr]` text in images and scanned PDFs for
+the search index; `[sandbox]` the confinement over untrusted parsing;
+`[notification]` notifications; `[tasks]` background tasks; `[settings]` how the
+file and the saved settings layer.
 
 A key the file does not mention keeps its built-in default. The file is never
 rewritten, so what you write is what stays on disk. The one exception is

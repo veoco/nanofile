@@ -145,7 +145,8 @@ bucket.
 Entries may be an exact IP, a CIDR range, or a keyword:
 
 - `loopback` — `127.0.0.1` and `::1`;
-- `private` — RFC 1918 / private ranges;
+- `private` — RFC 1918 / private ranges, and also loopback, link-local and
+  unique-local addresses;
 - `link-local`, `unique-local` — the corresponding IPv6 ranges.
 
 Keep the list as narrow as the proxy setup allows. A wide range trusts every host
@@ -170,8 +171,10 @@ that can reach the server from those addresses.
 - **Sporadic 502 that clears by itself** — a proxied request landed on an idle
   upstream connection the server had just retired; see the Caddy `keepalive` note
   above, or raise `server.header_read_timeout_secs` past the client's poll interval.
-- **Redirect loop** — the proxy sends `X-Forwarded-Proto: http`, or `site_url` says
-  `https` while the proxy forwards plain HTTP; fix the header or the URL.
+- **Login and form POSTs are rejected** — `site_url`'s scheme does not match the
+  scheme the browser uses (for example `https` in `site_url` while users reach the
+  server over plain HTTP). The Origin check fails; the server does not read
+  `X-Forwarded-Proto`, so align `site_url` with the real external URL.
 - **WebSocket disconnects** — the `Upgrade`/`Connection` headers are missing, or the
   proxy strips them.
 - **Uploads fail at a fixed size** — the proxy's body limit is lower than the file;

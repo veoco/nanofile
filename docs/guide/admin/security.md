@@ -55,7 +55,8 @@ captcha_trigger_after = 2
 - `adaptive` asks on sign-in only after `captcha_trigger_after` failures from one
   client address; registration and password reset always ask while it is on.
 - `always` asks on every sign-in, registration and password-reset form.
-- Difficulty grows by one bit per recent failure, up to 22 bits.
+- In adaptive mode the difficulty grows by at most three bits above the configured
+  base (the default 17 rises to 20), and never above the 22-bit maximum.
 
 The challenge protects the **web forms only**. `POST /api2/auth-token/`, WebDAV,
 sync and the desktop/mobile clients are never challenged, because they cannot run
@@ -81,9 +82,11 @@ created for or used against the library.
 
 ## Credential revocation
 
-A password change, deactivation or device wipe revokes every credential the
-account holds: other devices, sync clients and API keys, plus unused reset links.
-See [Account security](/guide/use/account-security).
+A password change or deactivation revokes every credential the account holds:
+other devices, sync clients and API keys, plus unused reset links. A device wipe
+is narrower: it revokes only what the wiped device holds — its sessions, sync
+tokens and two-factor device trust. See
+[Account security](/guide/use/account-security).
 
 ## The master secret
 
@@ -93,12 +96,25 @@ A zero-configuration start never reaches that refusal: it runs the first-run set
 which generates a strong key and persists it.
 
 Debug builds with an explicit config that omits the key still generate an
-ephemeral one, so sessions do not survive a restart.
-`NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` does the same for a zero-config
-start and covers local and CI use.
+ephemeral one: every start makes a new key, so the data encrypted under it (sync
+tokens, TOTP seeds, queued mail and saved secrets) becomes unreadable. Browser
+sessions keep working. With at-rest block encryption enabled the server refuses to
+start instead of generating one, because the ephemeral key would make every stored
+block permanently unreadable. `NANOFILE_SERVER_ALLOW_EPHEMERAL_SECRET_KEY=1` does
+the same for a zero-config start and covers local and CI use.
 
-The key encrypts sessions, mail and at-rest blocks. Keep it out of the image and
-out of the repository; see [Docker](/guide/deploy/docker) for generating and mounting it.
+The key derives the CSRF signing secret, the sync-token encryption key, the TOTP
+encryption key, the queued-mail key, the notification JWT key (unless configured)
+and the at-rest block key (unless `storage.encryption_key` is set). Browser
+sessions are not derived from it: session tokens are random and stored only as a
+SHA-256 digest, so rotating the secret does not sign existing sessions out —
+revoke them under **Settings → Sessions & Credentials**, with a password change or
+by deactivating the account. Rotating it does break sync clients and makes TOTP
+seeds, queued mail and saved secrets undecryptable; encrypted blocks are affected
+only when the block key was derived from it.
+
+Keep it out of the image and out of the repository; see
+[Docker](/guide/deploy/docker) for generating and mounting it.
 
 ## Related
 

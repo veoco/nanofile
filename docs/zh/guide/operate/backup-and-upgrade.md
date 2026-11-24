@@ -9,11 +9,12 @@ description: 备份数据库与块、恢复，并安全升级。
 
 | 内容 | 是否必须 | 说明 |
 |---|---|---|
-| 配置文件（或环境变量的来源） | **必须** | 里面有主密钥 `server.secret_key`，开了静态加密时还有 `storage.encryption_key`。丢了它，会话与同步令牌作废，已加密的块解不开。 |
+| 配置文件（或环境变量的来源） | **必须** | 里面有主密钥 `server.secret_key`。丢了它，同步客户端失效，TOTP 种子、队列邮件与已保存的密钥类设置无法解密；浏览器会话存的是 SHA-256 摘要、不由主密钥派生，因此仍然有效。开了静态加密时块密钥是 `storage.encryption_key`：它从不写入配置文件，只来自 `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`（该来源要单独备份），未设置时由 `server.secret_key` 派生。 |
 | `nanofile.db` | **必须** | 账号、资料库结构、分享链接、已保存的设置。 |
 | `blocks/` | **必须** | 文件块的唯一副本，没有它就没有任何文件内容。 |
 | `index/` | 可选 | 全文索引，可以由 `blocks/` 重建。 |
-| `thumbnails/`、`avatars/` | 可选 | 缩略图与头像缓存，可以重建。 |
+| `thumbnails/` | 可选 | 缩略图缓存，可由 `blocks/` 重建。 |
+| `avatars/` | **建议备份** | 用户上传的头像原图——唯一副本，不存放在 `blocks/` 或数据库里。原图在时派生尺寸可重建，但该目录一旦丢失，原图无法恢复，只能让用户重新上传。 |
 | `temp/` | 不需要 | 上传过程中的临时文件。 |
 
 配置与数据目录的位置见[数据目录](/zh/guide/configure/data-directory)。
@@ -29,6 +30,10 @@ sudo systemctl start nanofile
 
 停掉服务后整体复制，数据库与块目录天然是同一时刻的状态，不必考虑 WAL 与顺序。
 
+如果开了静态加密，且密钥来自 `NANOFILE_STORAGE_ENCRYPTION_KEY` 或
+`NANOFILE_STORAGE_ENCRYPTION_KEY_FILE`，这份来源也要一起备份：密钥从不写进
+`config.toml`，只备份配置文件会让块解不开。
+
 ## 不停机备份
 
 服务还在跑时做备份，这两点要注意：
@@ -39,12 +44,12 @@ sudo systemctl start nanofile
   sqlite3 /opt/nanofile/data/nanofile.db ".backup /backup/nanofile.db"
   ```
 
-- **顺序：先复制 `blocks/`，再备份数据库。** 备份期间仍会写入，先复制块、后备份库，结果最多是多出几个没人引用的块（垃圾回收会清理）；反过来则可能得到一个引用了尚未复制的块的数据库。
+- **顺序：先备份数据库，再复制 `blocks/`。** SQLite 快照在开始时保持一致，而上传是先写块、后提交引用它的 commit。先取的数据库快照只会引用已经在磁盘上的块，之后复制块目录必然把它们全包含进来；期间多写的块没人引用，交给垃圾回收清理。反过来才危险：在块复制与数据库快照之间提交的 commit 可能引用复制时还不存在的块，恢复出的数据库就会指向缺失的块。
 
 ## 恢复
 
 1. **停服务。**
-2. **放回配置文件**，主密钥必须与备份时的那份一致。换了主密钥，旧会话与已加密的块都无法使用。
+2. **放回配置文件**，主密钥必须与备份时的那份一致。换了主密钥会打断同步客户端，并让 TOTP 种子、队列邮件、已保存的密钥类设置以及由它派生的加密块无法使用；浏览器会话不受影响。
 3. **放回数据库**（用备份出来的那个文件即可，启动时它会自己处理日志）。
 4. **放回 `blocks/`**。
 5. **检查权限**：运行服务的用户要对这些文件可读写；容器里是 uid/gid `1000:1000`（`chown -R 1000:1000 data`）。
@@ -53,7 +58,7 @@ sudo systemctl start nanofile
 
 `index/` 不必强求一致：索引与另一套块目录混在一起时，把索引目录清空让它重建最简单。
 
-**静态加密的部署**：`blocks/` 依赖配置文件里的密钥与 `storage.block_encryption_mode`，这两者与块必须一起备份、一起恢复。详见[安全](/zh/guide/admin/security)。
+**静态加密的部署**：`blocks/` 依赖块密钥与 `storage.block_encryption_mode`，这两者与块必须一起备份、一起恢复。块密钥从不写进 `config.toml`：它来自 `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`，两者都没设置时由 `server.secret_key` 派生，因此恢复主密钥也就恢复了块密钥。详见[安全](/zh/guide/admin/security)。
 
 ## 升级
 
@@ -61,7 +66,7 @@ sudo systemctl start nanofile
 2. **停服务。**
 3. **换二进制**：解开新归档，替换旧的那个文件；容器则是改镜像 tag 后重建容器。
 4. **启动**，确认版本号（网页左下角）与日志都没有异常。
-5. **观察任务管理**：**系统设置 → 任务管理**会列出升级后自动跑的迁移类作业。见[监控](/zh/guide/operate/monitoring)。
+5. **看日志**：数据库迁移与块布局迁移都在启动时同步执行，早于服务器开始监听；任何一项失败都会导致启动失败，日志里会写明原因。任务管理列的是后台作业（例如 lazy 静态加密转换），不是迁移。见[监控](/zh/guide/operate/monitoring)。
 
 几点值得一提：
 
@@ -74,7 +79,7 @@ sudo systemctl start nanofile
 
 - 对恢复出的块目录跑 `nanofile verify-blocks`，通过。
 - 恢复出的实例版本一致，测试下载正常。
-- 升级日志与任务管理显示迁移类作业已完成。
+- 启动日志显示迁移均已成功完成。
 
 ## 版本渠道
 

@@ -17,16 +17,29 @@ the first-run setup instead:
 
 - The setup URL goes to the container's stdout, so `docker logs <name>` has the
   page address.
-- That address is `127.0.0.1`, and the page has no TLS. On a remote host, forward
-  the port (an SSH tunnel is the simple answer) rather than exposing it.
-- The image has no `HOME`, so the setup has nowhere to write
-  `~/.nanofile/config.toml`. On that path, pass `--config` and set `HOME`
-  yourself.
+- The setup page listens on the configured listen address — by default
+  `0.0.0.0:8082`, every interface — while the URL it prints is `127.0.0.1`, and
+  the page has no TLS. On a remote host, restrict the port with a firewall or
+  reach the page through an SSH tunnel rather than exposing it.
+- The image has no `HOME` and its working directory is `/`, which uid 1000 cannot
+  write, so the setup has nowhere to write `~/.nanofile/config.toml`. Give it a
+  writable home and working directory, for example `-e HOME=/data -w /data`; the
+  configuration is then written to `/data/.nanofile/config.toml`.
+- To skip the setup instead, mount a configuration file that already exists and
+  pass `--config` with its path — a named configuration file must exist, or the
+  start is refused — then create the administrator with `adduser` as shown below.
 
 When the variables skip the setup, create the first administrator in the container:
 
 ```bash
-docker exec nanofile /nanofile adduser --email admin@example.com
+docker exec -it nanofile /nanofile adduser --email admin@example.com
+```
+
+The interactive password prompt needs a terminal; without `-it` the process exits
+before the password is read. For scripts, feed the password on stdin:
+
+```bash
+printf '%s\n' 'secret123' | docker exec -i nanofile /nanofile adduser --email admin@example.com --password-stdin
 ```
 
 Or mount a configuration file with `[admin_init]`. For production, replace `latest`
@@ -34,9 +47,12 @@ with a version tag; the `latest` tag moves to every new release.
 
 ## The master secret
 
-Generate the master secret once and reuse it. It encrypts sessions, mail and
-at-rest blocks. Rotating it logs out every session, breaks sync clients and makes
-encrypted blocks unreadable.
+Generate the master secret once and reuse it. It derives the CSRF signing secret,
+the sync-token, TOTP and queued-mail keys, the notification JWT key (unless
+configured) and the at-rest block key (unless `storage.encryption_key` is set).
+Sessions are not derived from it — session tokens are random and stored as a
+SHA-256 digest — so rotating it does not sign browsers out; it does break sync
+clients and makes that data unreadable until the old secret is back.
 
 ```bash
 mkdir -p data

@@ -9,11 +9,12 @@ description: Back up the database and blocks, restore them, and upgrade safely.
 
 | Item | Required | Notes |
 |---|---|---|
-| The configuration file (or wherever your env vars come from) | **Yes** | It holds the master secret `server.secret_key` and, with at-rest encryption, `storage.encryption_key`. Lose it and sessions and sync tokens stop working, and encrypted blocks cannot be decrypted. |
+| The configuration file (or wherever your env vars come from) | **Yes** | It holds the master secret `server.secret_key`. Lose it and sync clients stop working, and TOTP seeds, queued mail and saved setting secrets cannot be decrypted; browser sessions are stored as SHA-256 digests and survive. With at-rest encryption the block key is `storage.encryption_key`: it is never written to the file and comes only from `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE` (back that source up separately), or, when unset, is derived from `server.secret_key`. |
 | `nanofile.db` | **Yes** | Accounts, the library structure, share links, saved settings. |
 | `blocks/` | **Yes** | The only copy of the file blocks; without it there is no file content at all. |
 | `index/` | Optional | The full-text index; it can be rebuilt from `blocks/`. |
-| `thumbnails/`, `avatars/` | Optional | Caches; both rebuild. |
+| `thumbnails/` | Optional | Thumbnail cache; it rebuilds from `blocks/`. |
+| `avatars/` | **Recommended** | Uploaded avatar originals — the only copy, held nowhere else (not in `blocks/` or the database). Derived sizes rebuild from them while they exist, but once this directory is lost the originals cannot be recovered; each user has to upload again. |
 | `temp/` | No | In-flight upload scratch space. |
 
 Where the configuration and the data directory live is in
@@ -31,6 +32,11 @@ sudo systemctl start nanofile
 With the service stopped, a straight copy gives you a database and a block store
 from the same instant; WAL and ordering stop mattering.
 
+If at-rest encryption is on and you supplied the key through
+`NANOFILE_STORAGE_ENCRYPTION_KEY` or `NANOFILE_STORAGE_ENCRYPTION_KEY_FILE`, back
+up that source as well: the key is never written into `config.toml`, so a copy of
+the configuration alone leaves the blocks unreadable.
+
 ## Online backup
 
 Backing up while the server runs, two things matter:
@@ -43,17 +49,22 @@ Backing up while the server runs, two things matter:
   sqlite3 /opt/nanofile/data/nanofile.db ".backup /backup/nanofile.db"
   ```
 
-- **Order: copy `blocks/` first, then back up the database.** Writes continue
-  during the backup, so blocks first and database second can only leave you with
-  a few unreferenced blocks (garbage collection cleans those up); the other way
-  round you can end up with a database that references blocks you never copied.
+- **Order: back up the database first, then copy `blocks/`.** The SQLite snapshot
+  is consistent as of the moment it starts, and an upload writes its blocks
+  before the commit that references them. A snapshot taken first therefore only
+  references blocks already on disk, and copying the block store afterwards
+  includes all of them; blocks written in between are unreferenced garbage that
+  garbage collection cleans up. The reverse order is the risky one: a commit made
+  between the block copy and the database snapshot can reference a block the copy
+  never saw, and the restored database then points at missing blocks.
 
 ## Restore
 
 1. **Stop the service.**
 2. **Put the configuration file back**, with the same master secret as when the
-   backup was taken. A rotated secret makes old sessions and encrypted blocks
-   unusable.
+   backup was taken. A rotated secret breaks sync clients and makes TOTP seeds,
+   queued mail, saved setting secrets and — when the block key was derived from it
+   — encrypted blocks unusable; browser sessions keep working.
 3. **Put the database back** (the file you backed up; the server handles its
    journal on startup).
 4. **Put `blocks/` back.**
@@ -68,9 +79,12 @@ Backing up while the server runs, two things matter:
 `index/` does not have to match: if an index ends up next to a different block
 store, emptying the index directory and letting it rebuild is the easy way out.
 
-**With at-rest encryption:** `blocks/` depends on the key in the configuration
-file and on `storage.block_encryption_mode`; the two have to be backed up and
-restored together. See [Security](/guide/admin/security).
+**With at-rest encryption:** `blocks/` depends on the block key and on
+`storage.block_encryption_mode`; the two have to be backed up and restored
+together. The key is never written into `config.toml`: it comes from
+`NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`, and when neither is set it is derived
+from `server.secret_key`, so restoring the master secret restores it. See
+[Security](/guide/admin/security).
 
 ## Upgrade
 
@@ -80,8 +94,10 @@ restored together. See [Security](/guide/admin/security).
    container, change the image tag and recreate the container.
 4. **Start it** and confirm the version (bottom of the left rail) and that the
    log is clean.
-5. **Watch Task Management**: **System Settings → Task Management** lists the
-   migration jobs an upgrade runs by itself. See
+5. **Watch the log**: database migrations and any block-layout migration run
+   synchronously at startup, before the server starts listening; if one fails,
+   the start fails and the log says why. Task Management lists background jobs
+   (such as the lazy at-rest encryption conversion), not migrations. See
    [Monitoring](/guide/operate/monitoring).
 
 Worth knowing:
@@ -104,7 +120,7 @@ Worth knowing:
 
 - `nanofile verify-blocks` passes on the restored block store.
 - The restored instance serves the same version and a test download.
-- The upgrade log and Task Management show the migration tasks finished.
+- The startup log shows the migrations finished without error.
 
 ## Release channels
 

@@ -57,14 +57,14 @@ are all considered verified.
 - a code generated without an email address can be used by **anybody**;
 - one generated with an email address can only be used by **that address**;
 - the list shows whether each code is unused, or who used it and when; codes can
-  be copied and deleted.
+  be copied, and only an unused code can be deleted.
 
 ### User management (admins)
 
-**System Settings → User Management** lists every account and can create, edit
-and delete one: admin rights, active/inactive and an individual space quota are
-all in the edit dialog. `adduser` is the command-line equivalent, see
-[Command line](/reference/cli).
+**User Management** — in the user menu, next to System Settings — lists every
+account and can create, edit and delete one: admin rights, active/inactive and an
+individual space quota are all in the edit dialog. `adduser` is the command-line
+equivalent, see [Command line](/reference/cli).
 
 ### Space quota
 
@@ -105,15 +105,15 @@ account's limit, so watch the data directory as well as the storage meter. See
 [Monitoring](/guide/operate/monitoring).
 
 If an upgraded instance reports an implausible size, run the manual **Usage
-reconcile** job in **System Settings → Task Management**; it recomputes every
+reconcile** job under **Task Management → Registered tasks**; it recomputes every
 library from its HEAD tree.
 
 ## Sharing policy {#sharing-policy}
 
 Users create share and upload links from the file browser; see
 [Files and sharing](/guide/use/files-and-sharing#share-links). Administrators can see
-every user's links under **System Settings → Share Management** and delete the dead
-ones.
+every user's links under **Share Management** (in the user menu, next to System
+Settings) and delete the dead ones.
 
 Sharing has two switches, on **System Settings → Security → Sharing**:
 

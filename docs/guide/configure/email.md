@@ -19,7 +19,7 @@ The fields you usually touch:
 | Key | Effect |
 |---|---|
 | `email.enabled` | the master switch. While it is off nothing is delivered, and the registration page that depends on mail answers 404. |
-| `email.paused` | pause delivery: mail is still queued, just not sent. |
+| `email.paused` | pause delivery. While paused nothing is queued and nothing is sent: password-reset and verification mail cannot go out and notifications are dropped. Messages already in the queue stay queued. |
 | `email.host`, `email.port` | the SMTP server address and port. |
 | `email.tls` | `starttls`, `tls` or `none`. Choosing `none` earns a plaintext warning on the admin page. |
 | `email.username`, `email.password` | the SMTP credentials. |
@@ -50,7 +50,8 @@ it.
 
 ## The queue, and where to look when mail does not go out
 
-**System Settings → Email Management** (`/sysadmin/email/`) is where delivery is watched:
+**Email Management** (`/sysadmin/email/`, in the user menu next to System Settings)
+is where delivery is watched:
 
 - **Status** — whether the switch is on, whether delivery is ready (naming
   whatever is missing), and whether it is paused.
@@ -62,13 +63,13 @@ it.
   one can be retried or deleted.
 
 A message that will not go out is retried up to `email.max_attempts` and then
-stays failed until you deal with it in the queue. Failures also appear on
-**System Settings → Task Management**; see [Monitoring](/guide/operate/monitoring).
+stays failed until you deal with it in the queue. Delivery failures live in this
+queue, not in Task Management.
 
 ## Verify
 
-1. Send a test message from **System Settings → Email Management** to an address you
-   control; check the inbox and the queue.
+1. Send a test message from **Email Management** to an address you control; check
+   the inbox and the queue.
 2. Request a password reset for a test account; confirm the message arrives and the
    link works.
 3. If open registration is on, register a test account and open the verification

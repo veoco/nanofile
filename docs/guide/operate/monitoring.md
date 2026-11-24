@@ -50,7 +50,7 @@ process applies them.
 
 ## Task Management
 
-**System Settings → Task Management** is two pages:
+**Task Management** — in the user menu, next to System Settings — is two pages:
 
 - **Task list** puts the server's load measurements first (requests in flight, jobs
   running, queued tasks, database connections, busy workers, live tasks), then the
@@ -63,8 +63,11 @@ process applies them.
   concurrency cap, timeout, retry, whether it waits for a quiet server, how finely it
   can be interrupted, and what a crash leaves behind.
 
-After an upgrade, this is where you confirm the migration tasks finished. A failed
-run carries its own error; the run id, summary and full error are one disclosure away.
+Upgrades do not appear here: database and block-layout migrations run at startup,
+before the server listens, and a failed one prevents startup. What an upgrade can
+leave behind is the background work this page lists — for example the lazy at-rest
+encryption conversion. A failed run carries its own error; the run id, summary and
+full error are one disclosure away.
 
 ## Load and disk
 
@@ -83,9 +86,10 @@ df -h /opt/nanofile/data
 du -sh /opt/nanofile/data/*
 ```
 
-- Deleting files does not free blocks immediately; garbage collection waits for
-  `gc.min_block_age_secs` and for no commit to reference the block. See
-  [Maintenance](/guide/operate/maintenance).
+- Garbage collection is off by default (`gc.enabled = false`); until it is enabled
+  nothing is reclaimed. With it on, deleting files does not free blocks
+  immediately: collection waits for `gc.min_block_age_secs` and for no commit to
+  reference the block. See [Maintenance](/guide/operate/maintenance).
 - The index is rebuildable; `index/` can be deleted and rebuilt if it grows or
   becomes inconsistent. `blocks/` and `nanofile.db` are not rebuildable.
 
@@ -103,8 +107,8 @@ A backup is not a backup until it restores. Keep a schedule and test it:
 ## What to alert on
 
 - **`/health` failing** for more than a few checks.
-- **Repeated task failures** on Task Management, especially migrations after an
-  upgrade.
+- **Repeated task failures** on Task Management, especially the backfill or
+  encryption-conversion jobs an upgrade can trigger.
 - **Disk usage** above 80% of the data filesystem.
 - **Backup age** older than the schedule allows.
 - **Certificate expiry** at the reverse proxy.
