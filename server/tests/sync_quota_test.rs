@@ -67,19 +67,13 @@ async fn put_block(f: &TestFixture, sync_token: &str, repo_id: &str, data: &[u8]
 /// Upload one FS object (file or directory JSON) under its content-addressed id.
 async fn put_fs_object(f: &TestFixture, sync_token: &str, repo_id: &str, json: &str) -> String {
     let id = fs_object_id(json.as_bytes());
-    let packed = infra::serialization::pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-    let mut body = Vec::new();
-    body.extend_from_slice(id.as_bytes());
-    body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
-    body.extend_from_slice(&packed);
-    let resp = f.client.recv_fs(sync_token, repo_id, body).await;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        panic!(
-            "recv_fs for an FS object failed: {status} {}",
-            resp.text().await.unwrap_or_default()
-        );
-    }
+    common::sync_put_fs_objects(
+        &f.client,
+        sync_token,
+        repo_id,
+        &[(id.clone(), json.to_string())],
+    )
+    .await;
     id
 }
 

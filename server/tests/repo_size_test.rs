@@ -332,7 +332,7 @@ async fn file_revision_restore_adjusts_size_by_the_difference() {
 #[tokio::test]
 async fn deleting_through_the_client_frees_quota() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(60)).await;
+    f.set_storage_quota(Some(60)).await;
 
     let fifty = vec![b'a'; 50];
     let c1 = commit(&f, &[("a.txt", fifty.as_slice(), REG)], &[], None).await;

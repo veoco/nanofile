@@ -133,18 +133,6 @@ async fn commit_in(
     sync_commit(&f.client, sync_token, repo_id, entries, &[], parent).await
 }
 
-/// Pack FS objects the way `recv-fs` expects: `id[40] ‖ u32be(len) ‖ zlib(data)`.
-fn pack_fs_objects(entries: &[(String, String)]) -> Vec<u8> {
-    let mut body = Vec::new();
-    for (id, json) in entries {
-        let packed = infra::serialization::pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-        body.extend_from_slice(id.as_bytes());
-        body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
-        body.extend_from_slice(&packed);
-    }
-    body
-}
-
 /// Two clients that synced the same base commit and then changed *different*
 /// files: the stale upload must be merged, not rejected.
 #[tokio::test]
@@ -616,7 +604,7 @@ async fn test_merge_missing_block_is_446() {
         .recv_fs(
             &f.sync_token,
             &f.repo_id,
-            pack_fs_objects(&[(file_id, file_json), (root_id.clone(), root_json)]),
+            common::pack_fs_objects(&[(file_id, file_json), (root_id.clone(), root_json)]),
         )
         .await;
     assert_eq!(resp.status(), 200);
@@ -906,7 +894,7 @@ async fn upload_root_commit(
         .recv_fs(
             &f.sync_token,
             &f.repo_id,
-            pack_fs_objects(&[(root_id.clone(), root_json)]),
+            common::pack_fs_objects(&[(root_id.clone(), root_json)]),
         )
         .await;
     assert_eq!(resp.status(), 200, "recv_fs for the planted root failed");
@@ -998,7 +986,11 @@ async fn first_upload_with_one_missing_block_among_many_files_is_446() {
 
     let resp = f
         .client
-        .recv_fs(&f.sync_token, &f.repo_id, pack_fs_objects(&fs_objects))
+        .recv_fs(
+            &f.sync_token,
+            &f.repo_id,
+            common::pack_fs_objects(&fs_objects),
+        )
         .await;
     assert_eq!(resp.status(), 200, "recv_fs for the file objects failed");
 

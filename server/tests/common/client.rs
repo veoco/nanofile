@@ -86,8 +86,7 @@ impl TestClient {
     /// Fetch a page and return its CSRF token, panicking when the marker is absent.
     pub async fn csrf_from(&self, path: &str) -> String {
         let html = self.get_ui(path).await.text().await.unwrap();
-        csrf_token(&html)
-            .unwrap_or_else(|| panic!("no csrf_token hidden field on {path}"))
+        csrf_token(&html).unwrap_or_else(|| panic!("no csrf_token hidden field on {path}"))
     }
 
     pub async fn get(&self, path: &str, token: Option<&str>) -> reqwest::Response {

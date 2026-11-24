@@ -2,11 +2,10 @@ use crate::common;
 
 use common::TestFixture;
 
-
 #[tokio::test]
 async fn test_quota_allows_under_limit() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1_073_741_824)).await;
+    f.set_storage_quota(Some(1_073_741_824)).await;
 
     let data = b"hello world";
     let resp = f
@@ -24,7 +23,7 @@ async fn test_quota_allows_under_limit() {
 #[tokio::test]
 async fn test_quota_rejects_over_limit() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1024)).await;
+    f.set_storage_quota(Some(1024)).await;
 
     let data = vec![0u8; 2048];
     let resp = f
@@ -45,7 +44,7 @@ async fn test_quota_rejects_over_limit() {
 #[tokio::test]
 async fn test_quota_charges_an_overwrite_for_its_delta() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1500)).await;
+    f.set_storage_quota(Some(1500)).await;
 
     let data = vec![7u8; 1000];
     let resp = f
@@ -82,7 +81,7 @@ async fn test_quota_charges_an_overwrite_for_its_delta() {
 async fn test_quota_unlimited_explicit_zero() {
     let f = TestFixture::new().await;
     // storage_quota = Some(0) means explicitly unlimited.
-    f.set_storage_quota( Some(0)).await;
+    f.set_storage_quota(Some(0)).await;
 
     let data = vec![0u8; 100_000];
     let resp = f
@@ -103,7 +102,7 @@ async fn test_quota_unlimited_explicit_zero() {
 async fn test_quota_uses_default_quota() {
     let f = TestFixture::new_with_storage_config(|cfg| cfg.default_user_quota_bytes = 1024).await;
     // storage_quota = None => the server's default space quota (1 KiB here).
-    f.set_storage_quota( None).await;
+    f.set_storage_quota(None).await;
 
     let resp = f
         .client
@@ -173,7 +172,7 @@ async fn registration_leaves_the_default_quota_to_the_server() {
 #[tokio::test]
 async fn test_sync_quota_check_endpoint_allows() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1_073_741_824)).await; // 1 GB
+    f.set_storage_quota(Some(1_073_741_824)).await; // 1 GB
 
     let resp = f
         .client
@@ -193,7 +192,7 @@ async fn test_sync_quota_check_endpoint_allows() {
 #[tokio::test]
 async fn test_sync_quota_check_endpoint_rejects() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(512)).await; // 512 bytes max
+    f.set_storage_quota(Some(512)).await; // 512 bytes max
 
     let resp = f
         .client
@@ -213,7 +212,7 @@ async fn test_sync_quota_check_endpoint_rejects() {
 #[tokio::test]
 async fn test_quota_exact_boundary() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(11)).await; // "hello world" = 11 bytes
+    f.set_storage_quota(Some(11)).await; // "hello world" = 11 bytes
 
     let data = b"hello world";
     let resp = f
@@ -256,7 +255,7 @@ fn count_blocks_on_disk(block_dir: &std::path::Path) -> usize {
 #[tokio::test]
 async fn test_quota_failure_cleans_up_new_blocks() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1024)).await; // 1 KB quota
+    f.set_storage_quota(Some(1024)).await; // 1 KB quota
 
     let blocks_before = count_blocks_on_disk(&f.server.block_dir);
 
@@ -280,7 +279,7 @@ async fn test_quota_failure_cleans_up_new_blocks() {
 #[tokio::test]
 async fn test_quota_precheck_rejects_without_writing_blocks() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(100)).await; // 100 bytes quota
+    f.set_storage_quota(Some(100)).await; // 100 bytes quota
 
     let blocks_before = count_blocks_on_disk(&f.server.block_dir);
 
@@ -311,7 +310,7 @@ async fn test_quota_precheck_rejects_without_writing_blocks() {
 #[tokio::test]
 async fn test_sync_put_block_rejects_over_quota() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(10)).await; // 10 bytes quota
+    f.set_storage_quota(Some(10)).await; // 10 bytes quota
 
     let resp = f
         .client
@@ -348,7 +347,7 @@ async fn test_sync_put_block_rejects_over_quota() {
 #[tokio::test]
 async fn uncommitted_blocks_accumulate_against_quota() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1_000)).await; // 1 KB budget
+    f.set_storage_quota(Some(1_000)).await; // 1 KB budget
 
     // Two distinct blocks that are each comfortably inside the budget but
     // together exceed it: the first must be accepted, the second rejected.
@@ -388,7 +387,7 @@ async fn uncommitted_blocks_accumulate_against_quota() {
 #[tokio::test]
 async fn committing_a_file_releases_its_block_reservation() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(2_000)).await;
+    f.set_storage_quota(Some(2_000)).await;
 
     let resp = f
         .client
@@ -422,7 +421,7 @@ async fn committing_a_file_releases_its_block_reservation() {
 #[tokio::test]
 async fn resumable_upload_reserves_its_declared_size() {
     let f = TestFixture::new().await;
-    f.set_storage_quota( Some(1_000)).await;
+    f.set_storage_quota(Some(1_000)).await;
 
     let token_resp = f
         .client

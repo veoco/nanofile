@@ -984,6 +984,53 @@ pub fn fs_object_id(data: &[u8]) -> String {
     infra::crypto::fs_id::sha1_hex(data)
 }
 
+/// One `recv-fs` pack frame: `id[40] · u32be(compressed len) · zlib(json)`.
+///
+/// The frame layout is a protocol detail several tests hand-built; it lives
+/// here once, and the id is checked against the JSON so a typo cannot upload an
+/// object under an id the server would reject.
+pub fn pack_fs_object(id: &str, json: &str) -> Vec<u8> {
+    assert_eq!(
+        infra::crypto::fs_id::sha1_hex(json.as_bytes()),
+        id,
+        "fs object id must be the SHA-1 of its JSON"
+    );
+    let packed = infra::serialization::pack_fs::compress_fs_data(json.as_bytes()).unwrap();
+    let mut body = Vec::with_capacity(id.len() + 4 + packed.len());
+    body.extend_from_slice(id.as_bytes());
+    body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
+    body.extend_from_slice(&packed);
+    body
+}
+
+/// A pack containing several fs objects, in the order given.
+pub fn pack_fs_objects(entries: &[(String, String)]) -> Vec<u8> {
+    let mut body = Vec::new();
+    for (id, json) in entries {
+        body.extend_from_slice(&pack_fs_object(id, json));
+    }
+    body
+}
+
+/// Upload the pack of `entries` and panic on a non-success status.
+pub async fn sync_put_fs_objects(
+    client: &client::TestClient,
+    sync_token: &str,
+    repo_id: &str,
+    entries: &[(String, String)],
+) -> reqwest::Response {
+    let body = pack_fs_objects(entries);
+    let resp = client.recv_fs(sync_token, repo_id, body).await;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        panic!(
+            "recv_fs for fs objects failed: {status} {}",
+            resp.text().await.unwrap_or_default()
+        );
+    }
+    resp
+}
+
 /// A fresh 40-hex id for tests that only need uniqueness (a commit id, an
 /// object name in a fake pack). It is not a content-addressed id.
 pub fn random_hex_id() -> String {
@@ -1019,11 +1066,7 @@ pub async fn sync_put_file(
     };
     let json = serde_json::to_string(&fs).unwrap();
     let id = fs_object_id(json.as_bytes());
-    let packed = infra::serialization::pack_fs::compress_fs_data(json.as_bytes()).unwrap();
-    let mut body = Vec::new();
-    body.extend_from_slice(id.as_bytes());
-    body.extend_from_slice(&(packed.len() as u32).to_be_bytes());
-    body.extend_from_slice(&packed);
+    let body = pack_fs_object(&id, &json);
     let decoded = infra::serialization::pack_fs::decode_pack_fs_entries(&body).unwrap();
     assert_eq!(decoded.len(), 1);
     assert_eq!(decoded[0].0, id);
