@@ -243,12 +243,10 @@ pub async fn delete_share_link_v21(
     if let Some(link) = state.repos.share_link.find_by_token(&token).await? {
         ensure_link_write_ceiling(&auth, &link.repo_id)?;
     }
-    let found =
-        share::delete_share_link_v21(&state.repos, &token, auth.user_id, &auth.repo_scope())
-            .await?;
-    if !found {
-        return Err(AppError::NotFound("share link not found".into()));
-    }
+    let _ = share::delete_share_link_v21(&state.repos, &token, auth.user_id, &auth.repo_scope())
+        .await?;
+    // seahub's delete is idempotent: a token that no longer resolves still
+    // answers success, so a stale page or a double submit is not an error.
     Ok(ok_json())
 }
 
@@ -428,7 +426,7 @@ pub async fn delete_upload_link_v21(
     if let Some(link) = state.repos.upload_link.find_by_token(&token).await? {
         ensure_link_write_ceiling(&auth, &link.repo_id)?;
     }
-    let found = link::delete_upload_link_v21_by_token(
+    let _ = link::delete_upload_link_v21_by_token(
         &state.repos,
         &token,
         auth.user_id,
@@ -436,9 +434,7 @@ pub async fn delete_upload_link_v21(
         &auth.repo_scope(),
     )
     .await?;
-    if !found {
-        return Err(AppError::NotFound("upload link not found".into()));
-    }
+    // seahub's delete is idempotent (see the share-link variant).
     Ok(Json(serde_json::Value::Bool(true)))
 }
 

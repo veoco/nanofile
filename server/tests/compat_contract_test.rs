@@ -57,10 +57,9 @@ async fn directory_delete_of_a_missing_path_is_not_found() {
 }
 
 /// `ShareLink.delete` treats a missing token as success
-/// (`api2/endpoints/share_links.py:794-800`). nanofile currently answers 404;
-/// the link-guard consolidation aligns it with upstream.
+/// (`api2/endpoints/share_links.py:794-800`).
 #[tokio::test]
-async fn share_link_delete_of_a_missing_token_is_not_found_today() {
+async fn share_link_delete_of_a_missing_token_succeeds() {
     let f = TestFixture::new().await;
 
     let resp = f
@@ -69,16 +68,15 @@ async fn share_link_delete_of_a_missing_token_is_not_found_today() {
         .await;
     assert_eq!(
         resp.status(),
-        404,
-        "today a missing share link is a 404 instead of upstream success"
+        200,
+        "deleting a missing share link must be treated as success"
     );
 }
 
-/// Today the share-link delete answers 404 for a foreign owner, while
-/// `ShareLink.delete` returns 403 upstream. The link-guard consolidation
-/// changes this to 403; this test records the current contract until then.
+/// `ShareLink.delete` answers 403 for a foreign owner
+/// (`api2/endpoints/share_links.py:801-804`).
 #[tokio::test]
-async fn share_link_delete_by_a_non_owner_is_not_found_today() {
+async fn share_link_delete_by_a_non_owner_is_forbidden() {
     let f = TestFixture::new().await;
     let upload = f
         .client
@@ -95,8 +93,8 @@ async fn share_link_delete_by_a_non_owner_is_not_found_today() {
         .await;
     assert_eq!(
         resp.status(),
-        404,
-        "a foreign share-link delete is still hidden as 404"
+        403,
+        "a foreign share-link delete must be forbidden"
     );
 
     // The link must still resolve after the rejected delete.
@@ -105,6 +103,22 @@ async fn share_link_delete_by_a_non_owner_is_not_found_today() {
         view.status(),
         200,
         "the link must survive the rejected delete"
+    );
+}
+
+/// Upload links follow the same idempotent delete: a missing token is success.
+#[tokio::test]
+async fn upload_link_delete_of_a_missing_token_succeeds() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .delete("/api/v2.1/upload-links/no-such-token/", Some(&f.api_token))
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "deleting a missing upload link must be treated as success"
     );
 }
 

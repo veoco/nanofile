@@ -497,7 +497,7 @@ async fn test_share_link_delete_v21_other() {
             Some(&api_token2),
         )
         .await;
-    assert_eq!(del.status(), 404, "other user's delete must return 404");
+    assert_eq!(del.status(), 403, "other user's delete must return 403");
 
     let dl = f.client.get(&format!("/f/{}/?dl=1", token), None).await;
     assert_eq!(dl.status(), 200, "link should still be valid");

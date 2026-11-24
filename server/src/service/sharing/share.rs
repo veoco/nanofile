@@ -283,11 +283,8 @@ pub async fn delete_share_link(
     user_id: i32,
     scope: &RepoScope,
 ) -> Result<(), AppError> {
-    if let Some(link) = repos.share_link.find_by_token(token).await?
-        && (link.creator_id != user_id || !scope.allows(&link.repo_id))
-    {
-        return Err(AppError::NotFound("share link not found".into()));
-    }
+    // Idempotent like seahub: a token that no longer resolves is already deleted.
+    super::owned_share_link_for_delete(repos, token, user_id, scope).await?;
     repos
         .share_link
         .delete_by_token_and_user(token, user_id)
@@ -330,15 +327,7 @@ pub async fn get_share_link_v21(
     user_id: i32,
     scope: &RepoScope,
 ) -> Result<ShareLinkInfo, AppError> {
-    let link = repos
-        .share_link
-        .find_by_token(token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
-    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
-        return Err(AppError::NotFound("Share link not found".into()));
-    }
-
+    let link = super::resolve_owned_share_link(repos, token, user_id, scope).await?;
     Ok(share_link_info_from_model(&link, base_url))
 }
 
@@ -348,12 +337,10 @@ pub async fn delete_share_link_v21(
     user_id: i32,
     scope: &RepoScope,
 ) -> Result<bool, AppError> {
-    let Some(link) = repos.share_link.find_by_token(token).await? else {
+    let Some(_link) = super::owned_share_link_for_delete(repos, token, user_id, scope).await?
+    else {
         return Ok(false);
     };
-    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
-        return Err(AppError::NotFound("Share link not found".into()));
-    }
     let result = repos
         .share_link
         .delete_by_token_and_user(token, user_id)
@@ -373,14 +360,7 @@ pub async fn update_share_link_v21(
 ) -> Result<ShareLinkInfo, AppError> {
     let now = chrono::Utc::now().timestamp();
 
-    let link = repos
-        .share_link
-        .find_by_token(token)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Share link not found".into()))?;
-    if link.creator_id != user_id || !scope.allows(&link.repo_id) {
-        return Err(AppError::NotFound("Share link not found".into()));
-    }
+    let link = super::resolve_owned_share_link(repos, token, user_id, scope).await?;
 
     let new_password = match password {
         Some(Some(p)) => Some(Some(
