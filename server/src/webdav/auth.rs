@@ -7,7 +7,6 @@ use base64::Engine;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::domain::api_key::KeyAuthority;
 use crate::domain::capability::{Capability, webdav_requires_write};
 
 /// Authenticated WebDAV request identity.
@@ -160,25 +159,16 @@ impl WebDavAuth {
         .map_err(|_| WebDavAuthError::Unauthorized)?
         .ok_or(WebDavAuthError::Unauthorized)?;
 
-        // The secret must be this user's unified API key with WebDAV access;
-        // keys are stored as a SHA-256 hash, so only the hash is compared.
-        let lookup = state
-            .repos
-            .api_key
-            .find_by_presented(key)
+        // The secret must be this user's unified API key with WebDAV access; the
+        // shared helper owns the hash lookup, expiry and capability decoding, and
+        // throttles `last_used_at` exactly like the REST/sync extractors.
+        let session = crate::service::auth::api_key::authenticate_api_key(state, key)
             .await
-            .map_err(|_| WebDavAuthError::Unauthorized)?
-            .ok_or(WebDavAuthError::Unauthorized)?;
-        // WebDAV never went through the route table's expiry check, so an
-        // expired key kept working here after every other surface refused it.
-        if crate::middleware::auth::is_token_expired(lookup.key.expires_at) {
+            .map_err(|_| WebDavAuthError::Unauthorized)?;
+        if session.user_id != user.id {
             return Err(WebDavAuthError::Unauthorized);
         }
-        if lookup.key.user_id != user.id {
-            return Err(WebDavAuthError::Unauthorized);
-        }
-        let authority =
-            KeyAuthority::from_lookup(&lookup).map_err(|_| WebDavAuthError::Unauthorized)?;
+        let authority = session.authority;
         if !authority.has(Capability::WebdavRead) {
             return Err(WebDavAuthError::Unauthorized);
         }
@@ -203,21 +193,7 @@ impl WebDavAuth {
             return Err(WebDavAuthError::Forbidden);
         }
 
-        // Best-effort last_used_at (fire-and-forget), throttled to once an hour
-        // per key so high-frequency traffic does not write on every request.
-        let now = chrono::Utc::now().timestamp();
-        const THROTTLE_SECS: i64 = 60 * 60;
-        let needs_update = match lookup.key.last_used_at {
-            Some(ts) => now - ts >= THROTTLE_SECS,
-            None => true,
-        };
-        if needs_update {
-            let keys = state.repos.api_key.clone();
-            let key_id = lookup.key.id;
-            tokio::spawn(async move {
-                let _ = keys.touch_last_used(key_id, now).await;
-            });
-        }
+        crate::service::auth::api_key::note_key_usage(&state.repos, session.key_id).await;
 
         Ok(WebDavAuth {
             user_id: user.id,

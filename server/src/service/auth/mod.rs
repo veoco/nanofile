@@ -1,5 +1,6 @@
 pub mod access_token;
 pub mod account_state;
+pub mod api_key;
 pub mod backup_codes;
 pub mod bootstrap;
 pub mod capability;

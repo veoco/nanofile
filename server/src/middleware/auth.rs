@@ -6,7 +6,6 @@ use axum::{
 };
 
 use crate::AppState;
-use crate::domain::api_key::KeyAuthority;
 use crate::domain::capability::{RouteAccess, required_access};
 use crate::domain::credential::Credential;
 use crate::domain::device::DeviceIdentity;
@@ -425,21 +424,21 @@ impl FromRequestParts<std::sync::Arc<AppState>> for AuthUser {
         let api_record = api_record.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         let (user_id, credential, device) = if let Some(lookup) = key_lookup {
-            if is_token_expired(lookup.key.expires_at) {
-                return Err(StatusCode::UNAUTHORIZED.into());
-            }
-            let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {
-                // An unreadable grant means this build cannot honour what the
-                // row promises; refusing the credential is the safe direction.
-                tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
-                StatusCode::UNAUTHORIZED
-            })?;
+            let session =
+                crate::service::auth::api_key::session_from_lookup(lookup).map_err(|failure| {
+                    match failure {
+                        crate::service::auth::api_key::ApiKeyFailure::Internal => {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                        _ => StatusCode::UNAUTHORIZED,
+                    }
+                })?;
             // Note the key as used before the route guard decides.
-            note_key_usage(repos, lookup.key.id).await;
-            let credential = Credential::Key(authority);
+            crate::service::auth::api_key::note_key_usage(repos, session.key_id).await;
+            let credential = Credential::Key(session.authority);
             enforce_route_access(&credential, parts)?;
             // A unified API key belongs to no device.
-            (lookup.key.user_id, credential, None)
+            (session.user_id, credential, None)
         } else if let Some(token_record) = api_record {
             if is_token_expired(token_record.expires_at) {
                 return Err(StatusCode::UNAUTHORIZED.into());
@@ -691,25 +690,27 @@ impl SyncAuth {
         // A unified API key: it must carry the sync capability this request
         // needs, and cover the library in the URL.
         if let Some(lookup) = key_result.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)? {
-            if is_token_expired(lookup.key.expires_at) {
-                return Err(StatusCode::FORBIDDEN);
-            }
-            let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {
-                tracing::warn!(key_id = lookup.key.id, %error, "rejecting API key with an unreadable capability set");
-                StatusCode::FORBIDDEN
-            })?;
+            let session =
+                crate::service::auth::api_key::session_from_lookup(lookup).map_err(|failure| {
+                    match failure {
+                        crate::service::auth::api_key::ApiKeyFailure::Internal => {
+                            StatusCode::INTERNAL_SERVER_ERROR
+                        }
+                        _ => StatusCode::FORBIDDEN,
+                    }
+                })?;
             let needed = if crate::domain::capability::requires_sync_write(method, path) {
                 crate::domain::capability::Capability::SyncWrite
             } else {
                 crate::domain::capability::Capability::SyncRead
             };
             // A sync client makes many small requests, so throttle this write.
-            note_key_usage(repos, lookup.key.id).await;
-            if !authority.has(needed) {
+            crate::service::auth::api_key::note_key_usage(repos, session.key_id).await;
+            if !session.authority.has(needed) {
                 return Err(StatusCode::FORBIDDEN);
             }
             if let Some(url_repo) = url_repo_id {
-                if !authority.allows_repo(url_repo, needed.is_write()) {
+                if !session.authority.allows_repo(url_repo, needed.is_write()) {
                     return Err(StatusCode::FORBIDDEN);
                 }
                 // The key's scope is a ceiling, not a grant: the permission
@@ -717,18 +718,18 @@ impl SyncAuth {
                 crate::domain::permission::check_repo_read_permission(
                     repos.member.as_ref(),
                     url_repo,
-                    lookup.key.user_id,
+                    session.user_id,
                 )
                 .await
                 .map_err(|_| StatusCode::FORBIDDEN)?;
             }
 
-            ensure_active_user(repos, lookup.key.user_id).await?;
+            ensure_active_user(repos, session.user_id).await?;
 
             return Ok(SyncAuth {
-                user_id: lookup.key.user_id,
+                user_id: session.user_id,
                 repo_id: url_repo_id.unwrap_or("").to_string(),
-                credential: Credential::Key(authority),
+                credential: Credential::Key(session.authority),
                 device: None,
             });
         }
@@ -812,23 +813,6 @@ pub fn extract_sync_token(
     // Missing credentials are malformed: seafile's fileserver answers 400 here.
     Err(AppError::BadRequest("token is null".into()))
 }
-
-/// Record that a key authenticated a request, at most once per
-/// [`crate::repository::throttle::KEY_USAGE_WRITE_INTERVAL`]; best effort, and
-/// it counts authentication rather than success.
-async fn note_key_usage(repos: &Repositories, key_id: i32) {
-    if !repos.key_usage_writes.allows_now(key_id) {
-        return;
-    }
-    if let Err(error) = repos
-        .api_key
-        .touch_last_used(key_id, chrono::Utc::now().timestamp())
-        .await
-    {
-        tracing::warn!(key_id, %error, "could not record API key usage");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{AuthRejection, extract_url_repo_id, route_decision};
