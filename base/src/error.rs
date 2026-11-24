@@ -74,6 +74,13 @@ pub enum AppError {
     #[error("file is locked: {0}")]
     Locked(String),
 
+    /// 423 - the same lock, reaching a REST/WebDAV delete instead of the sync
+    /// branch update. Seafile's JSON endpoints answer 423 with a JSON body
+    /// (`api2/endpoints/repos_batch.py:1680`), while the daemon's sync path
+    /// needs the 403 plain-text shape above; one variant each keeps both.
+    #[error("file is locked: {0}")]
+    LockedDelete(String),
+
     #[error("two factor auth token is missing")]
     TwoFactorRequired,
 
@@ -209,6 +216,10 @@ mod into_response_impl {
                     StatusCode::FORBIDDEN,
                     json!({ "error_msg": format!("File {} is locked", path) }),
                 ),
+                AppError::LockedDelete(path) => (
+                    StatusCode::LOCKED,
+                    json!({ "error_msg": format!("File {} is locked", path) }),
+                ),
                 AppError::TwoFactorRequired => (
                     StatusCode::BAD_REQUEST,
                     json!({"non_field_errors": ["Two factor auth token is missing."]}),
@@ -227,6 +238,26 @@ mod into_response_impl {
         fn from(err: serde_urlencoded::de::Error) -> Self {
             tracing::error!(?err, "form deserialization error");
             AppError::Internal(err.to_string())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::AppError;
+        use axum::response::IntoResponse;
+
+        /// The REST/WebDAV delete lock shape is 423; the sync path's `Locked`
+        /// keeps its 403 plain-text body for the daemon's regex.
+        #[test]
+        fn locked_delete_answers_423() {
+            let response = AppError::LockedDelete("locked.txt".into()).into_response();
+            assert_eq!(response.status(), axum::http::StatusCode::LOCKED);
+        }
+
+        #[test]
+        fn sync_locked_still_answers_403_text() {
+            let response = AppError::Locked("locked.txt".into()).into_response();
+            assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
         }
     }
 }

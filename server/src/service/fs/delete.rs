@@ -194,7 +194,13 @@ pub(crate) async fn delete_entries(
         quota.scope(),
         quota.default_quota(),
     )
-    .await?;
+    .await
+    // The sync protocol needs its 403 plain-text lock body, but a delete is a
+    // REST/WebDAV request: Seafile answers 423 there.
+    .map_err(|e| match e {
+        AppError::Locked(path) => AppError::LockedDelete(path),
+        other => other,
+    })?;
     drop(quota);
 
     cleanup_index(deps, request.repo_id, &victims).await;

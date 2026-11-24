@@ -15,24 +15,22 @@ async fn extra_user_token(f: &TestFixture, email: &str) -> String {
 }
 
 /// seahub's `FileView.delete` returns `{"success": true}` for a path that no
-/// longer exists (`api2/endpoints/file.py:806`). nanofile currently answers 404;
-/// the delete-status alignment changes this to the upstream idempotent success.
+/// longer exists (`api2/endpoints/file.py:806`), so a repeated delete must stay
+/// idempotent.
 #[tokio::test]
-async fn file_delete_of_a_missing_path_is_not_found_today() {
+async fn file_delete_of_a_missing_path_succeeds() {
     let f = TestFixture::new().await;
 
-    let resp = f
-        .client
-        .delete(
-            &format!("/api2/repos/{}/file/?p=/does-not-exist.txt", f.repo_id),
-            Some(&f.api_token),
-        )
-        .await;
+    let path = format!("/api2/repos/{}/file/?p=/does-not-exist.txt", f.repo_id);
+    let resp = f.client.delete(&path, Some(&f.api_token)).await;
     assert_eq!(
         resp.status(),
-        404,
-        "today deleting a missing file answers 404 instead of upstream success"
+        200,
+        "deleting a missing file must be treated as success"
     );
+    // A second delete of the same path is still a success.
+    let resp = f.client.delete(&path, Some(&f.api_token)).await;
+    assert_eq!(resp.status(), 200, "delete must be idempotent");
 }
 
 /// seahub's `DirView.delete` returns 404 for a missing folder
@@ -237,6 +235,27 @@ async fn sync_fs_id_list_rejects_uppercase_object_ids() {
         400,
         "an uppercase object id must be rejected"
     );
+}
+
+/// seahub's batch delete validates the parent directory and answers 404 when it
+/// is missing (`repos_batch.py:1645-1650`); the old code flattened that into 500.
+#[tokio::test]
+async fn batch_delete_of_a_missing_parent_is_not_found() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .delete_json(
+            "/api/v2.1/repos/batch-delete-item/",
+            Some(&f.api_token),
+            &serde_json::json!({
+                "repo_id": f.repo_id,
+                "parent_dir": "/missing",
+                "dirents": ["x.txt"],
+            }),
+        )
+        .await;
+    assert_eq!(resp.status(), 404, "missing parent must answer 404");
 }
 
 /// `/api2/device-wiped/` accepts a form token when the Authorization header is
