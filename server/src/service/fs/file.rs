@@ -8,10 +8,7 @@ use crate::repository::Repositories;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{
-    basename, get_head_root_id, get_head_root_id_opt, join_path, parent_path_from,
-    timestamp_rfc3339,
-};
+use infra::common::util::{basename, join_path, parent_path_from, timestamp_rfc3339};
 use infra::serialization::{S_IFDIR, S_IFREG};
 
 /// Rename a file or directory entry in place.
@@ -36,7 +33,9 @@ pub(crate) async fn rename_entry(
     let parent_path = parent_path_from(path);
     let old_name = basename(path);
 
-    let head_root_id = get_head_root_id(db, repo_id).await?;
+    let head_root_id = crate::fs::core::repo_head(repos, repo_id)
+        .await?
+        .require_root()?;
     let parent_fs_id =
         crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head_root_id, parent_path)
             .await
@@ -253,7 +252,9 @@ pub(crate) async fn move_entry(
     // unchecked commit then recorded a root computed from the old tree.
     let lock = crate::fs::core::file_ops::acquire_repo_lock(repo_id).await;
 
-    let head_root_id = get_head_root_id(db, repo_id).await?;
+    let head_root_id = crate::fs::core::repo_head(repos, repo_id)
+        .await?
+        .require_root()?;
     let entry_name = basename(path);
     let parent_path = parent_path_from(path);
 
@@ -538,8 +539,9 @@ impl FileService {
         email: &str,
         host_header: Option<&str>,
     ) -> Result<(String, String), AppError> {
-        let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
+        let head_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
         let file_fs_id = crate::fs::core::resolve_fs_id(&self.repos, repo_id, &head_root_id, path)
             .await
             .map_err(|_| AppError::NotFound("file not found".into()))?;
@@ -766,9 +768,9 @@ impl FileService {
         // an empty tree and drop the library's existing entries. An empty library
         // starts from the `EMPTY_SHA1` sentinel, which reads as an empty directory,
         // so the first upload into a nested path still creates its parents.
-        let root_id = get_head_root_id_opt(self.db(), repo_id)
+        let root_id = crate::fs::core::repo_head(&self.repos, repo_id)
             .await?
-            .unwrap_or_else(|| EMPTY_SHA1.to_string());
+            .root_id;
 
         let parts: Vec<&str> = path
             .trim_start_matches('/')
@@ -906,8 +908,9 @@ impl FileService {
         path: &str,
         user_id: i32,
     ) -> Result<serde_json::Value, AppError> {
-        let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
+        let head_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
 
         let parent_path = parent_path_from(path);
         let file_name = basename(path);
@@ -1348,28 +1351,22 @@ impl FileService {
         };
         let file_fs_id = crate::fs::core::store_fs_file_object(db, repo_id, &file_fs_data).await?;
 
-        let head_root_id = get_head_root_id_opt(db, repo_id).await?;
-        let base_root_id = head_root_id
-            .clone()
-            .unwrap_or_else(|| EMPTY_SHA1.to_string());
+        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
+        let base_root_id = head.root_id.clone();
 
         let parent_fs_id = if parent_path == "/" {
-            match &head_root_id {
-                Some(root_id) => root_id.clone(),
-                None => {
-                    let empty_dir = FsDirData {
-                        dirents: vec![],
-                        obj_type: SEAF_METADATA_TYPE_DIR,
-                        version: 1,
-                    };
-                    crate::fs::core::store_fs_dir_object(db, repo_id, &empty_dir).await?
-                }
+            if head.head_commit_id.is_some() {
+                head.root_id.clone()
+            } else {
+                let empty_dir = FsDirData {
+                    dirents: vec![],
+                    obj_type: SEAF_METADATA_TYPE_DIR,
+                    version: 1,
+                };
+                crate::fs::core::store_fs_dir_object(db, repo_id, &empty_dir).await?
             }
         } else {
-            let root_id = head_root_id
-                .as_deref()
-                .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, root_id, parent_path)
+            crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head.root_id, parent_path)
                 .await
                 .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
         };

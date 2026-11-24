@@ -1063,7 +1063,7 @@ async fn serve_file(
 
     // Page context shared by the three preview pages, which render inside the app shell.
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
-    let size_display = get_file_size(&state.db, &state.repos, &repo_id, &path)
+    let size_display = get_file_size(&state.repos, &repo_id, &path)
         .await
         .map(format_size)
         .unwrap_or_else(|_| "?".to_string());
@@ -1159,12 +1159,13 @@ async fn serve_file(
 
 /// Resolve a file's size from the FS tree without downloading its content.
 async fn get_file_size(
-    db: &sea_orm::DatabaseConnection,
     repos: &crate::repository::Repositories,
     repo_id: &str,
     path: &str,
 ) -> Result<i64, AppError> {
-    let head_root_id = infra::common::util::get_head_root_id(db, repo_id).await?;
+    let head_root_id = crate::fs::core::repo_head(repos, repo_id)
+        .await?
+        .require_root()?;
     let parent_path = parent_path_from(path);
     let file_name = basename(path);
 

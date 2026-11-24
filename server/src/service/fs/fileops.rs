@@ -10,7 +10,7 @@ use crate::settings::RuntimeConfig;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{generate_unique_filename, get_head_root_id, join_path};
+use infra::common::util::{generate_unique_filename, join_path};
 use infra::serialization::S_IFDIR;
 
 pub fn parse_file_names(s: &str) -> Vec<String> {
@@ -114,7 +114,9 @@ impl FileOpsService {
 
         let db = self.db();
         // Capture the base before resolving either side; see batch_delete.
-        let base_root_id = get_head_root_id(db, repo_id).await?;
+        let base_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
 
         // Resolve the source parent dir; its chain is unused, the destination
         // tree update below carries the ancestor chain.
@@ -319,7 +321,9 @@ impl FileOpsService {
         // The HEAD root the source and destination are resolved against. The
         // commit re-checks it, so a concurrent writer is reported instead of
         // reverted.
-        let base_root_id = get_head_root_id(db, repo_id).await?;
+        let base_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
 
         // Resolve the source parent dir and its ancestor chain once, so the
         // step-1 tree update walks ancestors in O(d).

@@ -10,7 +10,7 @@ use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::DirEntry;
-use infra::common::util::{basename, get_head_root_id, get_head_root_id_opt, parent_path_from};
+use infra::common::util::{basename, parent_path_from};
 use infra::serialization::S_IFDIR;
 
 /// Seahub's reserved internal directory.
@@ -391,31 +391,22 @@ pub(crate) async fn create_dir_by_path(
     let dir_fs_id = EMPTY_SHA1.to_string();
     let now = chrono::Utc::now().timestamp();
 
-    // Only `Ok(None)` means "no commits yet". Treating a failed lookup as an
-    // empty library would base this commit on an empty tree and replace HEAD's
-    // whole tree with the new directory.
-    let head_root_id = get_head_root_id_opt(db, repo_id).await?;
-    let base_root_id = head_root_id
-        .clone()
-        .unwrap_or_else(|| EMPTY_SHA1.to_string());
+    let head = crate::fs::core::repo_head(repos, repo_id).await?;
+    let base_root_id = head.root_id.clone();
 
     let parent_fs_id = if parent_path == "/" {
-        match &head_root_id {
-            Some(root_id) => root_id.clone(),
-            None => {
-                let empty_root = FsDirData {
-                    dirents: vec![],
-                    obj_type: SEAF_METADATA_TYPE_DIR,
-                    version: 1,
-                };
-                crate::fs::core::store_fs_dir_object(db, repo_id, &empty_root).await?
-            }
+        if head.head_commit_id.is_some() {
+            head.root_id.clone()
+        } else {
+            let empty_root = FsDirData {
+                dirents: vec![],
+                obj_type: SEAF_METADATA_TYPE_DIR,
+                version: 1,
+            };
+            crate::fs::core::store_fs_dir_object(db, repo_id, &empty_root).await?
         }
     } else {
-        let root_id = head_root_id
-            .as_deref()
-            .ok_or_else(|| AppError::NotFound("repo has no commits".into()))?;
-        crate::fs::core::resolve_dir_fs_id(repos, repo_id, root_id, &parent_path)
+        crate::fs::core::resolve_dir_fs_id(repos, repo_id, &head.root_id, &parent_path)
             .await
             .map_err(|e| crate::service::fs::resolve_parent_error(e, "resolve parent failed"))?
     };
@@ -655,8 +646,9 @@ impl DirService {
         email: &str,
         user_id: i32,
     ) -> Result<serde_json::Value, AppError> {
-        let db = self.db();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
+        let head_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
         let source_dir_fs_id =
             crate::fs::core::resolve_dir_fs_id(&self.repos, repo_id, &head_root_id, path)
                 .await
@@ -954,10 +946,9 @@ impl DirService {
         path: &str,
         permission: &'static str,
     ) -> Result<serde_json::Value, AppError> {
-        let head = crate::fs::core::repo_head(&self.repos, repo_id).await?;
-        if head.head_commit_id.is_none() {
-            return Err(AppError::NotFound("no commits".into()));
-        }
+        let root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
 
         let dir_name = path
             .trim_end_matches('/')
@@ -967,10 +958,9 @@ impl DirService {
 
         // One tree walk to the parent's dirent yields the mtime, without re-resolving the parent
         // path separately.
-        let (_, mtime) =
-            crate::fs::core::resolve_file_entry(&self.repos, repo_id, &head.root_id, path)
-                .await
-                .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
+        let (_, mtime) = crate::fs::core::resolve_file_entry(&self.repos, repo_id, &root_id, path)
+            .await
+            .map_err(|_| AppError::NotFound("Folder not found.".into()))?;
 
         Ok(serde_json::json!({
             "repo_id": repo_id,

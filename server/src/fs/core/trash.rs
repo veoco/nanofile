@@ -12,7 +12,7 @@ use crate::service::fs::quota::QuotaGuard;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
-use infra::common::util::{get_head_commit_id, get_head_root_id_opt, timestamp_rfc3339};
+use infra::common::util::timestamp_rfc3339;
 use infra::entity::{deleted_repo, file_trash, repo, repo_member};
 use infra::serialization::S_IFDIR;
 use infra::storage::DynBlockStorage;
@@ -115,52 +115,6 @@ pub async fn add_to_trash(
         .await?;
 
     Ok(())
-}
-
-/// Record a single deleted entry in the trash table, resolving its id, size and
-/// type from the parent directory. Best-effort: failures are logged, not
-/// propagated, so a trash-record problem never blocks the deletion.
-pub async fn record_deleted_entry(
-    db: &DatabaseConnection,
-    repos: &Repositories,
-    repo_id: &str,
-    full_path: &str,
-    name: &str,
-    user_email: &str,
-    parent_fs_id: &str,
-) {
-    let head_commit_id = match get_head_commit_id(db, repo_id).await {
-        Ok(id) => id,
-        Err(_) => return,
-    };
-    let parent_dir_data =
-        match crate::fs::core::read_fs_dir_data(repos, repo_id, parent_fs_id).await {
-            Ok(d) => d,
-            Err(_) => return,
-        };
-    let Some(entry) = parent_dir_data.dirents.iter().find(|d| d.name == name) else {
-        return;
-    };
-    let obj_type = if entry.mode & S_IFDIR != 0 {
-        "dir"
-    } else {
-        "file"
-    };
-    if let Err(e) = add_to_trash(
-        repos,
-        repo_id,
-        full_path,
-        obj_type,
-        &entry.id,
-        &entry.name,
-        entry.size,
-        &head_commit_id,
-        user_email,
-    )
-    .await
-    {
-        tracing::warn!("Failed to record trash for {full_path}: {e}");
-    }
 }
 
 /// Insert multiple items in one batch. Best-effort: logs and swallows errors.
@@ -423,7 +377,10 @@ pub async fn restore_trash_items(
     // re-resolved below) for every item. Resolving it once up front let the
     // second item build its tree from the pre-restore snapshot, which the
     // commit then stored as the new head, silently dropping the first restore.
-    let mut head_root_id = get_head_root_id_opt(db, repo_id).await?;
+    let mut head_root_id = match crate::fs::core::repo_head(repos, repo_id).await? {
+        head if head.head_commit_id.is_some() => Some(head.root_id),
+        _ => None,
+    };
 
     // Phase A: flatten `commit_id -> paths` into an ordered item list.
     struct Item {

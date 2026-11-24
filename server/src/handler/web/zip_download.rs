@@ -274,7 +274,9 @@ pub async fn zip_task_handler(
         ));
     }
 
-    let root_fs_id = infra::common::util::get_head_root_id(&state.db, &repo_id).await?;
+    let root_fs_id = crate::fs::core::repo_head(&state.repos, &repo_id)
+        .await?
+        .require_root()?;
 
     // Gate the expensive recursive collection phase so a flood of zip tokens
     // cannot bypass the global concurrency cap; the guard holds for the walk.

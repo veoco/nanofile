@@ -16,6 +16,20 @@ pub struct RepoHead {
     pub root_id: String,
 }
 
+impl RepoHead {
+    /// Head root fs id, or 404 when the library has no commits.
+    ///
+    /// Callers that need "empty library starts from the sentinel" should branch
+    /// on [`Self::head_commit_id`] instead; this method is for operations that
+    /// require an existing tree.
+    pub fn require_root(&self) -> Result<String, AppError> {
+        if self.head_commit_id.is_none() {
+            return Err(AppError::NotFound("repo has no commits".into()));
+        }
+        Ok(self.root_id.clone())
+    }
+}
+
 /// Resolve a library's head in one round trip pair.
 ///
 /// Every `Repositories`-based caller used to hand-roll

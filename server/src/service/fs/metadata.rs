@@ -1,19 +1,16 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 use crate::repository::Repositories;
 use crate::repository::repo_tag::TagInput;
 use base::error::AppError;
-use infra::common::util::{basename, get_head_root_id, parent_path_from, timestamp_rfc3339};
+use infra::common::util::{basename, parent_path_from, timestamp_rfc3339};
 use infra::entity::repo_tag;
 use infra::serialization::S_IFDIR;
 
 /// Seafile metadata-service subset used by the mobile clients; file records are
 /// addressed by a path-derived hex `record_id`, so no record table is needed.
 pub struct MetadataService {
-    db: Arc<DatabaseConnection>,
     repos: Arc<Repositories>,
     config: crate::settings::RuntimeConfig,
 }
@@ -25,12 +22,8 @@ struct FileInfo {
 }
 
 impl MetadataService {
-    pub fn new(
-        db: Arc<DatabaseConnection>,
-        repos: Arc<Repositories>,
-        config: crate::settings::RuntimeConfig,
-    ) -> Self {
-        Self { db, repos, config }
+    pub fn new(repos: Arc<Repositories>, config: crate::settings::RuntimeConfig) -> Self {
+        Self { repos, config }
     }
 
     /// Derive an opaque, reversible `record_id` from a full file path.
@@ -430,7 +423,9 @@ impl MetadataService {
             .await?;
 
         // Resolve the head root once, then batch-resolve every file's info and tags.
-        let head_root_id = get_head_root_id(self.db.as_ref(), repo_id).await?;
+        let head_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
         let paths: Vec<String> = links.iter().map(|l| l.file_path.clone()).collect();
         let infos = self
             .resolve_file_infos_batch(repo_id, &head_root_id, &paths)
@@ -512,8 +507,9 @@ impl MetadataService {
         if path == "/" || path.is_empty() {
             return Ok(None);
         }
-        let db = self.db.as_ref();
-        let head_root_id = get_head_root_id(db, repo_id).await?;
+        let head_root_id = crate::fs::core::repo_head(&self.repos, repo_id)
+            .await?
+            .require_root()?;
         let parent_path = parent_path_from(path);
         let file_name = basename(path);
 

@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-
-use crate::entity::{commit, repo};
-use base::AppError;
 use base::common::DirEntryData;
 
 /// Canonical absolute form of `path`, falling back to the input when it does not
@@ -129,48 +125,6 @@ pub fn extract_multipart_field(bytes: &[u8], field_name: &str) -> Option<String>
     } else {
         Some(value.to_string())
     }
-}
-
-/// Get the root_fs_id from the repo's head commit for path resolution.
-pub async fn get_head_root_id(db: &DatabaseConnection, repo_id: &str) -> Result<String, AppError> {
-    get_head_root_id_opt(db, repo_id)
-        .await?
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
-}
-
-/// Like `get_head_root_id`, but `Ok(None)` when there is no head commit yet.
-pub async fn get_head_root_id_opt(
-    db: &DatabaseConnection,
-    repo_id: &str,
-) -> Result<Option<String>, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    let Some(head_commit_id) = repo_record.head_commit_id else {
-        return Ok(None);
-    };
-    let head = commit::Entity::find()
-        .filter(commit::Column::RepoId.eq(repo_id))
-        .filter(commit::Column::CommitId.eq(&head_commit_id))
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Head commit not found".to_string()))?;
-    Ok(Some(head.root_id))
-}
-
-/// Head commit id of a repo; errors when the repo or commit is missing.
-pub async fn get_head_commit_id(
-    db: &DatabaseConnection,
-    repo_id: &str,
-) -> Result<String, AppError> {
-    let repo_record = repo::Entity::find_by_id(repo_id)
-        .one(db)
-        .await?
-        .ok_or_else(|| AppError::NotFound("Repository not found".to_string()))?;
-    repo_record
-        .head_commit_id
-        .ok_or_else(|| AppError::NotFound("No commits yet".to_string()))
 }
 
 /// Parent directory: `/dir/file.txt` → `/dir`, `/file.txt` → `/`.
