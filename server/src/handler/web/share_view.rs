@@ -69,10 +69,9 @@ fn check_share_download_rate(
         &state.config().server.trusted_proxies,
     );
     let key = format!("share_download:{client_ip}");
-    if state.auth_limiters.share_download.is_limited(&key) {
+    if !state.auth_limiters.share_download.check_and_record(&key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.share_download.record_attempt(&key);
     Ok(())
 }
 

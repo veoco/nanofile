@@ -94,6 +94,26 @@ impl GenericRateLimiter {
         count as u32 >= self.limit()
     }
 
+    /// Check the budget and record this attempt in one lock acquisition.
+    ///
+    /// Returns `true` when the attempt is allowed (and has been recorded) and
+    /// `false` when the key was already over budget (nothing is recorded, so a
+    /// blocked flood does not keep extending its own window). Disabled limiters
+    /// allow everything and record nothing.
+    pub fn check_and_record(&self, key: &str) -> bool {
+        if self.disabled() {
+            return true;
+        }
+        let now = Self::now();
+        let mut map = self.lock();
+        if super::SlidingWindow::count(&mut map, key, now, self.window()) as u32 >= self.limit() {
+            return false;
+        }
+        super::SlidingWindow::record(&mut map, key, now, self.window());
+        Self::shrink(&mut map);
+        true
+    }
+
     /// Clear all recorded attempts for a key.
     pub fn clear(&self, key: &str) {
         let mut map = self.lock();
@@ -152,6 +172,56 @@ mod tests {
         assert!(limiter.is_limited("k"));
         limiter.clear("k");
         assert!(!limiter.is_limited("k"));
+    }
+
+    /// `check_and_record` must be atomic: two concurrent requests cannot both see
+    /// a free slot. A read-then-write pair (`is_limited` then `record_attempt`)
+    /// admits that race.
+    #[test]
+    fn check_and_record_admits_exactly_the_budget_under_contention() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let limiter = Arc::new(GenericRateLimiter::new(5, 60));
+        let admitted = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..32 {
+            let limiter = Arc::clone(&limiter);
+            let admitted = Arc::clone(&admitted);
+            handles.push(std::thread::spawn(move || {
+                if limiter.check_and_record("k") {
+                    admitted.fetch_add(1, Ordering::SeqCst);
+                }
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("thread");
+        }
+        assert_eq!(admitted.load(Ordering::SeqCst), 5);
+        assert!(limiter.is_limited("k"));
+    }
+
+    #[test]
+    fn a_blocked_attempt_is_not_recorded() {
+        let limiter = GenericRateLimiter::new(2, 3600);
+        assert!(limiter.check_and_record("k"));
+        assert!(limiter.check_and_record("k"));
+        assert!(!limiter.check_and_record("k"), "over budget");
+        let map = limiter.attempts.lock().unwrap();
+        assert_eq!(
+            map.get("k").map(Vec::len),
+            Some(2),
+            "a refused attempt must not extend the window"
+        );
+    }
+
+    #[test]
+    fn disabled_check_and_record_allows_without_recording() {
+        let limiter = GenericRateLimiter::new(0, 3600);
+        for _ in 0..100 {
+            assert!(limiter.check_and_record("k"));
+        }
+        assert!(limiter.attempts.lock().unwrap().is_empty());
     }
 
     /// A flood of distinct keys must not grow the map: the oldest are evicted.

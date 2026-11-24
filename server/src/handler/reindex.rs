@@ -92,6 +92,9 @@ pub async fn reindex(
     let _ = state.text_indexer()?;
 
     let rl_key = format!("reindex:{}", auth.user_id);
+    // Two-phase on purpose: the slot is consumed only once the task has been
+    // accepted. Recording at submit time (the late check below) keeps the
+    // budget coupled to work actually queued; a rejected dedup does not spend it.
     if state.auth_limiters.reindex.is_limited(&rl_key) {
         return Err(AppError::TooManyRequests);
     }

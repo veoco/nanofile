@@ -154,10 +154,9 @@ pub(crate) fn record_link_password_failure(
     token: &str,
 ) -> Result<(), AppError> {
     let key = format!("link_password_token:{token}");
-    if state.auth_limiters.link_password.is_limited(&key) {
+    if !state.auth_limiters.link_password.check_and_record(&key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.link_password.record_attempt(&key);
     Ok(())
 }
 
@@ -392,10 +391,9 @@ pub(crate) async fn gate_post(
         &state.config().server.trusted_proxies,
     );
     let rl_key = format!("link_password:{client_ip}");
-    if state.auth_limiters.link_password.is_limited(&rl_key) {
+    if !state.auth_limiters.link_password.check_and_record(&rl_key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.link_password.record_attempt(&rl_key);
 
     let valid = crate::service::sharing::share::verify_link_password(
         link.password(),

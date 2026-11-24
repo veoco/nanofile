@@ -285,10 +285,9 @@ pub async fn disable_2fa(
 
     // Rate-limit password attempts, checked before the password hashes.
     let rate_key = format!("2fa_disable:{}", user.user_id);
-    if state.auth_limiters.disable_2fa.is_limited(&rate_key) {
+    if !state.auth_limiters.disable_2fa.check_and_record(&rate_key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.disable_2fa.record_attempt(&rate_key);
 
     let user_record = state
         .repos

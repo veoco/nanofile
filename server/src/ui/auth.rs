@@ -1146,7 +1146,7 @@ pub async fn register(
         &state.config().server.trusted_proxies,
     );
     let rl_key = format!("register:{}", client_ip);
-    if state.auth_limiters.registration.is_limited(&rl_key) {
+    if !state.auth_limiters.registration.check_and_record(&rl_key) {
         return register_error(
             &state,
             &headers,
@@ -1154,7 +1154,6 @@ pub async fn register(
                 .tr("auth.registration_too_many"),
         );
     }
-    state.auth_limiters.registration.record_attempt(&rl_key);
 
     // The challenge is checked before any password or invitation work. A failed
     // answer re-renders the form with a fresh challenge.
@@ -1498,7 +1497,7 @@ pub async fn password_reset(
         &state.config().server.trusted_proxies,
     );
     let rl_key = format!("password_reset:{}", client_ip);
-    if state.auth_limiters.password_reset.is_limited(&rl_key) {
+    if !state.auth_limiters.password_reset.check_and_record(&rl_key) {
         // Show the done page silently to prevent enumeration.
         let tpl = PasswordResetDoneTemplate {
             urls: crate::static_assets::template_urls(),
@@ -1509,7 +1508,6 @@ pub async fn password_reset(
             .map_err(|e| AppError::internal(e.to_string()))?;
         return Ok(Html(html));
     }
-    state.auth_limiters.password_reset.record_attempt(&rl_key);
 
     // The challenge is checked before minting a token or queueing mail. A failed
     // answer re-renders the form with a fresh challenge; it reveals nothing about

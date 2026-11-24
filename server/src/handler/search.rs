@@ -47,10 +47,9 @@ pub async fn search_file(
     }
 
     let rl_key = format!("search:{}", auth.user_id);
-    if state.auth_limiters.search.is_limited(&rl_key) {
+    if !state.auth_limiters.search.check_and_record(&rl_key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.search.record_attempt(&rl_key);
 
     // The repo id arrives in the query string, so the path-based key guard
     // never sees it: enforce the key's library scope here.
@@ -108,10 +107,9 @@ pub async fn search(
     let search_filename_only = query.search_filename_only.unwrap_or(false);
 
     let rl_key = format!("search:{}", auth.user_id);
-    if state.auth_limiters.search.is_limited(&rl_key) {
+    if !state.auth_limiters.search.check_and_record(&rl_key) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.search.record_attempt(&rl_key);
 
     let svc = state.search_service();
     let page_result = svc

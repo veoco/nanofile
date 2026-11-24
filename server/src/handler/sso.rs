@@ -30,10 +30,9 @@ pub async fn client_sso_link(
         &headers,
         &state.config().server.trusted_proxies,
     );
-    if state.auth_limiters.sso_link.is_limited(&client_ip) {
+    if !state.auth_limiters.sso_link.check_and_record(&client_ip) {
         return Err(AppError::TooManyRequests);
     }
-    state.auth_limiters.sso_link.record_attempt(&client_ip);
 
     let bounded = |key: &str| -> Result<Option<String>, AppError> {
         match params.get(key) {

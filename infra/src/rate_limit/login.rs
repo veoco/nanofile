@@ -141,10 +141,7 @@ impl LoginRateLimiter {
     pub fn record_failure(&self, key: &str) {
         let now = Self::now();
         let mut state = self.lock();
-        let timestamps = state.failures.entry(key.to_string()).or_default();
-        timestamps.push(now);
-        let cutoff = now - self.window();
-        timestamps.retain(|&t| t > cutoff);
+        super::SlidingWindow::record(&mut state.failures, key, now, self.window());
         Self::shrink_attempts(&mut state);
     }
 
@@ -157,23 +154,12 @@ impl LoginRateLimiter {
     /// counted here.
     pub fn failure_count(&self, keys: &LoginKeys) -> u32 {
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut state = self.lock();
         let mut count = 0;
-        let mut stale = Vec::new();
         for key in [&keys.ip_key, &keys.pair_key] {
-            let Some(timestamps) = state.failures.get_mut(key) else {
-                continue;
-            };
-            timestamps.retain(|&t| t > cutoff);
-            if timestamps.is_empty() {
-                stale.push(key.clone());
-            } else {
-                count = count.max(timestamps.len() as u32);
-            }
-        }
-        for key in stale {
-            state.failures.remove(&key);
+            let key_count =
+                super::SlidingWindow::count(&mut state.failures, key, now, self.window()) as u32;
+            count = count.max(key_count);
         }
         count
     }
@@ -185,25 +171,9 @@ impl LoginRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut state = self.lock();
-        let (stale, limited) = match state.failures.get_mut(key) {
-            Some(timestamps) => {
-                timestamps.retain(|&t| t > cutoff);
-                (
-                    timestamps.is_empty(),
-                    timestamps.len() as u32 >= self.limit(),
-                )
-            }
-            None => (false, false),
-        };
-        if stale {
-            // All attempts expired: drop the key so it does not accumulate.
-            state.failures.remove(key);
-            false
-        } else {
-            limited
-        }
+        super::SlidingWindow::count(&mut state.failures, key, now, self.window()) as u32
+            >= self.limit()
     }
 
     /// Check whether any of the given keys is currently locked out, using a
@@ -213,22 +183,11 @@ impl LoginRateLimiter {
             return false;
         }
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut state = self.lock();
         for key in keys {
-            let (stale, limited) = match state.failures.get_mut(*key) {
-                Some(timestamps) => {
-                    timestamps.retain(|&t| t > cutoff);
-                    (
-                        timestamps.is_empty(),
-                        timestamps.len() as u32 >= self.limit(),
-                    )
-                }
-                None => (false, false),
-            };
-            if stale {
-                state.failures.remove(*key);
-            } else if limited {
+            if super::SlidingWindow::count(&mut state.failures, key, now, self.window()) as u32
+                >= self.limit()
+            {
                 return true;
             }
         }
@@ -241,12 +200,9 @@ impl LoginRateLimiter {
     /// disabled because the adaptive captcha reads them.
     pub fn record_failures(&self, keys: &[&str]) {
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut state = self.lock();
         for key in keys {
-            let timestamps = state.failures.entry((*key).to_string()).or_default();
-            timestamps.push(now);
-            timestamps.retain(|&t| t > cutoff);
+            super::SlidingWindow::record(&mut state.failures, key, now, self.window());
         }
         Self::shrink_attempts(&mut state);
     }
@@ -297,7 +253,6 @@ impl LoginRateLimiter {
     /// an unbounded burst cannot.
     pub fn begin_login_attempt(&self, keys: &LoginKeys) -> Option<LoginAttempt<'_>> {
         let now = Self::now();
-        let cutoff = now - self.window();
         let mut state = self.lock();
 
         // Recorded failures: the same check `is_login_blocked` makes, including
@@ -305,16 +260,9 @@ impl LoginRateLimiter {
         if !self.lockout_disabled() {
             let limit = self.limit();
             for key in [&keys.ip_key, &keys.pair_key] {
-                let (limited, stale) = match state.failures.get_mut(key) {
-                    Some(timestamps) => {
-                        timestamps.retain(|&t| t > cutoff);
-                        (timestamps.len() as u32 >= limit, timestamps.is_empty())
-                    }
-                    None => (false, false),
-                };
-                if stale {
-                    state.failures.remove(key);
-                } else if limited {
+                if super::SlidingWindow::count(&mut state.failures, key, now, self.window()) as u32
+                    >= limit
+                {
                     return None;
                 }
             }
