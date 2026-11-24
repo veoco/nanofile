@@ -92,6 +92,7 @@ pub struct Config {
 /// Deliberately not managed from the admin UI: this policy decides what the UI's
 /// saves mean, so it has to come from outside the layer the UI writes to.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct SettingsConfig {
     /// `"bootstrap"` (default) or `"override"`.
     /// Env: NANOFILE_SETTINGS_CONFIG_POLICY
@@ -129,6 +130,7 @@ impl Default for SettingsConfig {
 
 /// Sync-protocol hardening knobs.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct SyncConfig {
     /// Verify that a received FS object's id equals `sha1(uncompressed JSON)`.
     ///
@@ -185,6 +187,7 @@ impl SyncConfig {
 
 /// Web UI localization settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct UiConfig {
     /// Fallback UI language when the user has no preference and the browser sends no
     /// supported language.
@@ -223,6 +226,7 @@ fn default_tray_language() -> String {
 /// values that seed `email_settings` on first start and are superseded by
 /// whatever `/sysadmin/settings/email/` saves.
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct EmailConfig {
     /// Master switch. When `false` (default) the mail subsystem is off: password
     /// reset renders a generic page without minting a token, and nothing is queued.
@@ -310,6 +314,7 @@ impl Default for EmailConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct NotificationConfig {
     pub enabled: bool,
     pub private_key: String,
@@ -371,6 +376,7 @@ impl Default for NotificationConfig {
 
 /// Background copy/move task limits.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct TaskConfig {
     /// Max async copy/move tasks in Pending or Processing state (0 = unlimited).
     /// Beyond the cap new tasks get HTTP 429, so authenticated users cannot exhaust
@@ -427,6 +433,7 @@ impl Default for TaskConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct ServerConfig {
     #[serde(default = "default_addr")]
     pub addr: String,
@@ -933,6 +940,7 @@ fn host_names_literal_address(host: &str) -> bool {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct DatabaseConfig {
     #[serde(default = "default_db_url")]
     pub url: String,
@@ -959,6 +967,7 @@ impl Default for DatabaseConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct StorageConfig {
     #[serde(default = "default_block_dir")]
     pub block_dir: PathBuf,
@@ -1230,6 +1239,7 @@ impl CaptchaMode {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct AuthConfig {
     #[serde(default = "default_password_hash_iterations")]
     pub password_hash_iterations: u32,
@@ -1401,6 +1411,7 @@ impl AuthConfig {
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 pub struct AdminInitConfig {
     pub email: Option<String>,
     pub password: Option<String>,
@@ -1460,6 +1471,7 @@ fn default_password_min_length() -> u32 {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct LoggingConfig {
     #[serde(default = "default_log_level")]
     pub level: String,
@@ -1507,6 +1519,7 @@ fn default_log_max_backups() -> u32 {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct GcConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -1628,6 +1641,7 @@ fn default_gc_min_block_age_secs() -> u64 {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct IndexConfig {
     pub enabled: bool,
     pub index_dir: PathBuf,
@@ -1650,6 +1664,7 @@ impl Default for IndexConfig {
 /// Automatic "people" tags (YuNet). Off by default: it scans every image and
 /// costs CPU, and a library owner should opt in explicitly.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct FaceTagsConfig {
     /// Master switch. Env: NANOFILE_FACE_TAGS_ENABLED
     #[serde(default)]
@@ -1689,6 +1704,7 @@ impl Default for FaceTagsConfig {
 /// Off by default: it loads four models and costs CPU, and the text it stores
 /// may be sensitive, so a library owner opts in explicitly.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct OcrConfig {
     /// Master switch. Env: NANOFILE_OCR_ENABLED
     #[serde(default)]
@@ -1728,6 +1744,7 @@ impl Default for OcrConfig {
 /// platform supplies. Which layers a host gives is measured and reported, not
 /// configured.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 pub struct SandboxConfig {
     /// Master switch over every feature that parses untrusted bytes. With it off,
     /// documents are not parsed for the index, thumbnails/EXIF are not produced and
@@ -3434,6 +3451,53 @@ request_timeout_secs = 600
         // Loading leaves relative paths relative: resolving them is an explicit startup
         // step, so a test or tool never silently points somewhere else.
         assert_eq!(config.index.index_dir, PathBuf::from("data/index"));
+    }
+
+    /// Every section may be written partially: keys the operator omits keep their
+    /// built-in default. `impl Default` is the only source of those defaults, so a
+    /// section that is present but empty must serialize exactly like the default.
+    #[test]
+    fn every_section_accepts_a_partial_table() {
+        let default = serde_json::to_value(Config::default()).unwrap();
+        for section in [
+            "server",
+            "database",
+            "storage",
+            "auth",
+            "logging",
+            "gc",
+            "index",
+            "face_tags",
+            "ocr",
+            "sandbox",
+            "notification",
+            "tasks",
+            "admin_init",
+            "email",
+            "ui",
+            "sync",
+            "settings",
+        ] {
+            let text = format!("[{section}]\n");
+            let config: Config = toml::from_str(&text)
+                .unwrap_or_else(|e| panic!("empty [{section}] must parse: {e}"));
+            let value = serde_json::to_value(&config).unwrap();
+            assert_eq!(
+                value[section], default[section],
+                "an omitted [{section}] field must equal its built-in default"
+            );
+        }
+
+        // The two sections that used to require every field at once.
+        let config: Config = toml::from_str("[index]\nenabled = false").unwrap();
+        assert!(!config.index.enabled);
+        assert_eq!(config.index.index_dir, Config::default().index.index_dir);
+        let config: Config = toml::from_str("[notification]\nping_interval = 10").unwrap();
+        assert_eq!(config.notification.ping_interval, 10);
+        assert_eq!(
+            config.notification.enabled,
+            Config::default().notification.enabled
+        );
     }
 
     #[test]
