@@ -57,8 +57,8 @@ use crate::AppState;
 
 /// Build the web UI route tree.
 ///
-/// These routes serve only GET (page browsing, preview, download); mutations
-/// (rename, delete, upload) go through the frontend JavaScript calling the
+/// Pages are GET; authentication, settings and admin forms post to handlers
+/// here, while file mutations go through the frontend JavaScript calling the
 /// Seafile-compatible API (`/api/v2.1/`, `/api2/`).
 pub fn ui_routes() -> Router<Arc<AppState>> {
     Router::new()

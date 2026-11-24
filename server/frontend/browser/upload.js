@@ -182,7 +182,6 @@ export function addToQueue(items) {
     fetchUploadToken(repoId).then(function () { processQueue(); });
 }
 
-// getCookie is provided by common.js (loaded first).
 export async function fetchUploadToken(repoId) {
     try {
         var csrfToken = getCookie('sfcsrftoken');

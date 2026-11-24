@@ -12,7 +12,7 @@ use axum_extra::headers::{Cookie, Header};
 ///
 /// `Cookie::decode` is the primary path because it knows the header rules (quoted
 /// values, several `Cookie` headers), but it rejects the whole header on a segment
-/// it cannot parse 鈥?and a browser will happily send one. The plain scan stays as
+/// it cannot parse — and a browser will happily send one. The plain scan stays as
 /// a fallback so a malformed neighbour does not turn a working session into a 401.
 pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     if let Ok(cookie) = Cookie::decode(&mut headers.get_all("cookie").iter())

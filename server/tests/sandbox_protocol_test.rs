@@ -4,7 +4,7 @@
 //! because a wire format is pinned.
 //!
 //! The cases that need the child to *serve* are unix-only: on Windows the bound is a Job
-//! Object the parent names, and a self-started worker reports `job=limits-missing` 鈥?the
+//! Object the parent names, and a self-started worker reports `job=limits-missing` — the
 //! arrangement, not the bound, is what differs. The malformed-request surface is covered
 //! by `sandbox_probe_test` and the request-path tests, which start it as the server does.
 #![cfg(unix)]
@@ -286,7 +286,7 @@ fn the_child_refuses_to_serve_with_the_sandbox_off() {
 /// documents arriving the way the server sends them, plan tag and bytes, with
 /// the fixtures the parsers are tested against. A parser that stopped early, or
 /// a limit that cut the text short, still contains the words these fixtures are
-/// made of 鈥?the whole text is what says the request path is intact.
+/// made of — the whole text is what says the request path is intact.
 #[test]
 fn the_child_returns_the_whole_text_of_a_real_document() {
     let args = ["--profile", "documents"];
@@ -420,7 +420,7 @@ fn a_face_request_answers_a_count_or_is_refused() {
     let args = ["--profile", "faces"];
 
     // The positive control: a real PNG is decoded and run through the detector,
-    // and the reply is the summary 鈥?a count, never pixels.
+    // and the reply is the summary — a count, never pixels.
     let answer = run_worker(&args, &image_request(b'D', 0, &a_png_of(32, 16)));
     answer.finished("a face request");
     let (tag, body) = answer.frame();

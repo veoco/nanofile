@@ -361,7 +361,6 @@ pub async fn zip_download_handler(
         return Err(AppError::NotFound("Zip task not found or expired".into()));
     }
 
-    // Check if repo is encrypted and if password is set (for the user who created the task)
     // The token carries no user identity, so an encrypted repo cannot be served here.
     let dec_key: Option<(Vec<u8>, Vec<u8>)> = {
         let repo_model = state

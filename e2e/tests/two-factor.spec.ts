@@ -26,7 +26,7 @@ function base32Decode(secret: string): Buffer {
   return Buffer.from(bytes);
 }
 
-/** RFC 6238 TOTP 鈥?SHA1, 6 digits, 30s period (matches the server's totp-rs). */
+/** RFC 6238 TOTP — SHA1, 6 digits, 30s period (matches the server's totp-rs). */
 function totp(secret: string): string {
   const counter = Math.floor(Date.now() / 1000 / 30);
   const buf = Buffer.alloc(8);

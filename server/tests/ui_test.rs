@@ -124,7 +124,6 @@ async fn test_unauthenticated_access_redirects_to_login() {
         .await
         .unwrap();
 
-    // WebUser redirect uses Redirect::to() which returns 303
     assert!(
         resp.status() == 302 || resp.status() == 303,
         "unauthenticated should redirect, got: {}",

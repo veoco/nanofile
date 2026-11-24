@@ -856,7 +856,7 @@ impl FileOps {
     /// The commit id is the SHA-1 of the serialized [`CommitData`](base::common::CommitData),
     /// so every writer must construct this exact record; the online commit path
     /// and the offline `verify-dir-order --repair` tool both call this builder
-    /// instead of each spelling out the 24 fields.
+    /// instead of each spelling out every field of the record.
     pub(crate) fn build_commit_model(
         repo_id: &str,
         root_fs_id: &str,

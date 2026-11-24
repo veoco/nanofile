@@ -120,8 +120,8 @@ fn validate_link_unlock(secret: &[u8], token: &str, password_version: &str, valu
 /// The value is an HMAC signature over the link token and the link's current
 /// password version (see `link_unlock_signature`), proving the password was
 /// verified by the web form for *this* password. A plaintext `=1` value is
-/// rejected 鈥?that is what stops a client that never entered the password from
-/// minting the cookie itself 鈥?and a cookie minted before a password change no
+/// rejected — that is what stops a client that never entered the password from
+/// minting the cookie itself — and a cookie minted before a password change no
 /// longer matches the current version.
 pub fn has_link_unlock_cookie(
     headers: &HeaderMap,

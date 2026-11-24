@@ -39,7 +39,6 @@ if (userMenu && userButton) {
     dropdown.className =
       "js-user-menu-dropdown absolute right-0 z-dialog mt-2 w-44 origin-top-right rounded-box border border-line bg-panel py-1 focus:outline-none";
 
-    // Admin-only: User Management link
     var isAdmin = userMenu.getAttribute("data-is-admin") === "true";
     var menuItem = "block px-4 h-8 leading-8 text-[13px] text-ink hover:bg-raised";
     if (isAdmin) {

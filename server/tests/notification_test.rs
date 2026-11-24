@@ -4,14 +4,6 @@ use common::{NotifLimits, TestFixture, TestServer};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
-/// Test that the notification endpoints respond correctly.
-/// Note: Full WebSocket event delivery tests require a bidirectional
-/// connection, which is challenging in integration tests. The core
-/// notification flow is verified indirectly:
-///   - JWT token generation (sync_aux_test::test_jwt_token_success)
-///   - Lock/unlock API works (lock_file_test)
-///   - The notification server accepts WebSocket upgrades
-///   - POST /notification/events accepts events
 #[tokio::test]
 async fn test_notification_ping() {
     let f = TestFixture::new_with_notification().await;
@@ -22,7 +14,6 @@ async fn test_notification_ping() {
     assert_eq!(body["ret"], "pong");
 }
 
-/// Test that POST /notification/events accepts and processes events.
 #[tokio::test]
 async fn test_notification_post_event_unauthorized() {
     let f = TestFixture::new_with_notification().await;

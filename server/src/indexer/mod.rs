@@ -9,7 +9,8 @@
 //!
 //! Every document records the `fs_id`, [`extract::EXTRACTOR_VERSION`] and
 //! `status` that let the backfill tell "already processed as unsupported" from
-//! "never seen". A tokio task commits the writer every 30 seconds. OCR records
+//! "never seen". A debounced task commits pending writes within 100 ms; the task
+//! system repeats the commit every 120 seconds as a backstop. OCR records
 //! [`DocStatus::NoText`] for an image, or the scan pages of a PDF, it examined and
 //! found nothing searchable in; that is current at this extractor version but
 //! excluded from search.
