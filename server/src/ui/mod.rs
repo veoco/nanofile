@@ -134,6 +134,8 @@ pub fn ui_routes() -> Router<Arc<AppState>> {
         )
         .route("/settings/", get(settings::settings_page))
         .route("/settings/profile/", get(settings::profile_page))
+        .route("/profile", get(settings::redirect_profile))
+        .route("/profile/", get(settings::redirect_profile))
         .route("/settings/security/", get(settings::security_page))
         // The credential inventory. `/settings/devices/` is the path this page
         // used to live at; it redirects so old links and bookmarks still land.

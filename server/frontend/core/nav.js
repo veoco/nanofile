@@ -144,7 +144,7 @@ document.addEventListener("keydown", function (e) {
           else if (ev.key === "s") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/starred/"; }
           else if (ev.key === "t") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/trash/"; }
           else if (ev.key === "a") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/activities/"; }
-          else if (ev.key === "p") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/profile/"; }
+          else if (ev.key === "p") { clearTimeout(navTimer); searchFocused = false; window.location.href = "/settings/profile/"; }
           else if (ev.key === "Escape") { clearTimeout(navTimer); searchFocused = false; }
           document.removeEventListener("keydown", navHandler);
         },

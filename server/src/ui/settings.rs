@@ -866,6 +866,12 @@ pub async fn redirect_credentials() -> impl IntoResponse {
     (StatusCode::FOUND, [("Location", "/settings/credentials/")])
 }
 
+/// GET /profile/ — the pre-settings URL for the account page, kept for bookmarks
+/// and for the `g` `p` keyboard shortcut used by pages cached before the move.
+pub async fn redirect_profile() -> impl IntoResponse {
+    (StatusCode::FOUND, [("Location", "/settings/profile/")])
+}
+
 /// POST /settings/profile/avatar/ and its legacy alias — upload a new avatar.
 pub async fn upload_avatar(
     user: WebUser,

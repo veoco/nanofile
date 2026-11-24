@@ -138,6 +138,7 @@ Two-factor authentication and credentials are covered in
 | `g` then `s` | starred |
 | `g` then `t` | trash |
 | `g` then `a` | activity |
+| `g` then `p` | your settings |
 
 ## Next steps
 

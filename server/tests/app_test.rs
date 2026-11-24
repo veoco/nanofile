@@ -14,6 +14,29 @@ use crate::common;
 
 use common::TestFixture;
 
+/// The pre-settings account URL still resolves: bookmarks and pages cached before
+/// the move use `/profile/`, and the `g` `p` shortcut now points at the settings page.
+#[tokio::test]
+async fn the_legacy_profile_route_redirects_to_the_account_settings() {
+    let f = TestFixture::new().await;
+    let resp = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap()
+        .get(format!("{}/profile/", f.server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 302);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some("/settings/profile/")
+    );
+}
+
 #[tokio::test]
 async fn the_readiness_endpoint_answers() {
     let f = TestFixture::new().await;
