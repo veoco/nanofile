@@ -182,7 +182,8 @@ async fn render(
         .find_by_id(user.user_id)
         .await?
         .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
-    let t = I18n::get(user.language.as_deref());
+    let ctx = crate::ui::ctx::build_page_ctx(state, user).await?;
+    let t = ctx.t;
 
     let (entries, presets) = catalog(user_record.is_admin);
     let mut domains: Vec<DomainGroup> = Vec::new();
@@ -230,28 +231,21 @@ async fn render(
         .map(|key| card_of(key, &repo_names, &ttl_presets_days, max_ttl_days))
         .collect();
 
-    let left_panel_repos = state
-        .left_panel_cache
-        .get_for_user(&state.repos, user.user_id)
-        .await?;
     let nav =
         crate::ui::settings::build_nav(state, user, crate::ui::settings::SettingsNav::API_KEYS)
             .await?;
 
     let tpl = ApiKeysTemplate {
-        urls: crate::static_assets::template_urls(),
-        t,
-        user_email: user.email.clone(),
-        is_admin: user.is_admin,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
         active_page: crate::ui::settings::SettingsNav::API_KEYS,
         nav,
-        left_panel_repos,
-        sharing_enabled: crate::ui::ctx::sharing_enabled(state),
+        left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
-        csrf_token: crate::service::auth::csrf::generate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-        ),
+        csrf_token: ctx.csrf_token,
         domains,
         presets: presets
             .into_iter()

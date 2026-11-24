@@ -51,7 +51,6 @@ pub async fn list_repos(
         &user.email,
     )
     .await?;
-    let t = I18n::get(user.language.as_deref());
 
     let mut repos = Vec::with_capacity(rows.len());
     for row in rows {
@@ -69,34 +68,22 @@ pub async fn list_repos(
         });
     }
 
-    let csrf_token =
-        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
-
-    // The rail keeps the membership order every other page uses; only the page
-    // list is reordered.
-    let left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo> = repos
-        .iter()
-        .map(|r| crate::service::repo::service::LeftPanelRepo {
-            id: r.id.clone(),
-            name: r.name.clone(),
-            size_display: r.size_display.clone(),
-        })
-        .collect();
+    let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
 
     // Render in the list's default order (name, A→Z) so the first paint is
     // already final — browser-side sorting reordered rows and read as a flicker.
     repos.sort_by_key(|a| a.name.to_lowercase());
 
     let tpl = RepoListTemplate {
-        urls: crate::static_assets::template_urls(),
-        t,
-        user_email: user.email,
-        is_admin: user.is_admin,
+        urls: ctx.urls,
+        t: ctx.t,
+        user_email: ctx.user_email,
+        is_admin: ctx.is_admin,
         repos,
         active_page: "repos",
-        csrf_token,
-        left_panel_repos,
-        sharing_enabled: crate::ui::ctx::sharing_enabled(&state),
+        csrf_token: ctx.csrf_token,
+        left_panel_repos: ctx.left_panel_repos,
+        sharing_enabled: ctx.sharing_enabled,
         current_repo_id: None,
         webdav_base_url: state
             .config()
