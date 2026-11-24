@@ -47,9 +47,57 @@ profile 决定子进程可以建立哪些保护：
 
 - **Linux** —— 文件与 TCP 层用 Landlock，网络与进程层用 seccomp，边界用 `RLIMIT_AS`/`RLIMIT_CPU`/`RLIMIT_NOFILE`/`RLIMIT_FSIZE`。拒绝会被交给正在运行的内核验证：把过滤器装进一个子进程，再让它发起解析器绝不该发起的调用；每个调用都配一个同样进程、但不装过滤器的对照。
 - **macOS** —— 每个子进程都在 `sandbox-exec` 的 Seatbelt profile 下运行。解析器 profile 拒绝 `fork`，并把 `exec` 收窄到子进程自身的镜像。
-- **Windows** —— 先尝试 AppContainer，再叠加 Job Object、受限令牌与进程缓解策略。AppContainer 需要在注册表写 profile，并在 worker 自身镜像上给出包访问权限；一个约束自己所有子命令的主机会拒绝这些。此时启动报告 `files=open`，并且在该进程内不再申请容器。解析器 profile 仍靠 Job Object 照常运行；媒体 profile 因为要求 `files` 与 `network` 会被拒绝，因此这类主机上媒体缩略图关闭。Job Object 约束已提交内存与 CPU 时间，但没有句柄或文件大小的等价物。
+- **Windows** —— 先尝试 AppContainer，再叠加 Job Object、受限令牌与进程缓解策略。一个约束自己所有子命令的主机会拒绝容器，此时启动报告 `files=open`：解析器 profile 仍靠 Job Object 照常运行，媒体 profile 因为要求 `files` 与 `network` 会被拒绝，这类主机上媒体缩略图关闭。机制与回退见下文「Windows 约束」一节。
 
 媒体 helper 有独立的文件授权：helper 与它的加载器、它旁边的库文件（逐文件）、系统库目录，以及在 macOS 上——仅当 helper 确实安装在该目录下时——它所在的打包管理器目录。在 Windows 上 helper 的标准流使用管道而不是空设备，因为容器可能拒绝打开该设备。
+
+## Windows 约束
+
+Windows 的约束是：子进程外层一个 Job Object，其下用一个受限令牌运行，再套一个 AppContainer，并加上内核愿意为该进程采取的进程缓解策略。
+
+Windows 没有 `RLIMIT_AS`，也没有非特权的 Landlock，因此约束由若干层组成，父进程在创建时一次性施加：令牌、Job 与容器都是进程的属性，运行中的进程无法再采用。
+
+* **Job Object**（父进程作为创建属性命名）：限制已提交内存、CPU 时间和进程数；父进程持有的句柄上的 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 会把子进程启动的东西一并带走。子进程读回限制而不是相信它们，自己也不持有句柄，因此内部无法提高限额。它不包含窗口站、剪贴板或句柄限制：这些从第一条指令起就生效，而 `JOB_OBJECT_UILIMIT_HANDLES` 会在加载器打印之前将其杀死。这里完全没有描述符或文件大小的边界。
+* **受限令牌**（父进程在创建时施加）无法应用到运行中的进程，因此父进程用 `CreateProcessAsUser` 以自身令牌的受限版本启动子进程；这是 Windows 在无需 `SeAssignPrimaryToken` 时允许的唯一情形。特权被移除，管理 SID 变成 deny-only，写入按 restricting SID 检查。此处不设置完整性标签：低完整性是容器自身的属性，子进程报告它读回的级别（`il=`）。
+* **AppContainer**（父进程在创建时施加）是进程创建属性：带 AppContainer SID 且 *没有能力* 的 `PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES`。能力决定能否联网以及能否访问包外对象，因此空能力列表不会打开任何 socket，也不会读取 ACL 只写用户 SID 的文件。这是 Chromium 的零能力配置。
+
+在此基础上，子进程设置它能接受的进程缓解策略——win32k 锁定、任意代码防护、无扩展点、无字体、无远程或低完整性镜像、ASLR 系列、严格句柄检查，以及除 media 外所有 profile 的子进程策略——并用 `GetProcessMitigationPolicy` 逐项读回。它们是 *运行时* 策略而非创建属性，因为 media profile 必须启动它的 helper。从创建到 `confine` 之间，Job 的活动进程上限是唯一限制子进程创建的因素，这段时间没有任何不受信内容运行。
+
+restricting SID 是本进程自身身份：登录会话、用户，以及 Windows 为进程附着对象而授予的组（`INTERACTIVE`、`Authenticated Users`、`Users`、`Everyone`）。它们不能被去掉：每次访问都会对受限令牌做两次检查，restricting 列表缺少它们会让子进程虽已创建却死在加载器里，报 `STATUS_DLL_INIT_FAILED`（`0xC0000142`）。
+
+因为用户自己的 SID 就在该列表中，`WRITE_RESTRICTED` 把写入收窄到该用户可写的位置，而不是收窄到零，单独看接近空操作。真正约束写入的是容器与完整性级别：AppContainer 检查要求在用户 SID 授予之外，*额外* 具备包 SID 或 `ALL APPLICATION PACKAGES` 的 ACE，因此只写用户 SID 的文件将不可读。worker 自身镜像必须保持可读，而按用户安装不会带这样的 ACE，所以父进程在首次启动前把它授予容器（`grant_image_access`）。
+
+有容器时，四项都是平台自身提供的。没有容器时，子进程仍在 Job 中、以受限令牌和缓解策略运行，并报告 `files=open`：`limits` 是保证服务器不倒的边界，而容器是唯一能补上 files 与 network 两项的机制。每次启动只尝试一次；拒绝过的主机不会再被询问。
+
+### 为什么主机可能没有容器
+
+创建容器需要注册表 profile 以及 worker 自身镜像上的包 SID 访问权限，而一个约束自身所有命令的主机沙箱（开发或 agent 环境）恰好拒绝这些。失败表现为子进程死在加载器中且没有诊断，或 ACL 无法写入。因此启动先尝试容器，失败则退回 Job Object，并报告缺失的项。
+
+### 受限能力容器（LPAC）
+
+Windows 11 允许容器用 `PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY` 的 `..._OPT_OUT` 选择退出 `ALL APPLICATION PACKAGES`，`lpac=` 表示是否生效。Windows 10 会返回错误，因此该属性被丢弃、保留普通容器。该属性在创建时被接受，所以加载器无法在其中启动的容器会在 `CreateProcess` 返回成功之后才失败；父进程随即停止尝试，改用普通容器重来。
+
+退出并不消除下面的说明。它是安全属性 `WIN://NOALLAPPPKG`，让低箱检查 *忽略* `ALL APPLICATION PACKAGES`，但并不把它从令牌中移除，进程仍是 AppContainer。让系统目录保持可读的是另一个主体：`ALL RESTRICTED APPLICATION PACKAGES`（`S-1-15-2-2`），其 ACE 随打包进程加载的系统文件一同发布——这是 Windows 构建的属性而非有文档保证的不变量，因此要测量 `system=`，而回答 `system=denied` 的主机是更严格而不是坏了。退出也不覆盖注册表：LPAC 需要 `registryRead` 能力才能读取解析器想要的键。
+
+这里没有任何保护能约束边界的形状。容器读取它加载所需的系统目录（`Windows`、`Program Files`——其 ACL 带有低箱进程所需包的主体），与它被拒绝的用户路径一起报告为 `system=readable`。写入按实测报告——容器重定向存储内为 `writes=store`，之外为 `writes=user`——这里写入完全没有大小边界。它读取的注册表与触及的 IPC 同样走双主体检查，以及本进程递给它的句柄：平台自身的限制，与 macOS profile 的授权形状相同。
+
+### media profile 的 helper 可以放在哪里
+
+helper 需要显式授权——授权它自己的文件以及旁边的库，一次一个文件，且仅此而已——因为容器的文件访问由列举其自身包 SID 的 ACE 决定。子进程报告 `helper=allowed` 或 `helper-grant-refused`。
+
+只授权文件是有意为之。向上逐级授权目录既无必要也有破坏性：`restricted_token` 保留 `SeChangeNotifyPrivilege`（`DISABLE_MAX_PRIVILEGE` 只关掉它以外的特权），持有它的调用者根本不做目录穿越检查，因此向上授权没有必要；而 `SetNamedSecurityInfo` 会“把当前继承模型强加到目标对象之下所有对象的 ACL 上”（Microsoft，《Automatic Propagation of Inheritable ACEs》），在 `C:\Users\<user>` 上加一条 ACE 就会改写其下所有对象的继承。
+
+helper 无法运行时，stdio 是首要嫌疑：`NUL` 是容器可能拒绝打开的设备，而这个拒绝与进程创建来自同一次调用。流是管道——stdin 关闭，stdout 与 stderr 抽干——启动时报告 `parse=media-ok(<bytes>)`。只获得 `ALL APPLICATION PACKAGES` 授权的 helper，会为 media profile 放弃退出选项，而不是把它当作环境问题报告（`use_plain_container`）。
+
+### 两个主体，以及为什么退出选项可以被放弃
+
+低箱检查由进程包 SID 的 ACE 回答，或由 `ALL APPLICATION PACKAGES` 的 ACE 回答；系统目录携带的是后者，`dacl_grants_any_package` 走这条捷径，因此系统已经授权的文件不会在每次启动时被重写。退出选项让检查忽略它，因此该捷径只在本次启动不请求退出时才把读取视为通过。`add_access` 因此按启动自身的决定来询问；而本进程可能无权重写 DACL 的文件——系统自有的 DLL、`Program Files` 下的镜像——正是两者相遇之处：放弃退出选项、保留容器，而不是把一个读不了的镜像交给子进程。启动报告 `lpac=off`，设置页显示提示，日志说明 media profile 放弃了它。
+
+### 参考
+
+* Microsoft，《Launch an AppContainer》：该属性、空能力列表，以及镜像必须对容器可读的要求。
+* Microsoft，《Process Mitigation Policies》与《Job Objects》，包括 `PROC_THREAD_ATTRIBUTE_JOB_LIST` 以及只对 Job 内进程接受的子进程策略。
+* Chromium 的 `sandbox/win/src/`：同样的启动方式、同样的单活动进程 Job，以及“创建时子进程策略存在 *是因为* Job 可以被逃逸”的说明。
 
 ## 测试
 
