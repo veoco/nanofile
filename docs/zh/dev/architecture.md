@@ -18,7 +18,7 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 | `ui` | Askama 渲染的网页及其表单处理，包括管理后台。 |
 | `http` | `handler`、`ui`、`webdav` 共享的表现层支持：文件下载响应构造（Range、ETag、Content-Disposition）与有界 multipart 读取。 |
 | `service` | 业务逻辑与用例：认证、同步、文件、分享、动态、邮件、搜索、通知、权限、上传状态。负责一个用例的事务边界。 |
-| `repository` | 账号、令牌、提交、文件与分享的数据库访问：trait 接口、SeaORM 实现、缓存装饰器，以及窄事务聚合。 |
+| `repository` | 账号、令牌、提交、文件与分享的数据库访问：trait 接口、SeaORM 实现、缓存装饰器、窄事务聚合，以及活动日志写入。 |
 | `domain` | 共享授权模型：能力、凭据、资料库范围、令牌过期、提交/fs_id 计算。不持有数据库或 HTTP 句柄。 |
 | `fs` | Seafile 文件系统引擎：树操作、提交、合并、回收站、垃圾回收、块校验与迁移；也拥有跨提交/文件对象的多表事务操作。 |
 | `middleware` | 认证与能力执行、CSP、CSRF、请求上限、路由审计。 |
@@ -49,18 +49,18 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 | `tasks` | `handler`、`ui`、`webdav`、`middleware`、`app`、`routes` |
 | `handler` | `repository`、`sandbox`、`app`、`routes` |
 | `middleware` | `handler`、`ui`、`webdav`、`tasks`、`sandbox`、`app`、`routes` |
-| `ui` | `handler`、`app`、`routes` |
-| `webdav` | `handler`、`ui`、`app`、`routes` |
+| `ui` | `handler`、`repository`、`tasks`、`sandbox`、`fs`、`app`、`routes` |
+| `webdav` | `handler`、`ui`、`repository`、`app`、`routes` |
 | `settings` | `handler`、`ui`、`webdav`、`middleware`、`app`、`routes` |
 
 未列出的方向允许（例如 `service → repository`、`handler → service`、`repository → domain`）。以下四个例外是刻意保留的，理由写在守卫脚本里：
 
 - `fs/core/gc.rs` 接收任务的 `JobContext` 用于进度与取消：GC 本身就是一个 job。
-- `handler` 的协议/页面适配器（`handler/sync/`、`handler/trash.rs`、`handler/web/{share_view,upload,zip_download,download}.rs`）直接使用块与树函数，而不是绕一层 service。
+- `handler` 的协议/页面适配器（`handler/sync/`、`handler/web/{share_view,upload,zip_download,download}.rs`）直接使用块与树函数，而不是绕一层 service。
 - `handler/async_batch.rs` 与 `handler/reindex.rs` 提交并读取后台作业。
 - `service/{face_tags,index,mail}` 是作业体与索引调度器；任务系统是 service 层的执行器。
 
-`node tools/check-layering.mjs --report` 会打印已知债务基线；新违规即使旧问题还没清完也会让门禁失败。
+`node tools/check-layering.mjs --report` 会打印已知债务基线；新违规即使旧问题还没清完也会让门禁失败。基线按「方向 + 文件」登记：`ui → repository`（管理页与页面处理直接读取要渲染的行）、`ui → tasks`（`ui/admintasks.rs`）、`ui → fs`（文件页与回收站页）、`ui → sandbox`（设置页的沙箱探针）以及 `webdav → repository`（树辅助函数）。基线之外的文件会失败，因此债务无法增长；`--report` 还会列出不再命中的基线项，可以直接删除。
 
 ## 请求流
 
@@ -72,7 +72,7 @@ Nanofile 是一个包含五个 crate 的 Cargo workspace。依赖方向是单向
 
 ## 持久化与事务
 
-`repository` 是 CRUD 边界：每个聚合一个 trait、一个 SeaORM 实现，以及认证缓存的装饰器。但它不是唯一的数据库路径：`fs` 在跨表操作（树更新 + 提交 + HEAD、归档 + 删除、回收站恢复）中也会直接读写实体；`tasks::setup`/`indexer` 为自己的簿记使用连接。
+`repository` 是 CRUD 边界：每个聚合一个 trait、一个 SeaORM 实现、认证缓存的装饰器，以及活动日志写入。但它不是唯一的数据库路径：`fs` 在跨表操作（树更新 + 提交 + HEAD、归档 + 删除、回收站恢复）中也会直接读写实体；`tasks::setup`/`indexer` 为自己的簿记使用连接。
 
 事务边界遵循一条规则：**多表不变量由拥有事务的单个 repository 方法写入**，而不是由 service 组合多次 repository 调用。例子有 `history_prune`（一次清理的 commit 与文件对象行）、`provisioning`（资料库行 + 所有者成员关系）与 `head_commit`（提交行 + HEAD 的 CAS）。没有通用 Unit of Work；必须原子的流程就得到一个窄方法。允许滞后的工作（活动日志、索引调度）在事务之后尽力而为。
 

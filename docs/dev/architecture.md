@@ -20,7 +20,7 @@ and `inference` itself depends only on its two numeric kernels.
 | `ui` | Askama-rendered web pages and their form handlers, including the admin console. |
 | `http` | Presentation support shared by `handler`, `ui` and `webdav`: file-download response construction (Range, ETag, Content-Disposition) and bounded multipart readers. |
 | `service` | Business logic and use cases: auth, sync, files, shares, activity, mail, search, notifications, permissions, upload state. Owns the transaction boundary of a use case. |
-| `repository` | Database access for accounts, tokens, commits, files and shares: trait interfaces, SeaORM implementations, caching decorators, and narrow transactional aggregates. |
+| `repository` | Database access for accounts, tokens, commits, files and shares: trait interfaces, SeaORM implementations, caching decorators, narrow transactional aggregates, and the activity-log writer. |
 | `domain` | Shared authorization model: capabilities, credentials, repository scope, token expiry, commit/fs_id computation. No database or HTTP handles. |
 | `fs` | Seafile file-system engine: tree operations, commits, merge, trash, garbage collection, block verification and migration. Also the multi-table transactional operations over commits and file objects. |
 | `middleware` | Authentication and capability enforcement, CSP, CSRF, request limits, route audit. |
@@ -58,8 +58,8 @@ wrong and are checked by `tools/check-layering.mjs` in CI:
 | `tasks` | `handler`, `ui`, `webdav`, `middleware`, `app`, `routes` |
 | `handler` | `repository`, `sandbox`, `app`, `routes` |
 | `middleware` | `handler`, `ui`, `webdav`, `tasks`, `sandbox`, `app`, `routes` |
-| `ui` | `handler`, `app`, `routes` |
-| `webdav` | `handler`, `ui`, `app`, `routes` |
+| `ui` | `handler`, `repository`, `tasks`, `sandbox`, `fs`, `app`, `routes` |
+| `webdav` | `handler`, `ui`, `repository`, `app`, `routes` |
 | `settings` | `handler`, `ui`, `webdav`, `middleware`, `app`, `routes` |
 
 Directions not listed are allowed (for example `service → repository`,
@@ -68,7 +68,7 @@ carry a reason in the guard script:
 
 - `fs/core/gc.rs` takes a task `JobContext` for progress and cancellation: GC is
   a job.
-- `handler` protocol/page adapters (`handler/sync/`, `handler/trash.rs`,
+- `handler` protocol/page adapters (`handler/sync/`,
   `handler/web/{share_view,upload,zip_download,download}.rs`) consume block and
   tree functions directly instead of going through a service.
 - `handler/async_batch.rs` and `handler/reindex.rs` submit and read background
@@ -77,7 +77,13 @@ carry a reason in the guard script:
   task system is the service layer's executor.
 
 `node tools/check-layering.mjs --report` prints the known-debt baseline; a new
-violation fails the gate even while old ones are being cleaned up.
+violation fails the gate even while old ones are being cleaned up. The baseline
+is registered per direction and file: `ui → repository` (the admin and page
+handlers that read the rows they render), `ui → tasks` (`ui/admintasks.rs`),
+`ui → fs` (the file and trash pages), `ui → sandbox` (the settings probe) and
+`webdav → repository` (the tree helpers). A file outside the baseline fails, so
+the debt cannot grow; `--report` also names entries that no longer match, which
+are safe to delete.
 
 ## Request flow
 
@@ -100,10 +106,11 @@ mutations still belong to a service, and a handler never touches a repository.
 ## Persistence and transactions
 
 `repository` is the CRUD boundary: one trait per aggregate, a SeaORM
-implementation, and decorators for the auth caches. It is not the only database
-path: `fs` also reads and writes entities directly where an operation spans
-several tables (tree update + commit + HEAD, archive + delete, trash restore), and
-`tasks::setup`/`indexer` use the connection for their own bookkeeping.
+implementation, decorators for the auth caches, and the activity-log writer. It is
+not the only database path: `fs` also reads and writes entities directly where an
+operation spans several tables (tree update + commit + HEAD, archive + delete,
+trash restore), and `tasks::setup`/`indexer` use the connection for their own
+bookkeeping.
 
 Transaction boundaries follow one rule: **a multi-table invariant is written by a
 single repository method that owns a transaction**, not by a service composing
