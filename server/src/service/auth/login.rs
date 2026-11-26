@@ -392,7 +392,7 @@ impl LoginService {
         // one-day session. A configured lifetime of 0 means no expiry, which a
         // session cookie (no Max-Age) expresses.
         let max_age_seconds = if remember_me {
-            self.remembered_web_session_seconds()
+            self.configured_web_session_seconds()
         } else {
             Some(UNREMEMBERED_WEB_SESSION_SECONDS)
         };
@@ -503,15 +503,15 @@ impl LoginService {
 
         let now = chrono::Utc::now().timestamp();
         let token = generate_api_token();
-        // The TOTP step makes this a full sign-in whatever "remember me" said:
-        // the pending token does not carry the checkbox, so the configured
-        // lifetime applies (this is the existing 2FA success path).
-        let max_age_seconds = Some(self.api_token_ttl_days.saturating_mul(86400));
+        // The TOTP step does not carry the "remember me" checkbox, so the
+        // configured lifetime applies; a configured 0 means no expiry, the same
+        // reading `begin_web_login` and the API login path use.
+        let max_age_seconds = self.configured_web_session_seconds();
         self.create_web_session(
             user_id,
             &token,
             now,
-            Some(now + (self.api_token_ttl_days as i64 * 86400)),
+            max_age_seconds.map(|seconds| now + seconds as i64),
             user_agent,
         )
         .await?;
@@ -582,9 +582,9 @@ impl LoginService {
         }
     }
 
-    /// Lifetime of a remembered browser session, or `None` when the setting is 0
-    /// (no expiry — the cookie is then a browser-session cookie).
-    fn remembered_web_session_seconds(&self) -> Option<u64> {
+    /// Lifetime of a configured browser session, or `None` when the setting is 0
+    /// (no expiry: the cookie is then a browser-session cookie).
+    fn configured_web_session_seconds(&self) -> Option<u64> {
         (self.api_token_ttl_days > 0).then(|| self.api_token_ttl_days.saturating_mul(86400))
     }
 
