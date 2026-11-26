@@ -5,10 +5,10 @@ use std::collections::{HashMap, HashSet};
 use crate::AccessTokenManager;
 use crate::domain::device::PeerStamp;
 use crate::repository::Repositories;
+use crate::repository::activity_log;
 use crate::service::auth::token::{ensure_sync_token_for, ensure_sync_tokens_for_repos};
 use base::common::EMPTY_SHA1;
 use base::error::AppError;
-use infra::activity_log;
 use infra::common::util::{format_size, timestamp_rfc3339};
 use infra::entity::{repo, user};
 

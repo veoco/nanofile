@@ -348,7 +348,7 @@ async fn log_deleted_activity(
     for victim in victims {
         let size = request.activity_detail.then_some(victim.dirent_size);
         let obj_id = request.activity_detail.then_some(victim.obj_id.as_str());
-        infra::activity_log::log_activity(
+        crate::repository::activity_log::log_activity(
             deps.db,
             request.repo_id,
             "delete",

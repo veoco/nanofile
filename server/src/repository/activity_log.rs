@@ -1,4 +1,4 @@
-//! File activity event logger.
+//! File activity event logger — the write side of the `activities` table.
 //!
 //! One entry point records user-initiated file operations into the `activities`
 //! table: one summary row per operation, with the affected objects in
@@ -7,13 +7,17 @@
 //! calls in a 5-minute window (seafevents' `save_user_activity`); the sync path
 //! groups by `commit_id`. Errors are logged, never propagated: logging must not
 //! break the caller.
+//!
+//! Both halves of the table live in `repository`: the read side is
+//! [`super::activity`]. The aggregation rules are part of the writer, not of the
+//! callers, so `fs` and the services only describe what happened.
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
     TransactionTrait,
 };
 use std::collections::HashMap;
 
-use crate::entity::{activity, activity_item, repo};
+use infra::entity::{activity, activity_item, repo};
 
 /// Window within which repeated edits of one path collapse into a row (seafevents).
 const EDIT_DEDUP_WINDOW: i64 = 1800;
@@ -39,8 +43,8 @@ const ITEM_INSERT_BATCH: usize = 100;
 /// why an in-process mutex is enough.
 static AGGREGATE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Lightweight entry for batched logging, kept in `infra` so the sync commit path
-/// can log many items without a server-crate dependency.
+/// Lightweight entry for batched logging: the sync commit path describes its
+/// changes once and writes them in a single call.
 pub struct ActivityItem {
     pub op_type: &'static str,
     pub obj_type: &'static str,

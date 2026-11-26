@@ -9,9 +9,9 @@ use crate::fs::core::{
     resolve_fs_id, resolve_fs_ids_batch,
 };
 use crate::repository::Repositories;
+use crate::repository::activity_log;
 use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
-use infra::activity_log;
 use infra::common::util::parent_path_from;
 use infra::serialization::S_IFREG;
 

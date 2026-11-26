@@ -1736,7 +1736,7 @@ impl SyncService {
 
             // Collect activity items up-front so the batch write below runs one
             // repo lookup plus one query per (op_type, obj_type) group.
-            let items: Vec<infra::activity_log::ActivityItem> = changes
+            let items: Vec<crate::repository::activity_log::ActivityItem> = changes
                 .iter()
                 .filter_map(|c| {
                     let mut op = c.op_type;
@@ -1759,7 +1759,7 @@ impl SyncService {
                         return None;
                     }
 
-                    Some(infra::activity_log::ActivityItem {
+                    Some(crate::repository::activity_log::ActivityItem {
                         op_type: op,
                         obj_type: c.obj_type,
                         path: c.path.clone(),
@@ -1773,7 +1773,7 @@ impl SyncService {
                 .collect();
 
             if !items.is_empty() {
-                infra::activity_log::log_activity_batch(
+                crate::repository::activity_log::log_activity_batch(
                     self.db.as_ref(),
                     repo_id,
                     &target_head,

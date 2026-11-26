@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use crate::domain::permission::RepoScope;
 use crate::fs::core::trash as core;
 use crate::repository::Repositories;
+use crate::repository::activity_log;
 use base::error::AppError;
-use infra::activity_log;
 use infra::entity::deleted_repo;
 use infra::storage::DynBlockStorage;
 

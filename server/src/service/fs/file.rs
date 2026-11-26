@@ -5,9 +5,9 @@ use sea_orm::DatabaseConnection;
 use crate::fs::core::file_ops::FileOps;
 use crate::notification::events::FileLockEvent;
 use crate::repository::Repositories;
+use crate::repository::activity_log;
 use base::common::{DirEntryData, EMPTY_SHA1, FsDirData, FsFileData, SEAF_METADATA_TYPE_DIR};
 use base::error::AppError;
-use infra::activity_log;
 use infra::common::util::{basename, join_path, parent_path_from, timestamp_rfc3339};
 use infra::serialization::{S_IFDIR, S_IFREG};
 

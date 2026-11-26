@@ -647,8 +647,8 @@ async fn test_legacy_activity_detail_still_renders() {
 #[tokio::test]
 async fn test_large_group_keeps_exact_count_and_caps_details() {
     let f = TestFixture::new().await;
-    let items: Vec<infra::activity_log::ActivityItem> = (0..250)
-        .map(|i| infra::activity_log::ActivityItem {
+    let items: Vec<server::repository::activity_log::ActivityItem> = (0..250)
+        .map(|i| server::repository::activity_log::ActivityItem {
             op_type: "create",
             obj_type: "file",
             path: format!("/large-{i}.txt"),
@@ -659,7 +659,7 @@ async fn test_large_group_keeps_exact_count_and_caps_details() {
             merge_kept: false,
         })
         .collect();
-    infra::activity_log::log_activity_batch(
+    server::repository::activity_log::log_activity_batch(
         f.server.db.as_ref(),
         &f.repo_id,
         "large-activity-commit",
@@ -2056,7 +2056,7 @@ async fn concurrent_creates_are_all_aggregated() {
         let repo_id = f.repo_id.clone();
         let user_id = f.user_id;
         tasks.push(tokio::spawn(async move {
-            infra::activity_log::log_activity(
+            server::repository::activity_log::log_activity(
                 db.as_ref(),
                 &repo_id,
                 "create",

@@ -10,6 +10,7 @@
 //! SQLite database rather than mock implementations.
 
 pub mod activity;
+pub mod activity_log;
 pub mod api_key;
 pub mod api_token;
 pub mod auth_cache;
