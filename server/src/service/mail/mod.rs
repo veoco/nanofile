@@ -123,7 +123,7 @@ impl From<MailError> for AppError {
 pub struct Mailer {
     repos: Arc<Repositories>,
     cipher: Arc<TokenCipher>,
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
     /// Wakes the outbox worker the moment a message is queued, so a notification
     /// does not wait out the retry tick.
     ///
@@ -136,7 +136,7 @@ impl Mailer {
     pub fn new(
         repos: Arc<Repositories>,
         cipher: Arc<TokenCipher>,
-        config: crate::settings::RuntimeConfig,
+        config: infra::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,
@@ -331,7 +331,7 @@ impl Mailer {
     /// Tell the owner that a browser they had not used signed in.
     pub async fn notify_new_login(&self, user_id: i32, user_agent: Option<&str>, ip: &str) {
         let browser = user_agent
-            .map(crate::ui::user_agent::describe)
+            .map(base::user_agent::describe)
             .filter(|label| !label.trim().is_empty());
         let params = MailParams {
             browser,
@@ -576,8 +576,8 @@ impl Mailer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::RuntimeConfig;
     use infra::entity::email_message::Status;
+    use infra::settings::RuntimeConfig;
     use migration::MigratorTrait;
     use sea_orm::Database;
 

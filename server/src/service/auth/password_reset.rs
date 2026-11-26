@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use rand::Rng;
-use sha2::Digest;
 
 use crate::repository::Repositories;
 use crate::service::auth::password::hash_password_async;
@@ -210,9 +209,7 @@ pub fn generate_reset_token() -> (String, String) {
 
 /// Compute the SHA-256 hash of a raw token for database storage.
 pub fn hash_token(token: &str) -> String {
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
+    infra::crypto::token_hash::sha256_hex(token)
 }
 
 /// Longest user-supplied value written to one log line. An email address is at

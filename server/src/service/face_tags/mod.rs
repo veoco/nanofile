@@ -163,14 +163,14 @@ pub struct BackfillReport {
 pub struct FaceTagService {
     repos: Arc<Repositories>,
     block_store: DynBlockStorage,
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
 }
 
 impl FaceTagService {
     pub fn new(
         repos: Arc<Repositories>,
         block_store: DynBlockStorage,
-        config: crate::settings::RuntimeConfig,
+        config: infra::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,

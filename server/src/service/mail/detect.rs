@@ -7,7 +7,7 @@
 use infra::entity::api_token;
 
 use crate::domain::session_source::SessionSource;
-use crate::ui::user_agent;
+use base::user_agent;
 
 /// A stored session's source; an unrecognised value counts as a browser session — the safe
 /// direction, since a browser session is the common case and the two checks never overlap.

@@ -2,7 +2,7 @@
 //!
 //! Session and account tokens are random values stored only as SHA-256 digests,
 //! so they are not encrypted with `server.secret_key` (see
-//! [`crate::service::auth::token::hash_token`]). The key still decides whether
+//! [`infra::crypto::token_hash::sha256_hex`]). The key still decides whether
 //! they are trusted: this module stores a fingerprint of the secret in
 //! `instance_meta` and, when the fingerprint at start-up differs from the stored
 //! one, deletes every session before the listener opens. Rotating the secret

@@ -445,6 +445,7 @@ pub(crate) async fn move_entry(
     Ok(new_path)
 }
 
+#[derive(Clone)]
 pub struct FileService {
     repos: Arc<Repositories>,
     db: Arc<DatabaseConnection>,
@@ -452,7 +453,7 @@ pub struct FileService {
     indexer: Option<crate::indexer::TextIndexer>,
     scheduler: crate::service::index::IndexScheduler,
     token_manager: Arc<crate::AccessTokenManager>,
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
     notification_manager: Option<crate::notification::manager::NotificationManager>,
 }
 
@@ -464,7 +465,7 @@ impl FileService {
         indexer: Option<crate::indexer::TextIndexer>,
         scheduler: crate::service::index::IndexScheduler,
         token_manager: Arc<crate::AccessTokenManager>,
-        config: crate::settings::RuntimeConfig,
+        config: infra::settings::RuntimeConfig,
         notification_manager: Option<crate::notification::manager::NotificationManager>,
     ) -> Self {
         Self {
@@ -946,7 +947,7 @@ impl FileService {
 
         // Read access is guaranteed by the handler; `permission` distinguishes write from read-only
         // (matching seahub's FileDetailView).
-        let permission = if crate::domain::permission::check_repo_write_permission(
+        let permission = if crate::service::permission::check_repo_write_permission(
             self.repos.member.as_ref(),
             repo_id,
             user_id,
@@ -1272,7 +1273,7 @@ impl FileService {
         // someone removed while the token was still valid (up to a year) would keep reading the
         // library's locked-file paths. This path never sees `SyncAuth`, so it re-checks membership.
         if let Some(user_id) = token_user_id {
-            crate::domain::permission::check_repo_read_permission(
+            crate::service::permission::check_repo_read_permission(
                 self.repos.member.as_ref(),
                 repo_id,
                 user_id,

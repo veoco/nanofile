@@ -111,7 +111,7 @@ async fn create_upload_link_impl(
     // An upload link grants anonymous *write* access to the repo, so only
     // members with write permission may create one (a read-only member must
     // not be able to mint a link that bypasses their read-only role).
-    crate::domain::permission::check_repo_write_permission(
+    crate::service::permission::check_repo_write_permission(
         repos.member.as_ref(),
         repo_id,
         creator_id,
@@ -208,6 +208,31 @@ pub async fn delete_upload_link(
         }
     }
     Ok(())
+}
+
+/// Delete any upload link by token, for the admin page.
+///
+/// Unlike [`delete_upload_link`] this does not check the creator: an
+/// administrator may remove every link, and the upload tokens already minted
+/// from it are revoked so an exchange cannot outlive the link. Idempotent — a
+/// token that no longer resolves is already gone, reported as `Ok(false)`.
+pub async fn delete_upload_link_as_admin(
+    repos: &Repositories,
+    token: &str,
+    token_manager: Option<&Arc<crate::AccessTokenManager>>,
+) -> Result<bool, AppError> {
+    let Some(link) = repos.upload_link.find_by_token(token).await? else {
+        return Ok(false);
+    };
+    let result = repos.upload_link.delete_by_token(token).await?;
+    let deleted = result.rows_affected > 0;
+    if deleted && let Some(manager) = token_manager {
+        let revoked = manager.revoke_upload_link(link.id);
+        if revoked > 0 {
+            tracing::debug!(link_id = link.id, revoked, "revoked upload-link tokens");
+        }
+    }
+    Ok(deleted)
 }
 
 pub async fn list_upload_links_v21(

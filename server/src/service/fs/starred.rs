@@ -38,7 +38,7 @@ impl StarredService {
     ) -> Result<Vec<StarredFileEntry>, AppError> {
         let entries = self.repos.starred.find_by_user_id(user_id).await?;
         let accessible =
-            crate::domain::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
+            crate::service::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
 
         Ok(entries
             .into_iter()
@@ -74,7 +74,7 @@ impl StarredService {
         // removed from must not report its name, paths, timestamps or "deleted"
         // state. Intersect with the accessible repos (fail closed).
         let accessible =
-            crate::domain::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
+            crate::service::permission::accessible_repo_ids(&self.repos, user_id, scope).await?;
 
         // Batch-load the distinct repos (one query) and their head commits
         // (another) instead of one repo + one commit lookup per starred repo.

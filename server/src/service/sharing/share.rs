@@ -211,7 +211,7 @@ pub(crate) async fn create_share_link_impl(
         ));
     }
 
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         repos.member.as_ref(),
         repo_id,
         creator_id,
@@ -290,6 +290,22 @@ pub async fn delete_share_link(
         .delete_by_token_and_user(token, user_id)
         .await?;
     Ok(())
+}
+
+/// Delete any share link by token, for the admin page.
+///
+/// Unlike [`delete_share_link`] this does not check the creator: an administrator
+/// may remove every link. Idempotent like seahub — a token that no longer
+/// resolves is already gone, reported as `Ok(false)`.
+pub async fn delete_share_link_as_admin(
+    repos: &Repositories,
+    token: &str,
+) -> Result<bool, AppError> {
+    if repos.share_link.find_by_token(token).await?.is_none() {
+        return Ok(false);
+    }
+    let result = repos.share_link.delete_by_token(token).await?;
+    Ok(result.rows_affected > 0)
 }
 
 pub async fn create_share_link_v21(
@@ -446,11 +462,11 @@ pub async fn link_creator_may_access(
         Ok(Some(user)) if user.is_active && user.email_verified => {
             let member = repos.member.as_ref();
             if need_write {
-                crate::domain::permission::check_repo_write_permission(member, repo_id, creator_id)
+                crate::service::permission::check_repo_write_permission(member, repo_id, creator_id)
                     .await
                     .is_ok()
             } else {
-                crate::domain::permission::check_repo_read_permission(member, repo_id, creator_id)
+                crate::service::permission::check_repo_read_permission(member, repo_id, creator_id)
                     .await
                     .is_ok()
             }

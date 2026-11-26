@@ -8,9 +8,10 @@ use base::error::AppError;
 use infra::config::AuthConfig;
 use infra::entity::api_key;
 
+use crate::domain::api_key::ApiKeyBinding;
 use crate::domain::capability::{Capability, CapabilitySet, PRESETS, Preset, enforced_by};
 use crate::repository::Repositories;
-use crate::repository::api_key::{ApiKeyBinding, CreateApiKeyParams, UpdateApiKeyParams};
+use crate::repository::api_key::{CreateApiKeyParams, UpdateApiKeyParams};
 use crate::service::auth::token::generate_api_token;
 
 const MAX_NAME_LEN: usize = 255;
@@ -372,7 +373,7 @@ async fn validate_bindings(
         }
         // Read access is enough to bind: the ceiling limits the key and grants nothing,
         // and the effective permission is recomputed per request against live membership.
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             repos.member.as_ref(),
             repo_id,
             user_id,

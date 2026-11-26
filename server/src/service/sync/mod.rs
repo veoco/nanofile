@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use rand::RngExt;
 use sea_orm::DatabaseConnection;
 
+use crate::fs::core::block_verify::declared_size_matches_blocks;
 use crate::fs::core::upload_activity;
 use crate::indexer::TextIndexer;
 use crate::repository::Repositories;
@@ -75,37 +76,6 @@ fn join_sync_path(prefix: &str, name: &str) -> String {
         format!("/{name}")
     } else {
         format!("{prefix}/{name}")
-    }
-}
-
-/// PKCS7 pads every client-encrypted block to a 16-byte boundary, so one block
-/// stores between 1 and 16 bytes more than the plaintext it holds. `repo.size` is
-/// plaintext bytes, so this is the per-block bound the accounting may drift by.
-const CLIENT_BLOCK_PADDING: i128 = 16;
-
-/// Whether a regular file's declared size (the plaintext `file_data.size`) agrees
-/// with the *logical* sizes of the blocks it references.
-///
-/// An unencrypted library stores a file's bytes verbatim, so the totals must be
-/// equal. A client-side-encrypted library stores PKCS7 ciphertext blocks: the
-/// stored total is the plaintext total rounded up per block, i.e. between the
-/// declared size and that size plus [`CLIENT_BLOCK_PADDING`] per block. A check
-/// that only enforced the lower bound would still let a client declare far fewer
-/// bytes than it stores (the quota bypass); the padding bound is what closes it.
-///
-/// `pub(crate)` so `verify-blocks` applies the same rule; it used to compare the
-/// raw block total and therefore reported every encrypted library as damaged.
-pub(crate) fn declared_size_matches_blocks(
-    declared: i64,
-    stored: i128,
-    block_count: usize,
-    encrypted: bool,
-) -> bool {
-    let declared = i128::from(declared);
-    if encrypted {
-        stored >= declared && stored - declared <= CLIENT_BLOCK_PADDING * block_count as i128
-    } else {
-        stored == declared
     }
 }
 

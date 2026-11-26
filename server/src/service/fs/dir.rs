@@ -468,7 +468,7 @@ pub struct DirService {
     block_store: infra::storage::DynBlockStorage,
     /// Server config: the caller's quota (their own, or the default space quota)
     /// charges a sub-repo copy.
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
 }
 
 impl DirService {
@@ -478,7 +478,7 @@ impl DirService {
         indexer: Option<crate::indexer::TextIndexer>,
         scheduler: crate::service::index::IndexScheduler,
         block_store: infra::storage::DynBlockStorage,
-        config: crate::settings::RuntimeConfig,
+        config: infra::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,
@@ -666,35 +666,33 @@ impl DirService {
             crate::fs::core::compute_tree_size(&self.repos, repo_id, &source_dir_fs_id).await?;
 
         self.repos
-            .repo
-            .create_repo(crate::repository::repo::CreateRepoParams {
-                id: new_repo_id.clone(),
-                name: dir_name.to_string(),
-                description: String::new(),
-                owner_id: user_id,
-                encrypted: 0i8,
-                enc_version: 0i8,
-                magic: None,
-                random_key: None,
-                salt: String::new(),
-                pwd_hash: None,
-                pwd_hash_algo: None,
-                pwd_hash_params: None,
-                permission: "rw".to_string(),
-                created_at: now,
-                updated_at: now,
-                r#type: "repo".to_string(),
-            })
-            .await?;
-
-        self.repos
-            .member
-            .create_member(crate::repository::member::CreateMemberParams {
-                repo_id: new_repo_id.clone(),
-                user_id,
-                permission: "rw".to_string(),
-                created_at: now,
-            })
+            .provisioning
+            .create_repo_with_owner(
+                crate::repository::repo::CreateRepoParams {
+                    id: new_repo_id.clone(),
+                    name: dir_name.to_string(),
+                    description: String::new(),
+                    owner_id: user_id,
+                    encrypted: 0i8,
+                    enc_version: 0i8,
+                    magic: None,
+                    random_key: None,
+                    salt: String::new(),
+                    pwd_hash: None,
+                    pwd_hash_algo: None,
+                    pwd_hash_params: None,
+                    permission: "rw".to_string(),
+                    created_at: now,
+                    updated_at: now,
+                    r#type: "repo".to_string(),
+                },
+                crate::repository::member::CreateMemberParams {
+                    repo_id: new_repo_id.clone(),
+                    user_id,
+                    permission: "rw".to_string(),
+                    created_at: now,
+                },
+            )
             .await?;
 
         let default_quota = self.config.get().storage.default_user_quota_bytes;

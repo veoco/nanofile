@@ -12,7 +12,7 @@ use infra::serialization::S_IFDIR;
 /// addressed by a path-derived hex `record_id`, so no record table is needed.
 pub struct MetadataService {
     repos: Arc<Repositories>,
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
 }
 
 struct FileInfo {
@@ -22,7 +22,7 @@ struct FileInfo {
 }
 
 impl MetadataService {
-    pub fn new(repos: Arc<Repositories>, config: crate::settings::RuntimeConfig) -> Self {
+    pub fn new(repos: Arc<Repositories>, config: infra::settings::RuntimeConfig) -> Self {
         Self { repos, config }
     }
 

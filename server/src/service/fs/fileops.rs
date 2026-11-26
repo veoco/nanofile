@@ -3,15 +3,15 @@ use std::sync::Arc;
 use sea_orm::DatabaseConnection;
 
 use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::quota::QuotaGuard;
 use crate::repository::Repositories;
-use crate::service::fs::quota::QuotaGuard;
 use crate::service::index::{IndexScheduler, IndexTarget};
-use crate::settings::RuntimeConfig;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
 use infra::common::util::{generate_unique_filename, join_path};
 use infra::serialization::S_IFDIR;
+use infra::settings::RuntimeConfig;
 
 pub fn parse_file_names(s: &str) -> Vec<String> {
     if s.is_empty() {

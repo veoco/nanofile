@@ -1,5 +1,4 @@
 use rand::Rng;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -39,7 +38,7 @@ pub(crate) async fn validate_sync_token_record(
     if expected_repo.is_some_and(|repo_id| record.repo_id != repo_id) {
         return Ok(SyncTokenValidity::RepoMismatch);
     }
-    if crate::middleware::auth::is_token_expired(record.expires_at) {
+    if crate::domain::token::is_token_expired(record.expires_at) {
         return Ok(SyncTokenValidity::Expired);
     }
     Ok(
@@ -88,7 +87,7 @@ pub async fn ensure_sync_token_for(
     peer: Option<&PeerStamp>,
     sync_token_ttl_days: u64,
 ) -> Result<String, AppError> {
-    crate::domain::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
+    crate::service::permission::check_repo_read_permission(repos.member.as_ref(), repo_id, user_id)
         .await?;
 
     let mut tokens = ensure_sync_tokens_for_repos(
@@ -283,9 +282,7 @@ pub fn generate_backup_code() -> String {
 /// Tokens are 160-bit random values, so a fast hash suffices — the purpose is only
 /// to keep raw tokens out of a leaked database, which is infeasible to invert.
 pub fn hash_token(token: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hex::encode(hasher.finalize())
+    infra::crypto::token_hash::sha256_hex(token)
 }
 
 /// Revoke every credential for a user, optionally keeping the acting session.

@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use crate::domain::permission::{RepoScope, accessible_repo_ids};
+use crate::domain::permission::RepoScope;
 use crate::repository::Repositories;
+use crate::service::permission::accessible_repo_ids;
 use base::error::AppError;
 use infra::common::EMPTY_SHA1;
 use infra::serialization::S_IFDIR;

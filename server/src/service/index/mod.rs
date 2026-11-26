@@ -129,7 +129,7 @@ pub struct IndexService {
     indexer: TextIndexer,
     /// The live snapshot: `[ocr]` can be switched on without a restart, and the
     /// next backfill pass picks existing images up.
-    config: crate::settings::RuntimeConfig,
+    config: infra::settings::RuntimeConfig,
 }
 
 impl IndexService {
@@ -137,7 +137,7 @@ impl IndexService {
         repos: Arc<Repositories>,
         block_store: DynBlockStorage,
         indexer: TextIndexer,
-        config: crate::settings::RuntimeConfig,
+        config: infra::settings::RuntimeConfig,
     ) -> Self {
         Self {
             repos,

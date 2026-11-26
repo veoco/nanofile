@@ -727,16 +727,17 @@ impl RepoService {
             updated_at: now,
             r#type: "repo".to_string(),
         };
-        let created = repos.repo.create_repo(params).await?;
-
-        repos
-            .member
-            .create_member(crate::repository::member::CreateMemberParams {
-                repo_id: repo_id.clone(),
-                user_id,
-                permission: "rw".to_string(),
-                created_at: now,
-            })
+        let created = repos
+            .provisioning
+            .create_repo_with_owner(
+                params,
+                crate::repository::member::CreateMemberParams {
+                    repo_id: repo_id.clone(),
+                    user_id,
+                    permission: "rw".to_string(),
+                    created_at: now,
+                },
+            )
             .await?;
 
         // Issue the repository's sync token, attributed to the creating device
@@ -964,25 +965,26 @@ impl RepoService {
             return Err(AppError::Forbidden);
         }
 
-        // Record the trash entry before the cascade-delete: it is what makes the
-        // archive reachable and keeps GC from reclaiming the library's blocks.
-        crate::fs::core::trash::add_deleted_repo(
-            repos,
-            repo_id,
-            &r.name,
-            r.head_commit_id.as_deref(),
-            r.owner_id,
-            r.size,
-        )
-        .await?;
-
         // Log the deletion before the repo row goes away.
         activity_log::log_activity(
             db, repo_id, "delete", "repo", "/", user_id, None, None, None, None, None,
         )
         .await;
 
-        crate::fs::core::repo_archive::archive_and_delete(db, repo_id).await?;
+        // The trash entry and the archive/delete are one transaction: a failure
+        // cannot leave the library gone without the row that makes it restorable.
+        crate::fs::core::repo_archive::archive_and_delete(
+            db,
+            repo_id,
+            &crate::fs::core::repo_archive::DeletedRepoRecord {
+                repo_name: &r.name,
+                head_id: r.head_commit_id.as_deref(),
+                owner_id: r.owner_id,
+                size: r.size,
+                del_time: chrono::Utc::now().timestamp(),
+            },
+        )
+        .await?;
 
         // The library no longer contributes to `SUM(repos.size)`; drop the owner's
         // cached total and any reservations keyed to a library that is now gone.
@@ -1079,7 +1081,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // The link carries a scoped token: check write permission before minting it.
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             repos.member.as_ref(),
             repo_id,
             user_id,
@@ -1120,7 +1122,7 @@ impl RepoService {
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         // The link carries a scoped token, so write permission is checked first.
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             repos.member.as_ref(),
             repo_id,
             user_id,

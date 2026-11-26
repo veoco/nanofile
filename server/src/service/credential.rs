@@ -12,8 +12,8 @@ use std::sync::Arc;
 use crate::domain::permission::RepoScope;
 use crate::domain::session_source::SessionSource;
 use crate::repository::Repositories;
-use crate::ui::user_agent;
 use base::error::AppError;
+use base::user_agent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialKind {

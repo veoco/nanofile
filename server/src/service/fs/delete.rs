@@ -13,10 +13,10 @@ use std::collections::HashSet;
 
 use crate::fs::core::RepoHead;
 use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::quota::QuotaGuard;
 use crate::fs::core::trash::{TrashItem, add_batch_to_trash, add_to_trash};
 use crate::fs::core::{compute_tree_size_and_files, repo_head};
 use crate::repository::Repositories;
-use crate::service::fs::quota::QuotaGuard;
 use base::error::AppError;
 use infra::common::util::join_path;
 

@@ -7,8 +7,8 @@
 //! status mapping (401 for REST/WebDAV, 403 for sync) and their scope checks.
 
 use crate::AppState;
+use crate::domain::api_key::ApiKeyLookup;
 use crate::domain::api_key::KeyAuthority;
-use crate::repository::api_key::ApiKeyLookup;
 
 /// Why a presented key is not usable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub(crate) struct ApiKeySession {
 /// credential lookups keep that concurrency. Callers record usage themselves
 /// with [`note_key_usage`] once the request is authenticated.
 pub(crate) fn session_from_lookup(lookup: ApiKeyLookup) -> Result<ApiKeySession, ApiKeyFailure> {
-    if crate::middleware::auth::is_token_expired(lookup.key.expires_at) {
+    if crate::domain::token::is_token_expired(lookup.key.expires_at) {
         return Err(ApiKeyFailure::Expired);
     }
     let authority = KeyAuthority::from_lookup(&lookup).map_err(|error| {

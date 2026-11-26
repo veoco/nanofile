@@ -3,12 +3,12 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
 use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::quota::QuotaGuard;
 use crate::fs::core::{
     read_fs_dir_data_batch, read_fs_file_data, read_fs_file_data_batch, resolve_dir_fs_id,
     resolve_fs_id, resolve_fs_ids_batch,
 };
 use crate::repository::Repositories;
-use crate::service::fs::quota::QuotaGuard;
 use base::common::{EMPTY_SHA1, FsFileData};
 use base::error::AppError;
 use infra::activity_log;
