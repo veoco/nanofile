@@ -9,12 +9,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::fs::core::trash;
 use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
+use crate::service::fs::trash as trash_service;
 use base::error::AppError;
-use infra::activity_log;
 use infra::common::util::timestamp_rfc3339;
 
 #[derive(Deserialize)]
@@ -68,8 +67,9 @@ pub async fn list_trash2(
     let page = query.page.unwrap_or(1);
     let per_page = query.per_page.unwrap_or(50);
 
-    let result =
-        serde_json::to_value(trash::list_trash2(&state.repos, repo_id, page, per_page).await?)?;
+    let result = serde_json::to_value(
+        trash_service::list_trash2(&state.repos, repo_id, page, per_page).await?,
+    )?;
 
     Ok(Json(result))
 }
@@ -85,7 +85,7 @@ pub async fn search_trash(
     let per_page = query.per_page.unwrap_or(50);
 
     let result = serde_json::to_value(
-        trash::search_trash(
+        trash_service::search_trash(
             state.db.as_ref(),
             repo_id,
             query.q.as_deref().unwrap_or(""),
@@ -110,7 +110,7 @@ pub async fn revert_trash(
     let repo_id = &access.repo_id;
 
     let result = serde_json::to_value(
-        trash::restore_trash_items(
+        trash_service::restore_trash_items(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -153,7 +153,7 @@ pub async fn revert_dirents(
     };
 
     let result = serde_json::to_value(
-        trash::restore_dirents(
+        trash_service::restore_dirents(
             state.db.as_ref(),
             &state.repos,
             repo_id,
@@ -178,22 +178,14 @@ pub async fn clean_trash(
 
     let keep_days = parse_clean_trash_body(req).await?;
 
-    trash::clean_trash(&state.repos, repo_id, keep_days).await?;
-
-    activity_log::log_activity(
+    trash_service::clean_trash(
         state.db.as_ref(),
+        &state.repos,
         repo_id,
-        "clean-up-trash",
-        "repo",
-        "/",
         access.user.user_id,
-        None,
-        None,
-        None,
-        None,
         keep_days,
     )
-    .await;
+    .await?;
 
     Ok(ok_json())
 }
@@ -216,7 +208,7 @@ pub async fn list_trash(
     let limit = query.limit.unwrap_or(50);
 
     let result = serde_json::to_value(
-        trash::list_trash_cursor(&state.repos, repo_id, query.cursor, limit).await?,
+        trash_service::list_trash_cursor(&state.repos, repo_id, query.cursor, limit).await?,
     )?;
 
     Ok(Json(result))
@@ -229,7 +221,8 @@ pub async fn list_deleted_repos(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let repos = trash::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope()).await?;
+    let repos =
+        trash_service::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope()).await?;
 
     let owner_name = state
         .repos
@@ -276,7 +269,7 @@ pub async fn restore_deleted_repo(
     // checks that the caller is its owner, so only the key ceiling belongs here.
     auth.ensure_repo_allowed(&repo_id, true)?;
 
-    trash::restore_deleted_repo(
+    trash_service::restore_deleted_repo(
         state.db.as_ref(),
         &state.repos,
         &repo_id,
@@ -295,7 +288,7 @@ pub async fn purge_deleted_repo(
     State(state): State<Arc<AppState>>,
     Path(repo_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    trash::purge_deleted_repo(
+    trash_service::purge_deleted_repo(
         state.db.as_ref(),
         &state.repos,
         &state.block_store,
@@ -315,14 +308,14 @@ pub async fn purge_deleted_repos(
     // The service can only see the library ids; resolve which of them this
     // credential may write to before handing over the set.
     let writable: std::collections::HashSet<String> =
-        trash::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope())
+        trash_service::list_deleted_repos(&state.repos, auth.user_id, &auth.repo_scope())
             .await?
             .into_iter()
             .filter(|row| auth.ensure_repo_allowed(&row.repo_id, true).is_ok())
             .map(|row| row.repo_id)
             .collect();
 
-    let purged = trash::purge_deleted_repos_of_owner(
+    let purged = trash_service::purge_deleted_repos_of_owner(
         state.db.as_ref(),
         &state.repos,
         &state.block_store,

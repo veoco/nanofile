@@ -43,7 +43,6 @@ const ALLOWED = [
     to: "fs",
     files: [
       "handler/sync/",
-      "handler/trash.rs",
       "handler/web/share_view.rs",
       "handler/web/upload.rs",
       "handler/web/zip_download.rs",

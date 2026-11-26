@@ -10,6 +10,7 @@ pub(crate) mod scratch;
 pub mod search;
 pub mod starred;
 pub mod thumbnail;
+pub mod trash;
 
 /// Error for a failed parent-directory resolution on a write path.
 ///
