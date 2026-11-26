@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use sea_orm::{DatabaseConnection, EntityTrait, ModelTrait, Set};
 use std::sync::Arc;
 
-use crate::service::auth::token::hash_token;
 use base::error::AppError;
+use infra::crypto::token_hash::sha256_hex;
 use infra::entity::client_login_token;
 
 pub struct CreateClientLoginTokenParams {
@@ -53,7 +53,7 @@ impl ClientLoginTokenRepository for DbClientLoginTokenRepository {
         use sea_orm::QueryFilter;
 
         Ok(client_login_token::Entity::find()
-            .filter(client_login_token::Column::Token.eq(hash_token(token)))
+            .filter(client_login_token::Column::Token.eq(sha256_hex(token)))
             .one(self.db.as_ref())
             .await?)
     }
@@ -69,7 +69,7 @@ impl ClientLoginTokenRepository for DbClientLoginTokenRepository {
     ) -> Result<client_login_token::Model, AppError> {
         let token = params.token.clone();
         client_login_token::Entity::insert(client_login_token::ActiveModel {
-            token: Set(hash_token(&params.token)),
+            token: Set(sha256_hex(&params.token)),
             username: Set(params.username),
             created_at: Set(params.created_at),
         })

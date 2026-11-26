@@ -1,7 +1,13 @@
 //! Repository traits and implementations for data access.
 //!
-//! Each module defines a trait interface and a `Db*` implementation over SeaORM queries, which
-//! decouples service code from the persistence framework and lets business logic be tested with mocks.
+//! Each module defines a trait interface and a `Db*` implementation over SeaORM
+//! queries. The traits let decorators (the auth caches) and narrow transactional
+//! aggregates (`history_prune`, `provisioning`, `head_commit`) share one
+//! interface, and they keep service code off SeaORM types.
+//!
+//! This is not the only database path: `fs` owns the multi-table tree operations
+//! that need a transaction over commits and file objects. Tests run against a real
+//! SQLite database rather than mock implementations.
 
 pub mod activity;
 pub mod api_key;
@@ -19,6 +25,7 @@ pub mod file_tag;
 pub mod file_trash;
 pub mod fs_object;
 pub mod gc_state;
+pub mod head_commit;
 pub mod history_prune;
 pub mod invitation_code;
 pub mod job_run;
@@ -28,6 +35,7 @@ pub mod metadata_config;
 pub mod metadata_record;
 pub mod password_reset_token;
 pub mod pending_block;
+pub mod provisioning;
 pub mod repo;
 pub mod repo_tag;
 pub mod s2fa_token;
@@ -63,6 +71,7 @@ use crate::repository::file_tag::*;
 use crate::repository::file_trash::*;
 use crate::repository::fs_object::*;
 use crate::repository::gc_state::*;
+use crate::repository::head_commit::*;
 use crate::repository::history_prune::*;
 use crate::repository::invitation_code::*;
 use crate::repository::job_run::*;
@@ -72,6 +81,7 @@ use crate::repository::metadata_config::*;
 use crate::repository::metadata_record::*;
 use crate::repository::password_reset_token::*;
 use crate::repository::pending_block::*;
+use crate::repository::provisioning::*;
 use crate::repository::repo::*;
 use crate::repository::repo_tag::*;
 use crate::repository::s2fa_token::*;
@@ -93,6 +103,10 @@ pub struct Repositories {
     pub repo: Arc<dyn RepoRepository>,
     pub member: Arc<dyn MemberRepository>,
     pub commit: Arc<dyn CommitRepository>,
+    /// Inserts a library and its owner membership in one transaction.
+    pub provisioning: Arc<dyn RepoProvisioningRepository>,
+    /// Inserts a commit and moves HEAD in one transaction.
+    pub head_commit: Arc<dyn HeadCommitRepository>,
     /// Deletes the commit and file-object rows of one history prune in one
     /// transaction, so a crash cannot leave commits pointing at removed objects.
     pub history_prune: Arc<dyn HistoryPruneRepository>,
@@ -162,6 +176,8 @@ impl Repositories {
             repo: Arc::new(DbRepoRepository::new(db.clone())),
             member: Arc::new(DbMemberRepository::new(db.clone())),
             commit: Arc::new(DbCommitRepository::new(db.clone())),
+            provisioning: Arc::new(DbRepoProvisioningRepository::new(db.clone())),
+            head_commit: Arc::new(DbHeadCommitRepository::new(db.clone())),
             history_prune: Arc::new(DbHistoryPruneRepository::new(db.clone())),
             share_link: Arc::new(DbShareLinkRepository::new(db.clone())),
             starred: Arc::new(DbStarredRepository::new(db.clone())),

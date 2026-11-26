@@ -107,7 +107,7 @@ impl DbApiTokenRepository {
 impl ApiTokenRepository for DbApiTokenRepository {
     async fn find_by_token(&self, token: &str) -> Result<Option<api_token::Model>, AppError> {
         Ok(api_token::Entity::find()
-            .filter(api_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
+            .filter(api_token::Column::Token.eq(infra::crypto::token_hash::sha256_hex(token)))
             .one(self.db.as_ref())
             .await?)
     }
@@ -152,7 +152,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
 
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError> {
         api_token::Entity::delete_many()
-            .filter(api_token::Column::Token.eq(crate::service::auth::token::hash_token(token)))
+            .filter(api_token::Column::Token.eq(infra::crypto::token_hash::sha256_hex(token)))
             .exec(self.db.as_ref())
             .await?;
         Ok(())
@@ -207,7 +207,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
         keep_raw_token: &str,
     ) -> Result<(), AppError> {
         // Tokens are stored hashed; exclude the current session by its hash.
-        let keep_hash = crate::service::auth::token::hash_token(keep_raw_token);
+        let keep_hash = infra::crypto::token_hash::sha256_hex(keep_raw_token);
         api_token::Entity::delete_many()
             .filter(api_token::Column::UserId.eq(user_id))
             .filter(api_token::Column::Token.ne(keep_hash))
@@ -258,7 +258,7 @@ impl ApiTokenRepository for DbApiTokenRepository {
         let model = api_token::ActiveModel {
             id: sea_orm::NotSet,
             user_id: Set(params.user_id),
-            token: Set(crate::service::auth::token::hash_token(&params.token)),
+            token: Set(infra::crypto::token_hash::sha256_hex(&params.token)),
             created_at: Set(params.created_at),
             expires_at: Set(params.expires_at),
             device_id: Set(params.device_id),

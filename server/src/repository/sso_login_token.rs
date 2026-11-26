@@ -2,9 +2,9 @@ use async_trait::async_trait;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 use std::sync::Arc;
 
-use crate::service::auth::token::hash_token;
 use base::error::AppError;
 use infra::crypto::token_encryption::TokenCipher;
+use infra::crypto::token_hash::sha256_hex;
 use infra::entity::sso_login_token;
 
 pub struct CreateSsoLoginTokenParams {
@@ -53,7 +53,7 @@ impl DbSsoLoginTokenRepository {
 impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
     async fn find_by_token(&self, token: &str) -> Result<Option<sso_login_token::Model>, AppError> {
         let record = sso_login_token::Entity::find()
-            .filter(sso_login_token::Column::Token.eq(hash_token(token)))
+            .filter(sso_login_token::Column::Token.eq(sha256_hex(token)))
             .one(self.db.as_ref())
             .await?;
 
@@ -89,7 +89,7 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
     ) -> Result<sso_login_token::Model, AppError> {
         let model = sso_login_token::ActiveModel {
             id: sea_orm::NotSet,
-            token: Set(hash_token(&params.token)),
+            token: Set(sha256_hex(&params.token)),
             platform: Set(params.platform),
             device_id: Set(params.device_id),
             device_name: Set(params.device_name),
@@ -113,7 +113,7 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
                 accessed_at: Set(Some(accessed_at)),
                 ..Default::default()
             })
-            .filter(sso_login_token::Column::Token.eq(hash_token(token)))
+            .filter(sso_login_token::Column::Token.eq(sha256_hex(token)))
             .exec(self.db.as_ref())
             .await?;
         Ok(())
@@ -127,16 +127,14 @@ impl SsoLoginTokenRepository for DbSsoLoginTokenRepository {
                 api_token: Set(Some(self.token_cipher.encrypt(api_token))),
                 ..Default::default()
             })
-            .filter(sso_login_token::Column::Token.eq(hash_token(token)))
+            .filter(sso_login_token::Column::Token.eq(sha256_hex(token)))
             .exec(self.db.as_ref())
             .await?;
         Ok(())
     }
     async fn delete_by_token(&self, token: &str) -> Result<(), AppError> {
         sso_login_token::Entity::delete_many()
-            .filter(
-                sso_login_token::Column::Token.eq(crate::service::auth::token::hash_token(token)),
-            )
+            .filter(sso_login_token::Column::Token.eq(sha256_hex(token)))
             .exec(self.db.as_ref())
             .await?;
         Ok(())

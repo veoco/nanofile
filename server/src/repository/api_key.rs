@@ -14,21 +14,10 @@ use std::sync::Arc;
 use base::error::AppError;
 use infra::entity::{api_key, api_key_repo};
 
+use crate::domain::api_key::{ApiKeyBinding, ApiKeyLookup};
+
 /// SQLite binds at most ~999 parameters per statement.
 const IN_BATCH: usize = 500;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ApiKeyBinding {
-    pub repo_id: String,
-    /// Read/write ceiling for this library: `"r"` or `"rw"`.
-    pub permission: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct ApiKeyLookup {
-    pub key: api_key::Model,
-    pub bindings: Vec<api_key_repo::Model>,
-}
 
 pub struct CreateApiKeyParams {
     pub user_id: i32,
@@ -139,7 +128,7 @@ impl DbApiKeyRepository {
 #[async_trait]
 impl ApiKeyRepository for DbApiKeyRepository {
     async fn find_by_presented(&self, raw: &str) -> Result<Option<ApiKeyLookup>, AppError> {
-        let key_hash = crate::service::auth::token::hash_token(raw);
+        let key_hash = infra::crypto::token_hash::sha256_hex(raw);
         let Some(key) = api_key::Entity::find()
             .filter(api_key::Column::KeyHash.eq(key_hash))
             .one(self.db.as_ref())

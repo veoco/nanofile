@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, ExprTrait, FromQueryResult,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, ExprTrait,
+    FromQueryResult, QueryFilter, QueryOrder, QuerySelect, Set,
 };
 use std::sync::Arc;
 
@@ -161,6 +161,37 @@ fn normalized_updated_at(updated_at: i64) -> i64 {
     } else {
         updated_at
     }
+}
+
+/// Compare-and-swap HEAD and apply `size_delta` on any connection.
+///
+/// Shared with [`crate::repository::head_commit`], which needs the same statement
+/// inside the transaction that inserts the commit row.
+pub(crate) async fn advance_head_and_size_in<C: ConnectionTrait>(
+    conn: &C,
+    repo_id: &str,
+    from: Option<&str>,
+    to: &str,
+    updated_at: i64,
+    size_delta: i64,
+) -> Result<bool, AppError> {
+    let mut query = repo::Entity::update_many()
+        .filter(repo::Column::Id.eq(repo_id))
+        .set(repo::ActiveModel {
+            head_commit_id: Set(Some(to.to_string())),
+            updated_at: Set(normalized_updated_at(updated_at)),
+            ..Default::default()
+        })
+        .col_expr(
+            repo::Column::Size,
+            Expr::cust_with_values("MAX(0, size + ?)", [size_delta]),
+        );
+    query = match from {
+        Some(head) => query.filter(repo::Column::HeadCommitId.eq(head)),
+        None => query.filter(repo::Column::HeadCommitId.is_null()),
+    };
+    let result = query.exec(conn).await?;
+    Ok(result.rows_affected == 1)
 }
 
 #[async_trait]
@@ -325,23 +356,7 @@ impl RepoRepository for DbRepoRepository {
         updated_at: i64,
         size_delta: i64,
     ) -> Result<bool, AppError> {
-        let mut query = repo::Entity::update_many()
-            .filter(repo::Column::Id.eq(repo_id))
-            .set(repo::ActiveModel {
-                head_commit_id: Set(Some(to.to_string())),
-                updated_at: Set(normalized_updated_at(updated_at)),
-                ..Default::default()
-            })
-            .col_expr(
-                repo::Column::Size,
-                Expr::cust_with_values("MAX(0, size + ?)", [size_delta]),
-            );
-        query = match from {
-            Some(head) => query.filter(repo::Column::HeadCommitId.eq(head)),
-            None => query.filter(repo::Column::HeadCommitId.is_null()),
-        };
-        let result = query.exec(self.db.as_ref()).await?;
-        Ok(result.rows_affected == 1)
+        advance_head_and_size_in(self.db.as_ref(), repo_id, from, to, updated_at, size_delta).await
     }
 
     async fn delete_by_id(&self, repo_id: &str) -> Result<(), AppError> {

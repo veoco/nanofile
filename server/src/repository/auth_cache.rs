@@ -19,11 +19,10 @@ use async_trait::async_trait;
 use base::error::AppError;
 use infra::entity::{api_key, api_token, sync_token};
 
+use crate::domain::api_key::{ApiKeyBinding, ApiKeyLookup};
 use crate::domain::device::PeerStamp;
 
-use super::api_key::{
-    ApiKeyBinding, ApiKeyLookup, ApiKeyRepository, CreateApiKeyParams, UpdateApiKeyParams,
-};
+use super::api_key::{ApiKeyRepository, CreateApiKeyParams, UpdateApiKeyParams};
 use super::api_token::{ApiTokenRepository, CreateSessionTokenParams};
 use super::sync_token::SyncTokenRepository;
 
