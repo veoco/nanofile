@@ -37,6 +37,15 @@ cargo nextest run -p server --test media -E 'test(/face_tags/)'
 node --test "server/frontend/**/*.test.js"
 ```
 
+## 源码卫生
+
+```bash
+node tools/check-comments.mjs
+node tools/check-layering.mjs --report
+```
+
+注释检查拒绝乱码与无法渲染的模块文档；分层守卫按[架构](/zh/dev/architecture)的规则拒绝非法的模块依赖方向，`--report` 会打印已知债务基线，严格模式同样会执行它。
+
 ## 浏览器端到端
 
 e2e 在真实浏览器里驱动一个真实服务器。先构建 debug 二进制，因为测试会启动它：

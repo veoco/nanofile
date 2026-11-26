@@ -46,6 +46,18 @@ cargo nextest run -p server --test media -E 'test(/face_tags/)'
 node --test "server/frontend/**/*.test.js"
 ```
 
+## Source hygiene
+
+```bash
+node tools/check-comments.mjs
+node tools/check-layering.mjs --report
+```
+
+The comment checker rejects mojibake and module docs that would not render. The
+layering guard fails on a module dependency direction forbidden by
+[Architecture](/dev/architecture); `--report` prints the known-debt baseline that
+the strict run also enforces.
+
 ## Browser end-to-end
 
 The e2e runner drives a real server in a browser. Build the debug binary first,
