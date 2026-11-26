@@ -24,8 +24,8 @@ const RULES = {
   tasks: ["handler", "ui", "webdav", "middleware", "app", "routes"],
   handler: ["repository", "sandbox", "app", "routes"],
   middleware: ["handler", "ui", "webdav", "tasks", "sandbox", "app", "routes"],
-  ui: ["handler", "app", "routes"],
-  webdav: ["handler", "ui", "app", "routes"],
+  ui: ["handler", "repository", "tasks", "sandbox", "fs", "app", "routes"],
+  webdav: ["handler", "ui", "repository", "app", "routes"],
   settings: ["handler", "ui", "webdav", "middleware", "app", "routes"],
 };
 
@@ -64,20 +64,48 @@ const ALLOWED = [
   },
 ];
 
-// Known debt: current violations that a later change removes. A file listed here
-// may keep the edge; any file NOT listed fails. Remove entries as they are fixed.
-const DEBT = {
-  repository: [],
-  domain: [],
-  fs: [],
-  sandbox: [],
-  service: [],
-  tasks: [],
-  handler: [],
-  middleware: [],
-  ui: [],
-  webdav: [],
-};
+// Known debt: existing cross-layer edges that a later change removes. Each entry
+// names one direction and the files that may keep it; any file not listed fails,
+// so the debt cannot grow. Entries whose files stop hitting the edge are printed
+// as stale by `--report` and are safe to delete.
+const DEBT = [
+  {
+    from: "ui",
+    to: "repository",
+    files: [
+      "ui/admintasks.rs",
+      "ui/auth.rs",
+      "ui/client_login.rs",
+      "ui/files.rs",
+      "ui/left_panel_cache.rs",
+    ],
+    reason: "pages read the rows they render; drain them behind services page by page",
+  },
+  {
+    from: "ui",
+    to: "tasks",
+    files: ["ui/admintasks.rs"],
+    reason: "the sysadmin task pages read the job registry and run history directly",
+  },
+  {
+    from: "ui",
+    to: "fs",
+    files: ["ui/files.rs", "ui/trash.rs"],
+    reason: "the file page and the trash page read the tree through the filesystem engine",
+  },
+  {
+    from: "ui",
+    to: "sandbox",
+    files: ["ui/system_settings.rs"],
+    reason: "the settings page runs the sandbox probe",
+  },
+  {
+    from: "webdav",
+    to: "repository",
+    files: ["webdav/handlers.rs", "webdav/util.rs"],
+    reason: "the WebDAV tree helpers read repository rows",
+  },
+];
 
 const TOP_LEVEL = new Set([
   "app", "body_limit", "console", "desktop", "domain", "face_tags", "filters", "fs",
@@ -88,6 +116,7 @@ const TOP_LEVEL = new Set([
 
 const violations = [];
 const debtHits = new Set();
+const debtHitEntries = new Set();
 
 function walk(dir) {
   const out = [];
@@ -208,10 +237,12 @@ for (const file of walk(SERVER_SRC)) {
       if (!denied) continue;
       const allowed = ALLOWED.some((a) => a.from === from && a.to === to && matchesAny(rel, a.files));
       if (allowed) continue;
-      const debtKey = `${from}->${to}`;
-      const inDebt = (DEBT[from] ?? []).some((p) => matchesAny(rel, [p]));
-      if (inDebt) {
-        debtHits.add(`${debtKey} ${rel}`);
+      const debtIndex = DEBT.findIndex(
+        (d) => d.from === from && d.to === to && matchesAny(rel, d.files),
+      );
+      if (debtIndex >= 0) {
+        debtHits.add(`${from} -> ${to} ${rel}`);
+        debtHitEntries.add(debtIndex);
         continue;
       }
       violations.push({ file: rel, line: i + 1, from, to, text: line.trim() });
@@ -222,6 +253,15 @@ for (const file of walk(SERVER_SRC)) {
 if (process.argv.includes("--report")) {
   console.log(`Known debt (${debtHits.size} edges):`);
   for (const hit of [...debtHits].sort()) console.log(`  ${hit}`);
+  const stale = DEBT.map((entry, index) => ({ entry, index })).filter(
+    ({ index }) => !debtHitEntries.has(index),
+  );
+  if (stale.length) {
+    console.log(`Stale debt entries (${stale.length}) - remove them:`);
+    for (const { entry } of stale) {
+      console.log(`  ${entry.from} -> ${entry.to}: ${entry.files.join(", ")}`);
+    }
+  }
 }
 
 if (violations.length) {
