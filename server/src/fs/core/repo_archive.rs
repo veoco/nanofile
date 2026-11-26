@@ -93,14 +93,45 @@ pub async fn drop_archive<C: ConnectionTrait>(conn: &C, repo_id: &str) -> Result
     Ok(removed)
 }
 
-/// Archive a library's content and delete its rows in one transaction.
-/// A crash cannot leave a library deleted with its content unarchived, and the
-/// `repos` delete cascades into shares, upload links, tags, metadata and WebDAV
-/// keys: a trashed library is reachable by none of them. Callers only have to
-/// flush the cached sync tokens afterwards.
-pub async fn archive_and_delete(db: &DatabaseConnection, repo_id: &str) -> Result<u64, AppError> {
+/// The trash entry written in the same transaction as the delete. The row has to
+/// exist before the library row disappears, or the archive it points at becomes
+/// unreachable and GC may reclaim blocks a restore would need.
+pub struct DeletedRepoRecord<'a> {
+    pub repo_name: &'a str,
+    pub head_id: Option<&'a str>,
+    pub owner_id: i32,
+    pub size: i64,
+    pub del_time: i64,
+}
+
+/// Archive a library's content, record it in the trash and delete its rows in one
+/// transaction. A crash cannot leave a library deleted with its content
+/// unarchived or without a trash entry, and the `repos` delete cascades into
+/// shares, upload links, tags, metadata and WebDAV keys: a trashed library is
+/// reachable by none of them. Callers only have to flush the cached sync tokens
+/// afterwards.
+pub async fn archive_and_delete(
+    db: &DatabaseConnection,
+    repo_id: &str,
+    deleted: &DeletedRepoRecord<'_>,
+) -> Result<u64, AppError> {
     upload_activity::touch(repo_id);
     let txn = db.begin().await?;
+    txn.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Sqlite,
+        "INSERT OR IGNORE INTO deleted_repos \
+         (repo_id, repo_name, head_id, owner_id, size, del_time) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+        vec![
+            repo_id.to_owned().into(),
+            deleted.repo_name.to_owned().into(),
+            deleted.head_id.map(str::to_owned).into(),
+            deleted.owner_id.into(),
+            deleted.size.into(),
+            deleted.del_time.into(),
+        ],
+    ))
+    .await?;
     let archived = copy_to(&txn, repo_id).await?;
     for sql in [
         "DELETE FROM commits WHERE repo_id = $1",
@@ -284,7 +315,22 @@ mod tests {
     async fn archive_and_delete_removes_the_library_and_keeps_its_content() {
         let db = setup().await;
 
-        assert_eq!(archive_and_delete(&db, "repo-1").await.unwrap(), 2);
+        assert_eq!(
+            archive_and_delete(
+                &db,
+                "repo-1",
+                &DeletedRepoRecord {
+                    repo_name: "library",
+                    head_id: Some("c1"),
+                    owner_id: 1,
+                    size: 0,
+                    del_time: 5,
+                }
+            )
+            .await
+            .unwrap(),
+            2
+        );
 
         // The library is gone, together with everything that pointed at it.
         assert_eq!(count(&db, "repos").await, 0);
@@ -292,6 +338,9 @@ mod tests {
         assert_eq!(count(&db, "fs_objects").await, 0);
         assert_eq!(count(&db, "repo_members").await, 0);
         assert_eq!(count(&db, "sync_tokens").await, 0);
+        // The trash entry is part of the same transaction, so the library is
+        // restorable the moment its rows disappear.
+        assert_eq!(count(&db, "deleted_repos").await, 1);
 
         // ... and its content is in the archive, ready for a restore.
         assert_eq!(count(&db, "deleted_repo_commits").await, 1);

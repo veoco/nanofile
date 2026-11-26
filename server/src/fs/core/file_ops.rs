@@ -984,19 +984,14 @@ impl FileOps {
             1,
             now,
         );
-        repos.commit.insert(commit_model).await?;
-
-        let commit_id_clone = commit_id.clone();
-
-        // Move HEAD only while it is still the commit this tree was computed
-        // from. The size delta rides in the same UPDATE, so a crash cannot leave
-        // the new HEAD visible with the old size.
+        // Insert the commit and move HEAD in one transaction: a lost CAS must not
+        // leave an unreferenced commit row behind.
         if !repos
-            .repo
-            .advance_head_and_size(
+            .head_commit
+            .insert_and_advance(
+                commit_model,
                 repo_id,
                 parent_commit_id.as_deref(),
-                &commit_id_clone,
                 now,
                 size_delta,
             )
@@ -1006,11 +1001,10 @@ impl FileOps {
                 "HEAD of {repo_id} advanced while this change was being committed"
             )));
         }
-
         if size_delta != 0 {
             repos.invalidate_quota(owner_id);
         }
-        events::publish_repo_update(repo_id, commit_id_clone);
+        events::publish_repo_update(repo_id, commit_id);
 
         Ok(true)
     }

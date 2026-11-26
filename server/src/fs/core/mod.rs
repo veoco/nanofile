@@ -11,6 +11,7 @@ pub mod gc;
 pub mod lock;
 pub mod merge;
 pub mod pending_store;
+pub mod quota;
 pub mod repo_archive;
 pub mod size;
 pub mod store;

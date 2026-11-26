@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use crate::domain::permission::RepoScope;
 use crate::fs::core::file_ops::FileOps;
+use crate::fs::core::quota::QuotaGuard;
 use crate::repository::Repositories;
-use crate::service::fs::quota::QuotaGuard;
 use base::common::DirEntryData;
 use base::error::AppError;
 use infra::activity_log;
@@ -786,34 +786,6 @@ pub async fn search_trash_for_user(
         total_count,
         can_search: true,
     })
-}
-
-pub async fn add_deleted_repo(
-    repos: &Repositories,
-    repo_id: &str,
-    repo_name: &str,
-    head_id: Option<&str>,
-    owner_id: i32,
-    size: i64,
-) -> Result<(), AppError> {
-    let now = chrono::Utc::now().timestamp();
-
-    // Best-effort: skip when already trashed, preserving INSERT OR IGNORE behaviour.
-    if repos.deleted_repo.find_by_id(repo_id).await?.is_none() {
-        repos
-            .deleted_repo
-            .insert(deleted_repo::ActiveModel {
-                repo_id: Set(repo_id.to_owned()),
-                repo_name: Set(repo_name.to_owned()),
-                head_id: Set(head_id.map(|s| s.to_owned())),
-                owner_id: Set(owner_id),
-                size: Set(size),
-                del_time: Set(now),
-            })
-            .await?;
-    }
-
-    Ok(())
 }
 
 pub async fn list_deleted_repos(

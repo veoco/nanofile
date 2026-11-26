@@ -240,7 +240,7 @@ impl BlockVerify {
                     report.non_official_chunking_files += 1;
                 }
                 let repo_encrypted = encrypted_repos.get(repo_id).copied().unwrap_or(false);
-                let size_matches = crate::service::sync::declared_size_matches_blocks(
+                let size_matches = declared_size_matches_blocks(
                     file.size,
                     i128::from(stored_size),
                     file.block_ids.len(),
@@ -439,6 +439,37 @@ pub fn open_block_store(config: &infra::config::Config) -> Result<DynBlockStorag
 /// Where a quarantined block is kept.
 pub fn quarantine_root(block_dir: &Path) -> PathBuf {
     block_dir.join(QUARANTINE_DIR)
+}
+
+/// PKCS7 pads every client-encrypted block to a 16-byte boundary, so one block
+/// stores between 1 and 16 bytes more than the plaintext it holds. `repo.size` is
+/// plaintext bytes, so this is the per-block bound the accounting may drift by.
+const CLIENT_BLOCK_PADDING: i128 = 16;
+
+/// Whether a regular file's declared size (the plaintext `file_data.size`) agrees
+/// with the *logical* sizes of the blocks it references.
+///
+/// An unencrypted library stores a file's bytes verbatim, so the totals must be
+/// equal. A client-side-encrypted library stores PKCS7 ciphertext blocks: the
+/// stored total is the plaintext total rounded up per block, i.e. between the
+/// declared size and that size plus [`CLIENT_BLOCK_PADDING`] per block. A check
+/// that only enforced the lower bound would still let a client declare far fewer
+/// bytes than it stores (the quota bypass); the padding bound is what closes it.
+///
+/// The block verification below applies the same rule; it used to compare the
+/// raw block total and therefore reported every encrypted library as damaged.
+pub(crate) fn declared_size_matches_blocks(
+    declared: i64,
+    stored: i128,
+    block_count: usize,
+    encrypted: bool,
+) -> bool {
+    let declared = i128::from(declared);
+    if encrypted {
+        stored >= declared && stored - declared <= CLIENT_BLOCK_PADDING * block_count as i128
+    } else {
+        stored == declared
+    }
 }
 
 #[cfg(test)]
