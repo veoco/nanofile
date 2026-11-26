@@ -17,8 +17,6 @@
 //! Capabilities are stable ids persisted as a canonical comma-separated list:
 //! [`Capability::id`] is the on-disk contract, not the enum discriminant.
 
-use axum::http::Method;
-
 /// One independently grantable feature of the API.
 ///
 /// The declaration order defines the bit index in [`CapabilitySet`], so never
@@ -1232,21 +1230,17 @@ pub fn route_inventory() -> impl Iterator<Item = (&'static str, &'static str)> {
 /// `None` means the path is outside the classified surface or absent from
 /// `ROUTES`; callers must treat that as denied, so a new unclassified route fails
 /// closed instead of accepting every credential.
-pub fn required_access(method: &Method, path: &str) -> Option<RouteAccess> {
+pub fn required_access(method: &str, path: &str) -> Option<RouteAccess> {
     if !is_classified_prefix(path) {
         return None;
     }
     // Preflights are answered by the CORS layer; classifying them as "any
     // credential" keeps a stray OPTIONS from being reported as an unknown route.
-    if method == Method::OPTIONS {
+    if method == "OPTIONS" {
         return Some(RouteAccess::AnyAuthenticated);
     }
     // A HEAD request is served by the matching GET route.
-    let method = if method == Method::HEAD {
-        "GET"
-    } else {
-        method.as_str()
-    };
+    let method = if method == "HEAD" { "GET" } else { method };
 
     ROUTES
         .iter()
@@ -1333,8 +1327,8 @@ fn specificity(pattern: &str) -> usize {
 /// prefix-stripped form), so this classifies by method plus an explicit list of
 /// read-only POSTs; anything unrecognised is a write, so a read-only key fails
 /// closed on a new endpoint.
-pub fn requires_sync_write(method: &Method, path: &str) -> bool {
-    if method == Method::GET || method == Method::HEAD {
+pub fn requires_sync_write(method: &str, path: &str) -> bool {
+    if method == "GET" || method == "HEAD" {
         return false;
     }
     // `folder-perm` and the batch `locked-files` query carry their token in the
@@ -1597,16 +1591,16 @@ mod tests {
     #[test]
     fn manual_index_writes_need_search_write() {
         assert_eq!(
-            required_access(&Method::POST, "/api2/index-file-text/"),
+            required_access("POST", "/api2/index-file-text/"),
             Some(RouteAccess::Capability(Capability::SearchWrite))
         );
         // A whole-repository rebuild (and its progress) stays on reindex.
         assert_eq!(
-            required_access(&Method::POST, "/api2/reindex/"),
+            required_access("POST", "/api2/reindex/"),
             Some(RouteAccess::Capability(Capability::SearchReindex))
         );
         assert_eq!(
-            required_access(&Method::GET, "/api2/reindex-progress/"),
+            required_access("GET", "/api2/reindex-progress/"),
             Some(RouteAccess::Capability(Capability::SearchReindex))
         );
     }
@@ -1847,7 +1841,7 @@ mod tests {
             "the catch-all must consume at least one segment, like axum's"
         );
         assert_eq!(
-            required_access(&Method::GET, "/repos/abc/files/a/b.txt"),
+            required_access("GET", "/repos/abc/files/a/b.txt"),
             Some(RouteAccess::Capability(Capability::FileRead))
         );
     }
@@ -1857,11 +1851,11 @@ mod tests {
         // `/api/v2.1/repos/{repo_id}/file/` (write/delete) must not be
         // shadowed by `/api/v2.1/repos/{repo_id}/dir/`, and vice versa.
         assert_eq!(
-            required_access(&Method::DELETE, "/api/v2.1/repos/abc/file/"),
+            required_access("DELETE", "/api/v2.1/repos/abc/file/"),
             Some(RouteAccess::Capability(Capability::FileDelete))
         );
         assert_eq!(
-            required_access(&Method::POST, "/api/v2.1/repos/abc/file/"),
+            required_access("POST", "/api/v2.1/repos/abc/file/"),
             Some(RouteAccess::Capability(Capability::FileWrite))
         );
     }
@@ -1869,34 +1863,31 @@ mod tests {
     #[test]
     fn head_follows_the_get_route() {
         assert_eq!(
-            required_access(&Method::HEAD, "/api2/repos/abc/dir/"),
+            required_access("HEAD", "/api2/repos/abc/dir/"),
             Some(RouteAccess::Capability(Capability::FileRead))
         );
     }
 
     #[test]
     fn unknown_and_out_of_scope_paths_return_none() {
-        assert_eq!(
-            required_access(&Method::GET, "/seafhttp/repo/x/commit/HEAD"),
-            None
-        );
-        assert_eq!(required_access(&Method::GET, "/dav/repo/"), None);
-        assert_eq!(required_access(&Method::GET, "/api2/not-a-route/"), None);
-        assert_eq!(required_access(&Method::GET, "/api20/repos/"), None);
+        assert_eq!(required_access("GET", "/seafhttp/repo/x/commit/HEAD"), None);
+        assert_eq!(required_access("GET", "/dav/repo/"), None);
+        assert_eq!(required_access("GET", "/api2/not-a-route/"), None);
+        assert_eq!(required_access("GET", "/api20/repos/"), None);
     }
 
     #[test]
     fn key_management_is_session_only() {
         for (method, path) in [
-            (Method::GET, "/api2/api-keys/"),
-            (Method::POST, "/api2/api-keys/"),
-            (Method::GET, "/api2/api-keys/catalog/"),
-            (Method::GET, "/api2/api-keys/7/"),
-            (Method::PUT, "/api2/api-keys/7/"),
-            (Method::DELETE, "/api2/api-keys/7/"),
+            ("GET", "/api2/api-keys/"),
+            ("POST", "/api2/api-keys/"),
+            ("GET", "/api2/api-keys/catalog/"),
+            ("GET", "/api2/api-keys/7/"),
+            ("PUT", "/api2/api-keys/7/"),
+            ("DELETE", "/api2/api-keys/7/"),
         ] {
             assert_eq!(
-                required_access(&method, path),
+                required_access(method, path),
                 Some(RouteAccess::SessionOnly),
                 "the key API must never be reachable with a key ({method} {path})"
             );
@@ -1913,7 +1904,7 @@ mod tests {
             "/api2/repos/abc/upload-blks-link/",
             "/api2/repos/abc/update-blks-link/",
         ] {
-            let access = required_access(&Method::GET, path).expect("classified");
+            let access = required_access("GET", path).expect("classified");
             match access {
                 RouteAccess::Capability(capability) => assert!(
                     capability.is_write(),

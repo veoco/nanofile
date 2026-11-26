@@ -8,7 +8,22 @@ use std::collections::HashMap;
 use base::error::AppError;
 
 use crate::domain::capability::{Capability, CapabilitySet};
-use crate::repository::api_key::ApiKeyLookup;
+use infra::entity::{api_key, api_key_repo};
+
+/// One library a key is bound to, with its read/write ceiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ApiKeyBinding {
+    pub repo_id: String,
+    /// Read/write ceiling for this library: `"r"` or `"rw"`.
+    pub permission: String,
+}
+
+/// One key row together with its library bindings, as the auth path needs them.
+#[derive(Clone, Debug)]
+pub struct ApiKeyLookup {
+    pub key: api_key::Model,
+    pub bindings: Vec<api_key_repo::Model>,
+}
 
 /// Read/write ceiling a key carries for one library.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

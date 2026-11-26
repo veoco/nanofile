@@ -95,8 +95,8 @@ impl Credential {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::api_key::ApiKeyLookup;
     use crate::domain::capability::Capability;
-    use crate::repository::api_key::ApiKeyLookup;
     use infra::entity::{api_key, api_key_repo};
 
     fn authority(capabilities: &str, all_repos: bool, bindings: &[(&str, &str)]) -> KeyAuthority {
