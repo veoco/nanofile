@@ -801,7 +801,7 @@ impl TestServer {
         tweak(&mut config);
         std::fs::create_dir_all(&config.storage.block_dir).unwrap();
 
-        let temp_file_manager = server::handler::web::temp_file::TempFileManager::new(
+        let temp_file_manager = server::service::upload::temp_file::TempFileManager::new(
             config.storage.temp_dir.clone(),
             config.storage.max_temp_uploads,
             config.storage.max_temp_upload_bytes,

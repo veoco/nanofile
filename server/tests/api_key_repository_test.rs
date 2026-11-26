@@ -7,7 +7,8 @@
 use crate::common;
 
 use common::TestFixture;
-use server::repository::api_key::{ApiKeyBinding, CreateApiKeyParams, UpdateApiKeyParams};
+use server::domain::api_key::ApiKeyBinding;
+use server::repository::api_key::{CreateApiKeyParams, UpdateApiKeyParams};
 
 const RAW: &str = "0123456789abcdef0123456789abcdef01234567";
 

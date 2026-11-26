@@ -238,6 +238,22 @@ jobs:
           node-version: 24
       - run: node tools/check-comments.mjs
 
+  # Module dependency directions are conventions, not compiler errors: a
+  # `crate::service` import inside `repository` builds and reads like any other
+  # line. This job turns the rules in `docs/dev/architecture.md` into a gate, with
+  # reasoned exceptions and a named debt baseline in the script.
+  layering:
+    name: Layering
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+      - run: node tools/check-layering.mjs
+
   # ── Linting off Linux ───────────────────────────────────────────────
   # `#[cfg(windows)]` and `#[cfg(target_os = "macos")]` code is not compiled on
   # the `lint` job's runner, so clippy there cannot see it. Not a dependency of

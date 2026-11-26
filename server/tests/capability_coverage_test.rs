@@ -5,7 +5,6 @@
 //! silent, so this test pins the inventory: every route the server registers
 //! must be classified.
 
-use axum::http::Method;
 use server::domain::capability::{RouteAccess, required_access};
 
 /// Every `/api2` and `/api/v2.1` route the server registers, with the method a
@@ -168,8 +167,16 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api2/api-keys/{key_id}/"),
 ];
 
-fn method(name: &str) -> Method {
-    Method::from_bytes(name.as_bytes()).expect("valid method")
+fn method(name: &str) -> &'static str {
+    match name {
+        "GET" => "GET",
+        "HEAD" => "HEAD",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "OPTIONS" => "OPTIONS",
+        other => panic!("unexpected method {other}"),
+    }
 }
 
 /// Every route in the inventory must have a classification.
@@ -177,7 +184,7 @@ fn method(name: &str) -> Method {
 fn every_registered_route_is_classified() {
     let mut unclassified = Vec::new();
     for (verb, path) in ROUTES {
-        if required_access(&method(verb), path).is_none() {
+        if required_access(method(verb), path).is_none() {
             unclassified.push(format!("{verb} {path}"));
         }
     }
@@ -256,31 +263,31 @@ fn inventory_size_guard() {
 #[test]
 fn sensitive_routes_have_the_expected_access() {
     assert_eq!(
-        required_access(&Method::GET, "/api2/repos/abc/dir/"),
+        required_access("GET", "/api2/repos/abc/dir/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::FileRead
         ))
     );
     assert_eq!(
-        required_access(&Method::DELETE, "/api2/repos/abc/file/"),
+        required_access("DELETE", "/api2/repos/abc/file/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::FileDelete
         ))
     );
     assert_eq!(
-        required_access(&Method::GET, "/api2/api-keys/"),
+        required_access("GET", "/api2/api-keys/"),
         Some(RouteAccess::SessionOnly)
     );
     // Writing a file's index text is its own capability: rebuilding an index and
     // writing one file's indexed content are different powers.
     assert_eq!(
-        required_access(&Method::POST, "/api2/index-file-text/"),
+        required_access("POST", "/api2/index-file-text/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::SearchWrite
         ))
     );
     assert_eq!(
-        required_access(&Method::POST, "/api2/reindex/"),
+        required_access("POST", "/api2/reindex/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::SearchReindex
         ))
@@ -296,7 +303,7 @@ fn sensitive_routes_have_the_expected_access() {
         ]
         .iter()
         .any(|(verb, path)| matches!(
-            required_access(&method(verb), path),
+            required_access(method(verb), path),
             Some(RouteAccess::Capability(
                 server::domain::capability::Capability::WebdavRead
                     | server::domain::capability::Capability::WebdavWrite
