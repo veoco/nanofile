@@ -150,7 +150,7 @@ impl WebDavAuth {
 
         // Same permission strings the JSON listings report (`"rw"`/`"r"`), from the
         // one helper that owns the owner-vs-member rule.
-        let permission = crate::domain::permission::repo_permission(
+        let permission = crate::service::permission::repo_permission(
             state.repos.member.as_ref(),
             repo_id,
             user.id,

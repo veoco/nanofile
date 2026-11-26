@@ -8,7 +8,6 @@ pub mod download;
 pub mod link_gate;
 pub mod progress;
 pub mod share_view;
-pub mod temp_file;
 pub mod upload;
 pub mod upload_link_view;
 pub mod zip_download;

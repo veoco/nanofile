@@ -18,101 +18,9 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
 use crate::service::sharing::link as upload_link_service;
+use crate::service::upload::cleanup::{UncommittedBlocks, cleanup_block_ids};
 use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
-
-/// Delete blocks an upload request wrote but never committed, and drop any quota
-/// reservation the request took for them.
-///
-/// `cleanup_uncommitted_blocks` re-checks whether a live file references each id,
-/// so a block committed by a concurrent identical upload survives. Blocks are
-/// content-addressed, so deleting an id that a *concurrent* upload wrote but has
-/// not committed yet can only make that upload retry (446) — never corrupt data.
-pub(crate) async fn cleanup_block_ids(
-    state: &AppState,
-    repo_id: &str,
-    ids: &[String],
-    release_reservations: bool,
-) {
-    if ids.is_empty() {
-        return;
-    }
-    if release_reservations {
-        crate::service::fs::quota::release_blocks(&state.repos, repo_id, ids).await;
-    }
-    state
-        .file_service()
-        .cleanup_uncommitted_blocks(repo_id, ids)
-        .await;
-}
-
-/// Request-scoped cleanup for blocks an upload wrote before its target was
-/// validated or committed.
-///
-/// The upload pipeline streams file parts into the block store before the target
-/// path/name is known (the token endpoints receive both in the same multipart
-/// body, and a client may send the file part first), and a failure anywhere after
-/// that used to leave the blocks unreferenced until the pending-block TTL — 48
-/// hours by default. An anonymous upload-link holder could therefore fill the
-/// data disk with requests that never commit.
-///
-/// Every upload handler creates this guard right after parsing the body and
-/// disarms it only after a successful commit. Dropping it while still armed
-/// schedules the cleanup; `tokio::spawn` is deliberate, because `Drop` cannot
-/// await. If the runtime is shutting down the spawn may not run, and the durable
-/// pending-block ledger is the backstop it was designed to be.
-pub(crate) struct UncommittedBlocks {
-    state: Arc<AppState>,
-    repo_id: String,
-    ids: Vec<String>,
-    /// Block-API writes reserve quota per block; streamed uploads do not, so the
-    /// guard must not release a reservation it never took (the reservation table
-    /// is keyed by block, and a mismatched release would free another upload's).
-    release_reservations: bool,
-    armed: bool,
-}
-
-impl UncommittedBlocks {
-    pub(crate) fn new(
-        state: Arc<AppState>,
-        repo_id: impl Into<String>,
-        ids: Vec<String>,
-        release_reservations: bool,
-    ) -> Self {
-        Self {
-            state,
-            repo_id: repo_id.into(),
-            ids,
-            release_reservations,
-            armed: true,
-        }
-    }
-
-    /// Add blocks written by a later stage of the same request.
-    fn extend(&mut self, ids: impl IntoIterator<Item = String>) {
-        self.ids.extend(ids);
-    }
-
-    /// The request committed; its blocks are referenced by HEAD now.
-    pub(crate) fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for UncommittedBlocks {
-    fn drop(&mut self) {
-        if !self.armed || self.ids.is_empty() {
-            return;
-        }
-        let state = self.state.clone();
-        let repo_id = std::mem::take(&mut self.repo_id);
-        let ids = std::mem::take(&mut self.ids);
-        let release_reservations = self.release_reservations;
-        tokio::spawn(async move {
-            cleanup_block_ids(&state, &repo_id, &ids, release_reservations).await;
-        });
-    }
-}
 
 /// Compute the actual target directory from the base `parent_dir` and an
 /// optional `relative_path` (e.g. `"myfolder/sub/"` from a folder upload).
@@ -263,7 +171,7 @@ impl AuthContext {
             },
         )
         .await?;
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &token.repo_id,
             token.user_id,
@@ -296,8 +204,8 @@ impl AuthContext {
         repo_id: &str,
         csrf: Option<&str>,
     ) -> Result<Self, AppError> {
-        crate::service::auth::csrf::check_form_csrf(state, &user.session_token, csrf)?;
-        crate::domain::permission::check_repo_write_permission(
+        crate::middleware::csrf::check_form_csrf(state, &user.session_token, csrf)?;
+        crate::service::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             repo_id,
             user.user_id,
@@ -605,7 +513,7 @@ fn map_temp_error(e: std::io::Error) -> AppError {
 
 /// Remove a finished resumable upload and release its quota reservation.
 async fn finish_resumable(
-    temp_mgr: &crate::handler::web::temp_file::TempFileManager,
+    temp_mgr: &crate::service::upload::temp_file::TempFileManager,
     state: &AppState,
     scope: &str,
     repo_id: &str,
@@ -943,7 +851,8 @@ pub async fn upload_aj(
     // Everything parsed so far is staged, not ingested, but a chunked request
     // can already have written blocks; the guard is the request's cleanup list.
     let mut guard = UncommittedBlocks::new(
-        state.clone(),
+        state.repos.clone(),
+        state.file_service(),
         auth.repo_id.clone(),
         parts.written_block_ids(),
         false,
@@ -1413,7 +1322,14 @@ pub(crate) async fn read_parts(
 
     let result = read_parts_inner(state, mode, body, headers, max_files, &mut written).await;
     if result.is_err() {
-        cleanup_block_ids(state, &repo_id, &written, release_reservations).await;
+        cleanup_block_ids(
+            &state.repos,
+            &state.file_service(),
+            &repo_id,
+            &written,
+            release_reservations,
+        )
+        .await;
     }
     result
 }
@@ -1533,8 +1449,8 @@ async fn read_field_limited(
     field: &mut multer::Field<'_>,
     limit: usize,
 ) -> Result<Vec<u8>, AppError> {
-    crate::handler::check_field_length(field.headers(), limit)?;
-    crate::handler::read_stream_limited(&mut *field, limit).await
+    crate::http::multipart::check_field_length(field.headers(), limit)?;
+    crate::http::multipart::read_stream_limited(&mut *field, limit).await
 }
 
 /// A byte stream fed to the CDC chunker.
@@ -1809,7 +1725,8 @@ async fn finish_update(
     style: ReplyStyle,
 ) -> Result<axum::response::Response, AppError> {
     let mut guard = UncommittedBlocks::new(
-        state.clone(),
+        state.repos.clone(),
+        state.file_service(),
         auth.repo_id.clone(),
         parts.written_block_ids(),
         false,
@@ -1932,7 +1849,8 @@ pub async fn upload_aj_token(
     // Created before target resolution: a malformed parent_dir or name must not
     // leave the streamed blocks behind.
     let mut guard = UncommittedBlocks::new(
-        state.clone(),
+        state.repos.clone(),
+        state.file_service(),
         auth.repo_id.clone(),
         parts.written_block_ids(),
         false,
@@ -1985,7 +1903,8 @@ pub async fn upload_api(
     // Like the `-aj` token form, a missing `parent_dir` means the directory the
     // link was minted for; the desktop client sends it, older bodies may not.
     let mut guard = UncommittedBlocks::new(
-        state.clone(),
+        state.repos.clone(),
+        state.file_service(),
         auth.repo_id.clone(),
         parts.written_block_ids(),
         false,
@@ -2322,7 +2241,7 @@ async fn block_auth(
     // membership, but that may have been revoked since (matches download). The
     // owner comes back from the same row so the per-block quota reservation does
     // not look it up again.
-    let owner = crate::domain::permission::repo_write_owner(
+    let owner = crate::service::permission::repo_write_owner(
         state.repos.member.as_ref(),
         &info.repo_id,
         info.user_id,
@@ -2373,7 +2292,13 @@ pub async fn upload_blks_api(
     // well as deleting blocks when the request fails before a commit references
     // them.
     let written = parts.written_block_ids();
-    let mut guard = UncommittedBlocks::new(state.clone(), info.repo_id.clone(), written, true);
+    let mut guard = UncommittedBlocks::new(
+        state.repos.clone(),
+        state.file_service(),
+        info.repo_id.clone(),
+        written,
+        true,
+    );
     let Parts {
         fields,
         blocks: new_block_ids,

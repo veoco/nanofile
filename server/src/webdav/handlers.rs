@@ -137,19 +137,19 @@ async fn get_handler(
 
     // The response builder evaluates `If-None-Match` before `Range` (RFC 9110
     // §13.1.2), matching seafdav.
-    crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
+    crate::http::download::file_download_response(
+        crate::http::download::FileDownloadParams {
             repo_id: auth.repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: None,
             total_size,
-            content_type: crate::ui::files::mime_guess(filename),
+            content_type: base::mime::mime_guess(filename),
             content_disposition: None,
             range_header: range_header.map(str::to_string),
             etag: Some(etag),
             head_only: is_head,
-            cache: crate::fs::core::download::CachePolicy::PrivateNoCache,
+            cache: crate::http::download::CachePolicy::PrivateNoCache,
         },
         headers,
     )
@@ -223,16 +223,23 @@ async fn put_handler(
             // Blocks that landed before the body failed are not referenced by
             // anything: drop them now instead of leaving them to the
             // pending-block TTL.
-            crate::handler::web::upload::cleanup_block_ids(state, &auth.repo_id, &written, false)
-                .await;
+            crate::service::upload::cleanup::cleanup_block_ids(
+                &state.repos,
+                &state.file_service(),
+                &auth.repo_id,
+                &written,
+                false,
+            )
+            .await;
             tracing::warn!("WebDAV PUT block write failed for {path}: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
     // A failed commit leaves the streamed blocks unreferenced; the guard removes
     // them when this function returns (it is disarmed only on success).
-    let mut guard = crate::handler::web::upload::UncommittedBlocks::new(
-        state.clone(),
+    let mut guard = crate::service::upload::cleanup::UncommittedBlocks::new(
+        state.repos.clone(),
+        state.file_service(),
         auth.repo_id.clone(),
         written,
         false,

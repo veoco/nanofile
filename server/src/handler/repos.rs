@@ -343,7 +343,7 @@ async fn set_repo_password_with_body(
     repo_id: &str,
     bytes: &[u8],
 ) -> Result<Json<serde_json::Value>, AppError> {
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         repo_id,
         user_id,
@@ -406,7 +406,7 @@ pub async fn check_repo_password_v2(
     req: axum::http::Request<Body>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Check user has access to this repo (matching seahub's check_folder_permission).
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,

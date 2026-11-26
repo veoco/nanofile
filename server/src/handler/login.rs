@@ -134,7 +134,7 @@ pub async fn login(
     };
 
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return login_error("Invalid request origin.");
     }
 

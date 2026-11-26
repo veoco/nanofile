@@ -110,7 +110,7 @@ pub async fn put_block(
     // Writing a block mutates the object store; checked before the body is buffered.
     // The same row names the owner the quota is charged to, so the reservation
     // below does not look it up again for every block.
-    let owner = crate::domain::permission::repo_write_owner(
+    let owner = crate::service::permission::repo_write_owner(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,

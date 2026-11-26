@@ -55,7 +55,7 @@ pub async fn get_head_commit(
         .ok_or(AppError::RepoDeleted)?;
 
     // Defense in depth: `SyncAuth` also binds the token to the URL repo.
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,

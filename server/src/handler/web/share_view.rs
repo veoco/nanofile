@@ -80,11 +80,11 @@ fn check_share_download_rate(
 /// The gate module owns this decision now; the file endpoint's raw error shape
 /// is the only caller that passes `GateMode::Raw`.
 async fn resolve_file_meta(
-    repos: &crate::repository::Repositories,
+    state: &AppState,
     repo_id: &str,
     path: &str,
 ) -> Result<(FsFileData, Vec<String>), AppError> {
-    Downloader::resolve_blocks(repos, repo_id, path)
+    Downloader::resolve_blocks(&state.repos, repo_id, path)
         .await
         .map_err(|_| AppError::NotFound("File not found".into()))
 }
@@ -117,8 +117,7 @@ pub async fn shared_file_view(
 
     if params.get("dl").map(|s| s.as_str()) == Some("1") {
         check_share_download_rate(&state, &addr, &headers)?;
-        let (file_data, block_ids) =
-            resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
+        let (file_data, block_ids) = resolve_file_meta(&state, &link.repo_id, &link.path).await?;
 
         let filename = link
             .path
@@ -129,30 +128,29 @@ pub async fn shared_file_view(
 
         crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
-        let disposition = crate::fs::core::download::content_disposition(&filename, true);
+        let disposition = crate::http::download::content_disposition(&filename, true);
         let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-        let etag = crate::fs::core::download::blocks_etag(&block_ids);
-        return Ok(crate::fs::core::download::file_download_response(
-            crate::fs::core::download::FileDownloadParams {
+        let etag = crate::http::download::blocks_etag(&block_ids);
+        return Ok(crate::http::download::file_download_response(
+            crate::http::download::FileDownloadParams {
                 repo_id: link.repo_id.clone(),
                 block_ids,
                 block_store: state.block_store.clone(),
                 enc_key: None,
                 total_size: file_data.size.max(0) as u64,
-                content_type: crate::ui::files::mime_guess(&filename),
+                content_type: base::mime::mime_guess(&filename),
                 content_disposition: Some(disposition),
                 range_header: range_header.map(|s| s.to_string()),
                 etag: Some(etag),
                 head_only: false,
                 // The share URL is stable: revalidate so a new version shows up.
-                cache: crate::fs::core::download::CachePolicy::PublicNoCache,
+                cache: crate::http::download::CachePolicy::PublicNoCache,
             },
             &headers,
         ));
     }
 
-    let (_file_data, _block_ids) =
-        resolve_file_meta(&state.repos, &link.repo_id, &link.path).await?;
+    let (_file_data, _block_ids) = resolve_file_meta(&state, &link.repo_id, &link.path).await?;
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
@@ -323,7 +321,7 @@ pub async fn shared_dir_view(
         );
         headers.insert(
             HeaderName::from_static("content-disposition"),
-            HeaderValue::from_str(&crate::fs::core::download::content_disposition(
+            HeaderValue::from_str(&crate::http::download::content_disposition(
                 &format!("{dir_name}.zip"),
                 true,
             ))
@@ -503,7 +501,7 @@ pub async fn shared_dir_file_view(
     // subtree: a plain join would let `..` or an absolute path escape the share.
     let full_path = resolve_share_subpath(&link, &file_path)?;
 
-    let (file_data, block_ids) = resolve_file_meta(&state.repos, &link.repo_id, &full_path).await?;
+    let (file_data, block_ids) = resolve_file_meta(&state, &link.repo_id, &full_path).await?;
 
     crate::service::sharing::share::increment_view_cnt(state.repos.share_link.clone(), link.id);
 
@@ -511,22 +509,22 @@ pub async fn shared_dir_file_view(
         .rsplit_once('/')
         .map(|(_, n)| n.to_string())
         .unwrap_or_else(|| full_path.clone());
-    let disposition = crate::fs::core::download::content_disposition(&filename, true);
+    let disposition = crate::http::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    let etag = crate::fs::core::download::blocks_etag(&block_ids);
-    Ok(crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
+    let etag = crate::http::download::blocks_etag(&block_ids);
+    Ok(crate::http::download::file_download_response(
+        crate::http::download::FileDownloadParams {
             repo_id: link.repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: None,
             total_size: file_data.size.max(0) as u64,
-            content_type: crate::ui::files::mime_guess(&filename),
+            content_type: base::mime::mime_guess(&filename),
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
-            cache: crate::fs::core::download::CachePolicy::PublicNoCache,
+            cache: crate::http::download::CachePolicy::PublicNoCache,
         },
         &headers,
     ))

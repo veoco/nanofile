@@ -101,18 +101,16 @@ pub async fn get_file_revision_v21(
     let filename = p.rsplit_once('/').map(|(_, n)| n).unwrap_or("download");
     let block_ids = file_data.block_ids;
     let total_size = file_data.size.max(0) as u64;
-    let etag = crate::fs::core::download::blocks_etag(&block_ids);
-    Ok(crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
+    let etag = crate::http::download::blocks_etag(&block_ids);
+    Ok(crate::http::download::file_download_response(
+        crate::http::download::FileDownloadParams {
             repo_id,
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
             total_size,
-            content_type: crate::ui::files::mime_guess(filename),
-            content_disposition: Some(crate::fs::core::download::content_disposition(
-                filename, true,
-            )),
+            content_type: base::mime::mime_guess(filename),
+            content_disposition: Some(crate::http::download::content_disposition(filename, true)),
             range_header: headers
                 .get(header::RANGE)
                 .and_then(|v| v.to_str().ok())
@@ -120,7 +118,7 @@ pub async fn get_file_revision_v21(
             etag: Some(etag),
             head_only: false,
             // The URL names a commit, so its bytes never change.
-            cache: crate::fs::core::download::CachePolicy::MaxAge(3600),
+            cache: crate::http::download::CachePolicy::MaxAge(3600),
         },
         &headers,
     ))

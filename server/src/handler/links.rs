@@ -136,7 +136,7 @@ pub async fn list_share_links_v21(
         if !scope.allows(repo_id) {
             return Err(AppError::Forbidden);
         }
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             repo_id,
             auth.user_id,
@@ -290,7 +290,7 @@ pub async fn list_upload_links_v21(
         if !scope.allows(repo_id) {
             return Err(AppError::Forbidden);
         }
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             repo_id,
             auth.user_id,
@@ -461,7 +461,7 @@ pub async fn get_upload_link_upload_url_v21(
     // The signature covers the link's current password version, so a cookie
     // issued before a password change no longer mints an upload token.
     if link.password.is_some()
-        && !crate::service::auth::csrf::has_valid_upload_link_cookie(
+        && !crate::middleware::csrf::has_valid_upload_link_cookie(
             &headers,
             &token,
             link.password.as_deref().unwrap_or(""),

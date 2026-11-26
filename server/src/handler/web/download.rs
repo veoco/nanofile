@@ -93,7 +93,7 @@ impl DownloadAuth {
         )
         .await?;
         // Permissions may have been revoked between token issuance and use.
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             &token.repo_id,
             token.user_id,
@@ -222,7 +222,7 @@ pub async fn repo_file_download(
     let normalized = base::sanitize::safe_normalize_path(&path)
         .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
 
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,
@@ -244,7 +244,7 @@ pub async fn repo_file_download(
     // Strong ETag: the block ids are content-addressed, so identical content
     // always yields the same validator and any edit changes it. The response
     // builder evaluates `If-None-Match` before `Range` and answers 304 itself.
-    let etag = crate::fs::core::download::blocks_etag(&block_ids);
+    let etag = crate::http::download::blocks_etag(&block_ids);
 
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
 
@@ -254,17 +254,13 @@ pub async fn repo_file_download(
     let content_disposition = match query.op.as_deref() {
         None | Some("") => {
             if query.dl.as_deref() == Some("1") {
-                Some(crate::fs::core::download::content_disposition(
-                    &file_name, true,
-                ))
+                Some(crate::http::download::content_disposition(&file_name, true))
             } else {
                 None
             }
         }
-        Some("download") => Some(crate::fs::core::download::content_disposition(
-            &file_name, true,
-        )),
-        Some("view") => Some(crate::fs::core::download::content_disposition(
+        Some("download") => Some(crate::http::download::content_disposition(&file_name, true)),
+        Some("view") => Some(crate::http::download::content_disposition(
             &file_name, false,
         )),
         Some(other) => {
@@ -274,19 +270,19 @@ pub async fn repo_file_download(
         }
     };
 
-    Ok(crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
+    Ok(crate::http::download::file_download_response(
+        crate::http::download::FileDownloadParams {
             repo_id: repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
             total_size: file_data.size.max(0) as u64,
-            content_type: crate::ui::files::mime_guess(&file_name),
+            content_type: base::mime::mime_guess(&file_name),
             content_disposition,
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
-            cache: crate::fs::core::download::CachePolicy::PrivateNoCache,
+            cache: crate::http::download::CachePolicy::PrivateNoCache,
         },
         &headers,
     ))
@@ -315,25 +311,25 @@ pub async fn download_api(
         .await
         .map_err(|e| AppError::Internal(format!("download failed: {e}")))?;
 
-    let disposition = crate::fs::core::download::content_disposition(&filename, true);
+    let disposition = crate::http::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
     // Canonical `/files/{token}/{name}` sets a validator from the object id, so
     // repeat previews/downloads can revalidate instead of re-streaming.
-    let etag = crate::fs::core::download::blocks_etag(&block_ids);
-    Ok(crate::fs::core::download::file_download_response(
-        crate::fs::core::download::FileDownloadParams {
+    let etag = crate::http::download::blocks_etag(&block_ids);
+    Ok(crate::http::download::file_download_response(
+        crate::http::download::FileDownloadParams {
             repo_id: repo_id.clone(),
             block_ids,
             block_store: state.block_store.clone(),
             enc_key: dec_key,
             total_size: file_data.size.max(0) as u64,
-            content_type: crate::ui::files::mime_guess(&filename),
+            content_type: base::mime::mime_guess(&filename),
             content_disposition: Some(disposition),
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
             // The token is unique per request, so the URL can be cached briefly.
-            cache: crate::fs::core::download::CachePolicy::MaxAge(3600),
+            cache: crate::http::download::CachePolicy::MaxAge(3600),
         },
         &headers,
     ))

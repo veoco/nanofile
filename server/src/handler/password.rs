@@ -91,7 +91,7 @@ pub async fn change_password_v21(
             // Rotating the password rewrites the repo-wide `magic` and `random_key`,
             // locking out every other member who only knew the old password. That is
             // a library-wide cryptographic operation, hence owner-only.
-            crate::domain::permission::check_repo_owner(
+            crate::service::permission::check_repo_owner(
                 state.repos.member.as_ref(),
                 &repo_id,
                 auth.user_id,

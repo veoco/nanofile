@@ -5,7 +5,7 @@ use axum::{
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::read_multipart_field_limited;
+use crate::http::multipart::read_multipart_field_limited;
 use crate::middleware::auth::AuthUser;
 use crate::service::user::avatar::MAX_AVATAR_SIZE;
 use base::error::AppError;

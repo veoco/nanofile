@@ -728,7 +728,7 @@ pub async fn get_block_download_link(
     crate::middleware::require_csrf_for_cookie_session(&headers, &state.csrf_secret)?;
 
     let parent_dir = query.get("p").map(|s| s.as_str()).unwrap_or("/");
-    crate::domain::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_read_permission(
         state.repos.member.as_ref(),
         &repo_id,
         auth.user_id,

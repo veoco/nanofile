@@ -47,7 +47,7 @@ pub async fn get_thumbnail(
 
     // Conditional request: a matching validator short-circuits to 304 without
     // re-sending the body (same comparison as the download endpoint).
-    if crate::fs::core::download::if_none_match(&headers, &etag) {
+    if crate::http::download::if_none_match(&headers, &etag) {
         // 304 carries the same cache headers as the 200 so the client can keep
         // revalidating without a full refetch.
         return Ok((

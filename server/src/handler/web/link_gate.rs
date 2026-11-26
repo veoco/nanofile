@@ -44,9 +44,9 @@ impl LinkKind {
     fn cookie_name(self, token: &str) -> String {
         match self {
             Self::ShareFile | Self::ShareDir => {
-                crate::service::auth::csrf::share_link_cookie_name(token)
+                crate::middleware::csrf::share_link_cookie_name(token)
             }
-            Self::Upload => crate::service::auth::csrf::upload_link_cookie_name(token),
+            Self::Upload => crate::middleware::csrf::upload_link_cookie_name(token),
         }
     }
 
@@ -316,7 +316,7 @@ pub(crate) async fn gate_get(
         state.config().auth.password_hash_iterations,
     )
     .await?;
-    let cookie_ok = crate::service::auth::csrf::has_link_unlock_cookie(
+    let cookie_ok = crate::middleware::csrf::has_link_unlock_cookie(
         headers,
         &kind.cookie_name(link.token()),
         link.token(),
@@ -327,7 +327,7 @@ pub(crate) async fn gate_get(
     // above, so this also covers the POST path's "no password = open" case.
     if link.password().is_none() || pw_ok || cookie_ok {
         let unlock_cookie = if link.password().is_some() && pw_ok {
-            Some(crate::service::auth::csrf::link_unlock_cookie(
+            Some(crate::middleware::csrf::link_unlock_cookie(
                 &kind.cookie_name(link.token()),
                 link.token(),
                 password_version,
@@ -432,7 +432,7 @@ pub(crate) async fn gate_post(
     }
 
     // Hand the browser a signed unlock cookie instead of echoing the password in the URL.
-    let cookie = crate::service::auth::csrf::link_unlock_cookie(
+    let cookie = crate::middleware::csrf::link_unlock_cookie(
         &kind.cookie_name(token),
         token,
         link.password().unwrap_or(""),

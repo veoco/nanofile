@@ -123,7 +123,7 @@ impl NotificationManager {
         if !user.is_active || !user.email_verified {
             return false;
         }
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             self.repos.member.as_ref(),
             repo_id,
             user.id,
