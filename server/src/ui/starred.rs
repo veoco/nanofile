@@ -46,7 +46,7 @@ pub async fn starred_page(
     // Starred rows outlive membership: a row for a library the user was removed
     // from must not be rendered (its name, paths or mtime would leak). Intersect
     // with the libraries the user can still access, like the starred API does.
-    let accessible = crate::domain::permission::accessible_repo_ids(
+    let accessible = crate::service::permission::accessible_repo_ids(
         &state.repos,
         user.user_id,
         &crate::domain::permission::RepoScope::all(),

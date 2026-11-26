@@ -1099,7 +1099,7 @@ pub async fn trigger_task(
         return Err(AppError::Forbidden);
     }
 
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),

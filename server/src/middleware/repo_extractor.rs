@@ -56,7 +56,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathRead {
             .await
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
-        let permission = crate::domain::permission::repo_permission(
+        let permission = crate::service::permission::repo_permission(
             state.repos.member.as_ref(),
             &repo_id,
             user.user_id,
@@ -102,7 +102,7 @@ impl FromRequestParts<Arc<AppState>> for RepoPathWrite {
             .await
             .map_err(|_| AppError::BadRequest("missing repo_id in path".into()))?;
 
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &repo_id,
             user.user_id,

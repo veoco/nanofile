@@ -9,12 +9,12 @@ use std::time::Duration;
 
 use crate::fs::core::block_encryption_convert::BlockEncryptionConverter;
 use crate::fs::core::gc::{GcManager, GcPolicy};
-use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::repository::Repositories;
 use crate::service::index::{IndexScheduler, IndexService};
 use crate::service::mail::Mailer;
+use crate::service::upload::temp_file::TempFileManager;
 use crate::tasks::TaskSystem;
 use crate::tasks::registry::RegisteredJob;
 use crate::tasks::run::{JobFailure, Outcome};
@@ -43,7 +43,7 @@ pub fn install_default_jobs(
     indexer: Option<&TextIndexer>,
     index_enabled: bool,
     index_backfill_enabled: bool,
-    face_tags: &crate::settings::RuntimeConfig,
+    face_tags: &infra::settings::RuntimeConfig,
     temp_file_manager: &TempFileManager,
     temp_upload_ttl_hours: u64,
     enc_mode: BlockEncryptionMode,
@@ -724,7 +724,7 @@ pub fn install_default_jobs(
 
     jobs.push(job(JobKey::ZipTaskCleanup, |_ctx, _params| async move {
         let dropped =
-            crate::handler::web::zip_download::cleanup_expired(chrono::Utc::now().timestamp());
+            crate::service::upload::zip_task::cleanup_expired(chrono::Utc::now().timestamp());
         Ok(if dropped > 0 {
             Outcome::success(
                 format!("Dropped {dropped} expired zip downloads"),

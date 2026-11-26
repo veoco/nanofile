@@ -1,7 +1,8 @@
 //! # server
 //!
-//! Application layer for nanofile: handlers, services, routes, AppState.
-//! Re-exports `base` and `infra` so `crate::module` paths keep resolving.
+//! Application layer for nanofile: HTTP handlers and pages, services, the Seafile
+//! sync protocol, WebDAV, the file-system engine, repositories, background jobs,
+//! the sandboxed workers and `AppState`.
 
 // The service and filesystem layers mirror SeaORM and Seafile call shapes; a params
 // struct per call site would add a one-off type without making the call clearer, so
@@ -16,6 +17,7 @@ pub mod face_tags;
 pub mod filters;
 pub mod fs;
 pub mod handler;
+pub mod http;
 pub mod i18n;
 pub mod indexer;
 pub mod middleware;
@@ -43,17 +45,18 @@ use sea_orm::DatabaseConnection;
 use sha2::Digest;
 use tokio_util::sync::CancellationToken;
 
-use crate::handler::web::temp_file::TempFileManager;
 use crate::indexer::TextIndexer;
 use crate::notification::manager::NotificationManager;
 use crate::service::auth::access_token::AccessTokenManager;
 use crate::service::auth::pow::PowStore;
 use crate::service::auth::rate_limit::AuthRateLimiters;
-use crate::settings::{RuntimeConfig, SettingsLayers, SettingsService};
+use crate::service::upload::temp_file::TempFileManager;
+use crate::settings::{SettingsLayers, SettingsService};
 use crate::tasks::TaskSystem;
 use base::error::AppError;
 use infra::config::Config;
 use infra::crypto::password_manager::PasswordManager;
+use infra::settings::RuntimeConfig;
 use infra::storage::DynBlockStorage;
 
 /// Decode the block-encryption master key: 64 hex chars become 32 raw bytes
@@ -721,6 +724,7 @@ impl AppState {
             self.config().auth.password_hash_iterations,
             self.config().auth.api_token_ttl_days,
             self.auth_limiters.login.clone(),
+            self.auth_limiters.totp.clone(),
         )
     }
 

@@ -14,14 +14,11 @@ use crate::domain::session_source::SessionSource;
 use crate::i18n::I18n;
 use crate::repository::api_token::CreateSessionTokenParams;
 use crate::service::auth::email_verification::{EmailVerificationService, VerificationOutcome};
-use crate::service::auth::password::{
-    dummy_password_hash, hash_password_async, needs_rehash, verify_password_async,
-};
+use crate::service::auth::login::{PendingTokenFailure, SecondFactorState, WebLogin};
 use crate::service::auth::password_reset::PasswordResetService;
 use crate::service::auth::pow::{PowPurpose, PowView, bits_for};
 use crate::service::auth::registration::{RegistrationParams, RegistrationService};
 use crate::service::auth::token::generate_api_token;
-use crate::service::auth::totp::TotpManager;
 use crate::ui::client_login::resolve_next;
 use crate::ui::user_agent;
 use base::error::AppError;
@@ -193,13 +190,16 @@ async fn password_reset_available(state: &Arc<AppState>) -> bool {
 
 /// Tell the owner when a browser signs in for the first time.
 ///
-/// Must be called *before* the new session row is created: an already-inserted
-/// row matches itself, which would make every login look familiar.
+/// Must be called with the session token it is describing, which is left out of
+/// the comparison: the row was already inserted by the service, and counting it
+/// would make every login look familiar. (The API path asks *before* inserting;
+/// this is the same check, with the new row excluded instead.)
 async fn notify_new_browser(
     state: &Arc<AppState>,
     user_id: i32,
     headers: &HeaderMap,
     client_ip: &str,
+    exclude_token: Option<&str>,
 ) {
     use crate::service::mail::{MailKind, detect};
 
@@ -207,13 +207,17 @@ async fn notify_new_browser(
         return;
     }
     let agent = user_agent::from_headers(headers);
-    let prior = match state.repos.api_token.list_sessions(user_id).await {
+    let mut prior = match state.repos.api_token.list_sessions(user_id).await {
         Ok(sessions) => sessions,
         Err(e) => {
             tracing::warn!("could not list sessions for a new-login check: {e}");
             return;
         }
     };
+    if let Some(excluded) = exclude_token {
+        let excluded_hash = infra::crypto::token_hash::sha256_hex(excluded);
+        prior.retain(|session| session.token != excluded_hash);
+    }
     if !detect::is_new_browser(&prior, agent.as_deref()) {
         return;
     }
@@ -234,36 +238,26 @@ fn session_cookie(name: &str, value: &str, max_age: Option<u64>, secure: bool) -
     cookie
 }
 
-/// Create a short-lived pending token for the 2FA login flow.
-async fn create_pending_token(
-    repos: &crate::repository::Repositories,
-    user_id: i32,
-) -> Result<String, AppError> {
-    let token = generate_api_token();
-    let now = chrono::Utc::now().timestamp();
-    // 5-minute TTL for the pending token
-    let expires_at = now + 300;
-
-    repos
-        .api_token
-        .create_session_token(CreateSessionTokenParams {
-            user_id,
-            token: token.clone(),
-            created_at: now,
-            expires_at: Some(expires_at),
-            device_id: None,
-            platform: None,
-            device_name: None,
-            client_version: None,
-            is_pending: true,
-            source: SessionSource::Web,
-            // Never listed; a user agent here would only park a secret-adjacent value.
-            user_agent: None,
-        })
-        .await
-        .map_err(|e| AppError::internal(format!("failed to create pending token: {e}")))?;
-
-    Ok(token)
+/// Redirect to `location`, attaching every cookie as its own `Set-Cookie` header.
+///
+/// `HeaderMap::append` rather than a tuple array: the latter `insert`s, so all but
+/// the first cookie would be overwritten.
+fn redirect_with_cookies(location: &str, cookies: &[&str]) -> Result<Response, AppError> {
+    let mut resp_headers = ::axum::http::HeaderMap::new();
+    resp_headers.insert(
+        ::axum::http::header::LOCATION,
+        ::axum::http::HeaderValue::from_str(location)
+            .map_err(|_| AppError::internal("Failed to create location header"))?,
+    );
+    for cookie in cookies {
+        resp_headers.append(
+            ::axum::http::header::SET_COOKIE,
+            cookie
+                .parse::<::axum::http::HeaderValue>()
+                .map_err(|_| AppError::internal("Failed to create cookie header"))?,
+        );
+    }
+    Ok((StatusCode::FOUND, resp_headers).into_response())
 }
 
 async fn render_login_page(
@@ -420,7 +414,7 @@ pub async fn login(
     );
 
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return render_login_page(
             &state,
             &headers,
@@ -484,13 +478,65 @@ pub async fn login(
         .map(|html| (StatusCode::OK, Html(html)).into_response());
     }
 
-    // Check-and-reserve the login budget in one atomic step. The check at the top
-    // of this handler is only a cheap fast path (it spares a locked-out client the
-    // proof-of-work); this reservation is what actually bounds password
-    // verification, because a concurrent burst would otherwise all pass a plain
-    // check before the first failure is recorded.
-    let Some(mut attempt) = state.auth_limiters.login.begin_login_attempt(&login_keys) else {
-        return render_login_page(
+    // The service reserves the login budget atomically. The check above is only a
+    // cheap fast path (it spares a locked-out client the proof-of-work); the
+    // reservation is what bounds password verification under a concurrent burst.
+    let is_remembered =
+        form.remember_me.as_deref() == Some("1") || form.remember_me.as_deref() == Some("on");
+
+    let outcome = state
+        .login_service()
+        .begin_web_login(
+            &form.email,
+            &form.password,
+            &client_ip,
+            user_agent::from_headers(&headers),
+            is_remembered,
+        )
+        .await?;
+
+    match outcome {
+        WebLogin::Session {
+            user_id,
+            token,
+            max_age_seconds,
+        } => {
+            notify_new_browser(&state, user_id, &headers, &client_ip, Some(&token)).await;
+
+            let secure_cookies = state.config().server.secure_cookies();
+            let cookie = session_cookie("seahub-session", &token, max_age_seconds, secure_cookies);
+            let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(
+                &state.csrf_secret,
+                &token,
+                secure_cookies,
+                max_age_seconds,
+            );
+            redirect_with_cookies(&next, &[cookie.as_str(), csrf_cookie.as_str()])
+        }
+        WebLogin::TwoFactorPending { pending_token } => {
+            let cookie = session_cookie(
+                "seahub-session-pending",
+                &pending_token,
+                Some(300),
+                state.config().server.secure_cookies(),
+            );
+
+            // Thread `next` through 2FA so the user still lands on the original destination.
+            let encoded_next: String =
+                percent_encoding::utf8_percent_encode(&next, percent_encoding::NON_ALPHANUMERIC)
+                    .collect();
+            let two_fa_location = format!("/accounts/two-factor-auth/?next={encoded_next}");
+
+            Ok((
+                StatusCode::FOUND,
+                [("Location", &two_fa_location), ("Set-Cookie", &cookie)],
+            )
+                .into_response())
+        }
+        WebLogin::EmailUnverified { user } => {
+            unverified_login_response(&state, &headers, &user, &client_ip).await
+        }
+        WebLogin::RateLimited => render_login_page(
             &state,
             &headers,
             Some(
@@ -502,40 +548,10 @@ pub async fn login(
             None,
         )
         .await
-        .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response());
-    };
-
-    let user_record = state.repos.user.find_by_email(&form.email).await?;
-
-    // Verify against a cost-matched dummy hash when the row is missing, and check
-    // the password before `is_active`: otherwise a disabled account answers in
-    // ~1ms while a wrong password spends ~100-300ms, a reliable "this email
-    // exists but is disabled" oracle.
-    let password_ok = match &user_record {
-        Some(u) => {
-            verify_password_async(
-                form.password.clone(),
-                u.password_hash.clone(),
-                state.config().auth.password_hash_iterations,
-            )
-            .await
-        }
-        None => {
-            let _ = verify_password_async(
-                form.password.clone(),
-                dummy_password_hash(state.config().auth.password_hash_iterations),
-                state.config().auth.password_hash_iterations,
-            )
-            .await;
-            false
-        }
-    };
-
-    // Same generic error for wrong password, disabled account and unknown email,
-    // to avoid user enumeration (matching seahub).
-    let Some(user_record) = user_record.filter(|u| password_ok && u.is_active) else {
-        attempt.fail();
-        return render_login_page(
+        .map(|html| (StatusCode::TOO_MANY_REQUESTS, Html(html)).into_response()),
+        // Same generic error for wrong password, disabled account and unknown
+        // email, to avoid user enumeration (matching seahub).
+        WebLogin::BadCredentials | WebLogin::AccountDisabled => render_login_page(
             &state,
             &headers,
             Some(
@@ -547,161 +563,13 @@ pub async fn login(
             login_pow_challenge(&state, &client_ip, &form.email),
         )
         .await
-        .map(|html| (StatusCode::OK, Html(html)).into_response());
-    };
-
-    // Success forgives this address/pair but keeps the distinct-account spray history.
-    attempt.succeed();
-
-    // A correct password is not enough for an unverified account: no session is
-    // created and no last-login is recorded. Instead, offer a fresh link, but only
-    // after the cooldown, so signing in right after registering does not invalidate
-    // the link that was just mailed.
-    if !user_record.email_verified {
-        return unverified_login_response(&state, &headers, &user_record, &client_ip).await;
+        .map(|html| (StatusCode::OK, Html(html)).into_response()),
+        // The remaining outcomes belong to the TOTP step; the password step can
+        // never produce them.
+        other => Err(AppError::internal(format!(
+            "unexpected web-login outcome: {other:?}"
+        ))),
     }
-
-    // Upgrade a stored hash that predates the embedded cost or used another one.
-    // Best-effort: a failed write must not block a correct password.
-    if needs_rehash(
-        &user_record.password_hash,
-        state.config().auth.password_hash_iterations,
-    ) {
-        let upgraded = hash_password_async(
-            form.password.clone(),
-            state.config().auth.password_hash_iterations,
-        )
-        .await;
-        if let Err(e) = state
-            .repos
-            .user
-            .update_password(user_record.id, upgraded)
-            .await
-        {
-            tracing::warn!(
-                "failed to upgrade password hash for user {}: {e}",
-                user_record.id
-            );
-        }
-    }
-
-    let two_fa = state.repos.user_2fa.find_by_user_id(user_record.id).await?;
-
-    if let Some(tfa) = two_fa
-        && tfa.enabled
-    {
-        let pending_token = create_pending_token(&state.repos, user_record.id).await?;
-        let cookie = session_cookie(
-            "seahub-session-pending",
-            &pending_token,
-            Some(300),
-            state.config().server.secure_cookies(),
-        );
-
-        // Thread `next` through 2FA so the user still lands on the original destination.
-        let encoded_next: String =
-            percent_encoding::utf8_percent_encode(&next, percent_encoding::NON_ALPHANUMERIC)
-                .collect();
-        let two_fa_location = format!("/accounts/two-factor-auth/?next={encoded_next}");
-
-        let response = (
-            StatusCode::FOUND,
-            [("Location", &two_fa_location), ("Set-Cookie", &cookie)],
-        )
-            .into_response();
-
-        return Ok(response);
-    }
-
-    // Before the session is stored, so "have I seen this browser?" can be asked.
-    notify_new_browser(&state, user_record.id, &headers, &client_ip).await;
-
-    let session_token = generate_api_token();
-    let now = chrono::Utc::now().timestamp();
-
-    // "Remember me" checkbox: checked → long-lived session; unchecked → session cookie.
-    let is_remembered =
-        form.remember_me.as_deref() == Some("1") || form.remember_me.as_deref() == Some("on");
-
-    let ttl_days = state.config().auth.api_token_ttl_days;
-    let token_expires_at = if is_remembered {
-        Some(now + (ttl_days as i64 * 86400))
-    } else {
-        // Unchecked: short-lived token (24h).
-        Some(now + 86400)
-    };
-
-    state
-        .repos
-        .api_token
-        .create_session_token(CreateSessionTokenParams {
-            user_id: user_record.id,
-            token: session_token.clone(),
-            created_at: now,
-            expires_at: token_expires_at,
-            device_id: None,
-            platform: None,
-            device_name: None,
-            client_version: None,
-            is_pending: false,
-            source: SessionSource::Web,
-            user_agent: user_agent::from_headers(&headers),
-        })
-        .await
-        .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
-
-    state
-        .repos
-        .user
-        .touch_last_login(user_record.id, now)
-        .await?;
-
-    let secure_cookies = state.config().server.secure_cookies();
-    let cookie = session_cookie(
-        "seahub-session",
-        &session_token,
-        if is_remembered {
-            Some(ttl_days * 86400)
-        } else {
-            Some(86400)
-        },
-        secure_cookies,
-    );
-
-    let csrf_max_age = if is_remembered {
-        Some(ttl_days * 86400)
-    } else {
-        Some(86400)
-    };
-    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
-        &state.csrf_secret,
-        &session_token,
-        secure_cookies,
-        csrf_max_age,
-    );
-
-    let mut resp_headers = axum::http::HeaderMap::new();
-    resp_headers.insert(
-        axum::http::header::LOCATION,
-        axum::http::HeaderValue::from_str(&next)
-            .map_err(|_| AppError::internal("Failed to create location header"))?,
-    );
-    resp_headers.append(
-        axum::http::header::SET_COOKIE,
-        cookie
-            .parse::<axum::http::HeaderValue>()
-            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
-    );
-    resp_headers.append(
-        axum::http::header::SET_COOKIE,
-        csrf_cookie
-            .parse::<axum::http::HeaderValue>()
-            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
-    );
-
-    let response = (StatusCode::FOUND, resp_headers).into_response();
-
-    Ok(response)
 }
 
 /// GET /accounts/two-factor-auth/ — show the TOTP verification page.
@@ -779,7 +647,7 @@ pub async fn two_factor_auth(
     );
 
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return Err(AppError::BadRequest(
             I18n::from_headers(&headers, &state.config().ui.default_language)
                 .tr("auth.invalid_origin")
@@ -812,180 +680,79 @@ pub async fn two_factor_auth(
         return back_to_login(&next, Some("auth.session_expired"), secure_cookies);
     };
 
-    let token_record = match state.repos.api_token.find_by_token(pending_token).await {
-        Ok(Some(record)) => record,
-        Ok(None) => {
-            return back_to_login(&next, Some("auth.session_expired_alt"), secure_cookies);
+    let outcome = state
+        .login_service()
+        .complete_web_two_factor(
+            pending_token,
+            &form.code,
+            &client_ip,
+            user_agent::from_headers(&headers),
+        )
+        .await?;
+
+    match outcome {
+        WebLogin::Session {
+            user_id,
+            token,
+            max_age_seconds,
+        } => {
+            // The second factor was satisfied; from the owner's point of view
+            // this is still the first sign-in from this browser.
+            notify_new_browser(&state, user_id, &headers, &client_ip, Some(&token)).await;
+
+            let session = session_cookie("seahub-session", &token, max_age_seconds, secure_cookies);
+            let clear_pending =
+                session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
+            let csrf = crate::middleware::csrf::csrf_cookie_header(
+                &state.csrf_secret,
+                &token,
+                secure_cookies,
+                max_age_seconds,
+            );
+            redirect_with_cookies(
+                &next,
+                &[session.as_str(), clear_pending.as_str(), csrf.as_str()],
+            )
         }
-        Err(_) => return Err(AppError::internal("database error")),
-    };
-
-    if let Some(expires_at) = token_record.expires_at {
-        let now = chrono::Utc::now().timestamp();
-        if now > expires_at {
-            let _ = state.repos.api_token.delete_by_token(pending_token).await;
-            return back_to_login(&next, Some("auth.session_expired"), secure_cookies);
+        WebLogin::InvalidCode => {
+            let t = I18n::from_headers(&headers, &state.config().ui.default_language);
+            let tpl = TwoFactorLoginTemplate {
+                urls: crate::static_assets::template_urls(),
+                t,
+                error: Some(t.tr("auth.invalid_code").to_string()),
+                next: next.clone(),
+            };
+            let html = tpl
+                .render()
+                .map_err(|e| AppError::internal(e.to_string()))?;
+            Ok((StatusCode::OK, Html(html)).into_response())
         }
-    }
-
-    // Only a 2FA-pending token may be presented here. Without this check any
-    // live account token placed in the `seahub-session-pending` cookie is
-    // accepted as evidence that the password step already happened, which is
-    // the precondition this page exists to establish (every other consumer of
-    // an API token rejects `is_pending`).
-    if !token_record.is_pending {
-        return back_to_login(&next, Some("auth.session_expired_alt"), secure_cookies);
-    }
-
-    let user_id = token_record.user_id;
-
-    // Rate limit: per user+IP.
-    let totp_key = format!("totp:{}:{}", user_id, client_ip);
-    if state.auth_limiters.totp.is_limited(&totp_key) {
-        // Delete pending token to force re-login
-        let _ = state.repos.api_token.delete_by_token(pending_token).await;
-        return back_to_login(&next, Some("auth.too_many_verification"), secure_cookies);
-    }
-
-    let two_fa = state.repos.user_2fa.find_by_user_id(user_id).await?;
-    let Some(two_fa) = two_fa else {
-        // The config was removed between the password step and now, so signing
-        // in again simply passes without a second factor.
-        let _ = state.repos.api_token.delete_by_token(pending_token).await;
-        return back_to_login(
+        WebLogin::RateLimited => {
+            back_to_login(&next, Some("auth.too_many_verification"), secure_cookies)
+        }
+        // An expired token says so; a missing token or a full session in the
+        // pending cookie gets the "not a pending session" wording. A live row is
+        // left in place — it may be the browser's real session.
+        WebLogin::PendingExpired(PendingTokenFailure::Expired) => {
+            back_to_login(&next, Some("auth.session_expired"), secure_cookies)
+        }
+        WebLogin::PendingExpired(PendingTokenFailure::Unknown) => {
+            back_to_login(&next, Some("auth.session_expired_alt"), secure_cookies)
+        }
+        WebLogin::SecondFactorUnavailable(SecondFactorState::NotConfigured) => back_to_login(
             &next,
             Some("auth.two_factor_not_configured"),
             secure_cookies,
-        );
-    };
-
-    if !two_fa.enabled {
-        // 2FA was disabled since the pending token was created — proceed to login
-        let _ = state.repos.api_token.delete_by_token(pending_token).await;
-        return back_to_login(&next, None, secure_cookies);
+        ),
+        WebLogin::SecondFactorUnavailable(SecondFactorState::Disabled) => {
+            back_to_login(&next, None, secure_cookies)
+        }
+        // The remaining outcomes belong to the password step; a pending token can
+        // never produce them.
+        other => Err(AppError::internal(format!(
+            "unexpected two-factor outcome: {other:?}"
+        ))),
     }
-
-    let user_record = state
-        .repos
-        .user
-        .find_by_id(user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-
-    let totp = TotpManager::create_totp(&two_fa.totp_secret, &user_record.email, "Nanofile")
-        .map_err(|e| AppError::internal(e.to_string()))?;
-
-    let code_valid =
-        TotpManager::verify_and_consume(&state.repos, user_id, &totp, &form.code).await;
-
-    let backup_valid = if !code_valid {
-        crate::service::auth::backup_codes::BackupCodeManager::verify_code(
-            &state.repos,
-            user_id,
-            &form.code,
-        )
-        .await
-        .unwrap_or(false)
-    } else {
-        false
-    };
-
-    if !code_valid && !backup_valid {
-        state.auth_limiters.totp.record_attempt(&totp_key);
-        let tpl = TwoFactorLoginTemplate {
-            urls: crate::static_assets::template_urls(),
-            t: I18n::from_headers(&headers, &state.config().ui.default_language),
-            error: Some(
-                I18n::from_headers(&headers, &state.config().ui.default_language)
-                    .tr("auth.invalid_code")
-                    .to_string(),
-            ),
-            next: next.clone(),
-        };
-        let html = tpl
-            .render()
-            .map_err(|e| AppError::internal(e.to_string()))?;
-        return Ok((StatusCode::OK, Html(html)).into_response());
-    }
-
-    state.auth_limiters.totp.clear(&totp_key);
-    let _ = state.repos.api_token.delete_by_token(pending_token).await;
-
-    // The second factor was satisfied below; from the owner's point of view this
-    // is still the first sign-in from this browser.
-    notify_new_browser(&state, user_id, &headers, &client_ip).await;
-
-    let session_token = generate_api_token();
-    let now = chrono::Utc::now().timestamp();
-    let ttl_days = state.config().auth.api_token_ttl_days;
-    let expires_at = now + (ttl_days as i64 * 86400);
-
-    state
-        .repos
-        .api_token
-        .create_session_token(CreateSessionTokenParams {
-            user_id,
-            token: session_token.clone(),
-            created_at: now,
-            expires_at: Some(expires_at),
-            device_id: None,
-            platform: None,
-            device_name: None,
-            client_version: None,
-            is_pending: false,
-            source: SessionSource::Web,
-            user_agent: user_agent::from_headers(&headers),
-        })
-        .await
-        .map_err(|e| AppError::internal(format!("failed to create session token: {e}")))?;
-
-    state.repos.user.touch_last_login(user_id, now).await?;
-
-    let secure_cookies = state.config().server.secure_cookies();
-    let session_cookie_str = session_cookie(
-        "seahub-session",
-        &session_token,
-        Some(ttl_days * 86400),
-        secure_cookies,
-    );
-
-    let clear_pending_str = session_cookie("seahub-session-pending", "", Some(0), secure_cookies);
-
-    let csrf_cookie_str = crate::service::auth::csrf::csrf_cookie_header(
-        &state.csrf_secret,
-        &session_token,
-        secure_cookies,
-        Some(ttl_days * 86400),
-    );
-
-    // HeaderMap::append so all Set-Cookie headers reach the browser.
-    // A plain array tuple uses `insert` which would overwrite the first one.
-    let mut resp_headers = ::axum::http::HeaderMap::new();
-    resp_headers.insert(
-        ::axum::http::header::LOCATION,
-        ::axum::http::HeaderValue::from_str(&next)
-            .map_err(|_| AppError::internal("Failed to create location header"))?,
-    );
-    resp_headers.append(
-        ::axum::http::header::SET_COOKIE,
-        session_cookie_str
-            .parse::<::axum::http::HeaderValue>()
-            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
-    );
-    resp_headers.append(
-        ::axum::http::header::SET_COOKIE,
-        clear_pending_str
-            .parse::<::axum::http::HeaderValue>()
-            .map_err(|_| AppError::internal("Failed to create session cookie header"))?,
-    );
-    resp_headers.append(
-        ::axum::http::header::SET_COOKIE,
-        csrf_cookie_str
-            .parse::<::axum::http::HeaderValue>()
-            .map_err(|_| AppError::internal("Failed to create CSRF cookie header"))?,
-    );
-
-    Ok((StatusCode::FOUND, resp_headers).into_response())
 }
 
 /// GET /accounts/logout/ — log out (clear session cookie, delete token).
@@ -1124,7 +891,7 @@ pub async fn register(
     Form(form): Form<RegisterForm>,
 ) -> Result<impl IntoResponse, AppError> {
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return register_error(
             &state,
             &headers,
@@ -1239,7 +1006,7 @@ pub async fn register(
         secure_cookies,
     );
 
-    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
+    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &session_token,
         secure_cookies,
@@ -1455,7 +1222,7 @@ pub async fn password_reset(
     Form(form): Form<PasswordResetForm>,
 ) -> Result<Html<String>, AppError> {
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return Ok(Html(String::new()));
     }
 
@@ -1612,7 +1379,7 @@ pub async fn password_reset_confirm(
     }
 
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return Ok(StatusCode::FORBIDDEN.into_response());
     }
 

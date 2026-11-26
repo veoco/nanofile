@@ -26,7 +26,7 @@ pub async fn build_page_ctx(state: &AppState, user: &WebUser) -> Result<PageCtx,
         .get_for_user(&state.repos, user.user_id)
         .await?;
     let csrf_token =
-        crate::service::auth::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
+        crate::middleware::csrf::generate_csrf_token(&state.csrf_secret, &user.session_token);
     Ok(PageCtx {
         urls: crate::static_assets::template_urls(),
         t: I18n::get(user.language.as_deref()),

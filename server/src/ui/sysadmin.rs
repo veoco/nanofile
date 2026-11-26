@@ -160,7 +160,7 @@ pub async fn create_user(
         return Err(AppError::Forbidden);
     }
 
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -226,7 +226,7 @@ pub async fn update_user(
         return Err(AppError::Forbidden);
     }
 
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -268,7 +268,7 @@ pub async fn delete_user(
         return Err(AppError::Forbidden);
     }
 
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),

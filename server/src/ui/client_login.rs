@@ -73,7 +73,7 @@ pub async fn client_token_login_confirm(
     axum::Form(form): axum::Form<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let origin = state.config().server.site_url_origin();
-    if !crate::service::auth::csrf::validate_origin(&headers, &origin) {
+    if !crate::middleware::csrf::validate_origin(&headers, &origin) {
         return Ok(Redirect::to("/libraries/").into_response());
     }
 
@@ -184,7 +184,7 @@ async fn complete_login(
 
     let next = resolve_next(next, &allowed_origin);
 
-    let csrf_cookie = crate::service::auth::csrf::csrf_cookie_header(
+    let csrf_cookie = crate::middleware::csrf::csrf_cookie_header(
         &state.csrf_secret,
         &api_token,
         state.config().server.secure_cookies(),

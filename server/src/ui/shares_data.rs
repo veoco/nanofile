@@ -2,13 +2,13 @@
 //!
 //! Both pages read the same tables and need the same batched repository and user
 //! lookups; one loader and one row shape keep their error handling from drifting
-//! apart. Only the ownership check and the template differ.
+//! apart. Only the link scope (own vs all) and the template differ; deletion is
+//! the sharing service's job.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::repository::Repositories;
 use base::error::AppError;
 
 /// One share link as both pages render it.
@@ -190,65 +190,6 @@ fn entry_name(path: &str) -> String {
     path.rsplit_once('/')
         .map(|(_, name)| name.to_string())
         .unwrap_or_else(|| path.to_string())
-}
-
-/// Delete one share link, from either page.
-///
-/// Returns `Ok(false)` when the token no longer exists (a stale page or a double
-/// submit); the caller decides how to present that. A non-admin may only delete
-/// their own link; an admin may delete any.
-pub async fn delete_share(
-    repos: &Repositories,
-    token: &str,
-    caller_id: i32,
-    admin: bool,
-) -> Result<bool, AppError> {
-    let Some(link) = repos.share_link.find_by_token(token).await? else {
-        return Ok(false);
-    };
-    if !admin && link.creator_id != caller_id {
-        return Err(AppError::Forbidden);
-    }
-    let result = if admin {
-        repos.share_link.delete_by_token(token).await?
-    } else {
-        repos
-            .share_link
-            .delete_by_token_and_user(token, caller_id)
-            .await?
-    };
-    Ok(result.rows_affected > 0)
-}
-
-/// [`delete_share`] for upload links; also revokes the tokens minted from them.
-pub async fn delete_upload(
-    repos: &Repositories,
-    token_manager: &crate::AccessTokenManager,
-    token: &str,
-    caller_id: i32,
-    admin: bool,
-) -> Result<bool, AppError> {
-    let Some(link) = repos.upload_link.find_by_token(token).await? else {
-        return Ok(false);
-    };
-    if !admin && link.creator_id != caller_id {
-        return Err(AppError::Forbidden);
-    }
-    let result = if admin {
-        repos.upload_link.delete_by_token(token).await?
-    } else {
-        repos
-            .upload_link
-            .delete_by_token_and_user(token, caller_id)
-            .await?
-    };
-    if result.rows_affected > 0 {
-        let revoked = token_manager.revoke_upload_link(link.id);
-        if revoked > 0 {
-            tracing::debug!(link_id = link.id, revoked, "revoked upload-link tokens");
-        }
-    }
-    Ok(result.rows_affected > 0)
 }
 
 #[cfg(test)]

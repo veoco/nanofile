@@ -120,7 +120,7 @@ fn answer(op: u8, size: u32, data: &[u8]) -> (u8, Vec<u8>) {
             Ok(bytes) => (b'P', bytes),
             Err(error) => (b'U', error.to_string().into_bytes()),
         },
-        OP_EXIF => match crate::service::fs::exif::ExifService::extract_exif(data) {
+        OP_EXIF => match super::exif::extract_exif(data) {
             Ok(value) => (
                 b'X',
                 serde_json::to_vec(&value).unwrap_or_else(|_| b"null".to_vec()),

@@ -139,7 +139,7 @@ pub async fn setup_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
@@ -176,7 +176,7 @@ pub async fn verify_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<VerifyForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -277,7 +277,7 @@ pub async fn disable_2fa(
     State(state): State<Arc<AppState>>,
     Form(form): Form<DisableForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),

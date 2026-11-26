@@ -2,6 +2,8 @@
 
 pub mod auth;
 pub mod cookies;
+pub mod csrf;
+pub mod redact;
 pub mod repo_extractor;
 pub mod route_audit;
 
@@ -149,7 +151,7 @@ pub fn require_csrf_for_cookie_session(
     let Some(session) = cookies::cookie_value(headers, "seahub-session") else {
         return Ok(());
     };
-    if crate::service::auth::csrf::validate_csrf_header(headers, csrf_secret, &session) {
+    if crate::middleware::csrf::validate_csrf_header(headers, csrf_secret, &session) {
         Ok(())
     } else {
         Err(AppError::Forbidden)
@@ -573,7 +575,7 @@ mod csrf_cookie_tests {
     /// With the matching token the same split-header request passes.
     #[test]
     fn a_session_in_a_second_cookie_header_accepts_its_token() {
-        let token = crate::service::auth::csrf::generate_csrf_token(SECRET, "sess");
+        let token = crate::middleware::csrf::generate_csrf_token(SECRET, "sess");
         let headers = csrf_headers("sess", Some(&token));
         assert!(require_csrf_for_cookie_session(&headers, SECRET).is_ok());
     }

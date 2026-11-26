@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::i18n::I18n;
-use crate::service::auth::csrf;
+use crate::middleware::csrf;
 use crate::ui::auth_extractor::WebUser;
 
 #[derive(Template)]

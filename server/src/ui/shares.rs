@@ -110,7 +110,7 @@ pub async fn create_share(
     axum::Form(form): axum::Form<CreateShareForm>,
 ) -> Result<impl IntoResponse, AppError> {
     crate::middleware::ensure_share_download_enabled(&state)?;
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -139,17 +139,20 @@ pub async fn delete_share(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    let deleted =
-        super::shares_data::delete_share(&state.repos, &token, user.user_id, false).await?;
-    if !deleted {
-        return Err(AppError::NotFound("Share link not found".to_string()));
-    }
+    // The service is idempotent: a stale page or double submit simply redirects.
+    crate::service::sharing::share::delete_share_link(
+        &state.repos,
+        &token,
+        user.user_id,
+        &crate::domain::permission::RepoScope::all(),
+    )
+    .await?;
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",
@@ -165,23 +168,22 @@ pub async fn delete_upload(
     Path(token): Path<String>,
     axum::Form(form): axum::Form<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(|s| s.as_str()),
     )?;
 
-    let deleted = super::shares_data::delete_upload(
+    // Idempotent as well; the service also revokes tokens already minted from
+    // the link.
+    crate::service::sharing::link::delete_upload_link(
         &state.repos,
-        &state.token_manager,
         &token,
         user.user_id,
-        false,
+        Some(&state.token_manager),
+        &crate::domain::permission::RepoScope::all(),
     )
     .await?;
-    if !deleted {
-        return Err(AppError::NotFound("Upload link not found".to_string()));
-    }
 
     let redirect = match form.get("tab").map(|s| s.as_str()) {
         Some("upload-links") => "/shares/?tab=upload-links",

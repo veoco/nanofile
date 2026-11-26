@@ -11,6 +11,7 @@ use crate::domain::credential::Credential;
 use crate::domain::device::DeviceIdentity;
 use crate::domain::permission::RepoScope;
 use crate::domain::repo_path;
+use crate::domain::token::is_token_expired;
 use crate::repository::Repositories;
 use base::error::AppError;
 
@@ -50,7 +51,7 @@ impl AuthUser {
     /// missing line was invisible to the route table and to review.
     pub async fn require_repo_read(&self, state: &AppState, repo_id: &str) -> Result<(), AppError> {
         self.ensure_repo_allowed(repo_id, false)?;
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             repo_id,
             self.user_id,
@@ -65,7 +66,7 @@ impl AuthUser {
         repo_id: &str,
     ) -> Result<(), AppError> {
         self.ensure_repo_allowed(repo_id, true)?;
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             repo_id,
             self.user_id,
@@ -103,14 +104,14 @@ async fn sync_auth_with_permission(
 ) -> Result<SyncAuth, AppError> {
     let auth = SyncAuth::from_request_parts(parts, state).await?;
     if write {
-        crate::domain::permission::check_repo_write_permission(
+        crate::service::permission::check_repo_write_permission(
             state.repos.member.as_ref(),
             &auth.repo_id,
             auth.user_id,
         )
         .await?;
     } else {
-        crate::domain::permission::check_repo_read_permission(
+        crate::service::permission::check_repo_read_permission(
             state.repos.member.as_ref(),
             &auth.repo_id,
             auth.user_id,
@@ -547,10 +548,10 @@ fn route_decision(
     route: &str,
     uri_path: &str,
 ) -> Result<(), StatusCode> {
-    let Some(access) = required_access(method, route) else {
+    let Some(access) = required_access(method.as_str(), route) else {
         // Fail closed and leave a trace: a gap in the table is a bug, so it must
         // be observable. `record` answers true only for a route's first hit.
-        let safe_path = crate::app::redact_request_path(uri_path);
+        let safe_path = crate::middleware::redact::redact_request_path(uri_path);
         if super::route_audit::record(method.as_str(), &safe_path) {
             tracing::warn!(
                 %method,
@@ -642,7 +643,7 @@ fn try_extract_cookie_session(
     // and come from tags that cannot attach custom headers.
     if *method != axum::http::Method::GET
         && *method != axum::http::Method::HEAD
-        && !crate::service::auth::csrf::validate_csrf_header(
+        && !crate::middleware::csrf::validate_csrf_header(
             headers,
             &state.csrf_secret,
             &session_token,
@@ -714,7 +715,7 @@ impl SyncAuth {
                         _ => StatusCode::FORBIDDEN,
                     }
                 })?;
-            let needed = if crate::domain::capability::requires_sync_write(method, path) {
+            let needed = if crate::domain::capability::requires_sync_write(method.as_str(), path) {
                 crate::domain::capability::Capability::SyncWrite
             } else {
                 crate::domain::capability::Capability::SyncRead
@@ -730,7 +731,7 @@ impl SyncAuth {
                 }
                 // The key's scope is a ceiling, not a grant: the permission
                 // check still decides, so a revoked account loses access at once.
-                crate::domain::permission::check_repo_read_permission(
+                crate::service::permission::check_repo_read_permission(
                     repos.member.as_ref(),
                     url_repo,
                     session.user_id,
@@ -763,7 +764,7 @@ impl SyncAuth {
             // caller must be a member of the URL repo, closing the cross-repo
             // IDOR while keeping seaf-daemon's API-token logon working.
             if let Some(url_repo) = url_repo_id {
-                crate::domain::permission::check_repo_read_permission(
+                crate::service::permission::check_repo_read_permission(
                     repos.member.as_ref(),
                     url_repo,
                     record.user_id,
@@ -785,11 +786,6 @@ impl SyncAuth {
 
         Err(StatusCode::FORBIDDEN)
     }
-}
-
-/// Check if a token has expired: `expires_at` set and in the past.
-pub(crate) fn is_token_expired(expires_at: Option<i64>) -> bool {
-    matches!(expires_at, Some(exp) if chrono::Utc::now().timestamp() > exp)
 }
 
 /// Ensure the user behind a sync/API token still exists and is active, so a

@@ -12,7 +12,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::read_multipart_field_limited;
+use crate::http::multipart::read_multipart_field_limited;
 use crate::i18n::I18n;
 use crate::service::auth::password::{hash_password_async, verify_password_async};
 use crate::service::credential::{BulkRevoke, CredentialKind, CredentialService};
@@ -228,7 +228,7 @@ pub async fn update_display_name(
     Form(form): Form<DisplayNameForm>,
 ) -> Result<impl IntoResponse, AppError> {
     // CSRF check — the token is mandatory; a missing token is rejected.
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -254,7 +254,7 @@ pub async fn update_language(
     State(state): State<Arc<AppState>>,
     Form(form): Form<LanguageForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -340,7 +340,7 @@ pub async fn change_password(
     State(state): State<Arc<AppState>>,
     Form(form): Form<PasswordForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -731,7 +731,7 @@ pub async fn revoke_credential(
     State(state): State<Arc<AppState>>,
     Form(form): Form<RevokeCredentialForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -774,7 +774,7 @@ pub async fn revoke_bulk(
     State(state): State<Arc<AppState>>,
     Form(form): Form<BulkRevokeForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -830,7 +830,7 @@ pub async fn unlink_device(
     State(state): State<Arc<AppState>>,
     Form(form): Form<UnlinkDeviceForm>,
 ) -> Result<impl IntoResponse, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.csrf_token.as_deref(),
@@ -913,11 +913,7 @@ pub async fn upload_avatar(
     }
 
     let csrf_ok = csrf_token.as_deref().is_some_and(|token| {
-        crate::service::auth::csrf::validate_csrf_token(
-            &state.csrf_secret,
-            &user.session_token,
-            token,
-        )
+        crate::middleware::csrf::validate_csrf_token(&state.csrf_secret, &user.session_token, token)
     });
     if !csrf_ok {
         return render_profile_error(

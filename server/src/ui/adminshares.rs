@@ -124,7 +124,7 @@ pub async fn delete_share(
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(String::as_str),
@@ -133,14 +133,18 @@ pub async fn delete_share(
     // Admin delete: no creator check. A stale page or double submit reports the
     // link as already gone instead of erroring.
     let tab = normalize_tab(form.get("tab").map(String::as_str));
-    let deleted =
-        match super::shares_data::delete_share(&state.repos, &token, user.user_id, true).await {
-            Ok(deleted) => deleted,
-            Err(e) => {
-                let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
-                return render_page(&state, &user, tab, Some(msg), None).await;
-            }
-        };
+    let deleted = match crate::service::sharing::share::delete_share_link_as_admin(
+        &state.repos,
+        &token,
+    )
+    .await
+    {
+        Ok(deleted) => deleted,
+        Err(e) => {
+            let msg = crate::ui::banner::action_error(I18n::get(user.language.as_deref()), &e);
+            return render_page(&state, &user, tab, Some(msg), None).await;
+        }
+    };
     if !deleted {
         let msg = I18n::get(user.language.as_deref())
             .tr("admin.link_not_found")
@@ -161,19 +165,17 @@ pub async fn delete_upload(
     if !user.is_admin {
         return Err(AppError::Forbidden);
     }
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(String::as_str),
     )?;
 
     let tab = normalize_tab(form.get("tab").map(String::as_str));
-    let deleted = match super::shares_data::delete_upload(
+    let deleted = match crate::service::sharing::link::delete_upload_link_as_admin(
         &state.repos,
-        &state.token_manager,
         &token,
-        user.user_id,
-        true,
+        Some(&state.token_manager),
     )
     .await
     {

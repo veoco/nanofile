@@ -450,7 +450,7 @@ pub async fn create(
     State(state): State<Arc<AppState>>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(String::as_str),
@@ -499,7 +499,7 @@ pub async fn update(
     Path(key_id): Path<i32>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(String::as_str),
@@ -539,7 +539,7 @@ pub async fn revoke(
     Path(key_id): Path<i32>,
     Form(form): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    crate::service::auth::csrf::check_form_csrf(
+    crate::middleware::csrf::check_form_csrf(
         &state,
         &user.session_token,
         form.get("csrf_token").map(String::as_str),
