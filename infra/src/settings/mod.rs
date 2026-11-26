@@ -12,12 +12,14 @@
 //! variable.
 
 pub mod catalog;
+pub mod runtime;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::config::{Config, EnvKeys};
 
 pub use catalog::{CATALOG, GROUPS, GroupDef, groups};
+pub use runtime::RuntimeConfig;
 
 /// The admin page a setting is shown on.
 ///

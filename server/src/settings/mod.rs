@@ -1,10 +1,10 @@
-//! Server-side settings: the replaceable runtime snapshot and the service that
-//! layers the environment, the config file and the saved rows.
+//! Server-side settings service: the layers (environment, config file, saved
+//! rows), the effective-value computation and the admin save path.
 //!
-//! `infra::settings` owns the catalog and layering rules; this module owns the state.
+//! `infra::settings` owns the catalog, the layering rules and the replaceable
+//! snapshot (`RuntimeConfig`); this module owns the service that applies them.
 
-pub mod runtime;
 pub mod service;
 
-pub use runtime::RuntimeConfig;
+pub use infra::settings::RuntimeConfig;
 pub use service::{SaveOutcome, SecretState, SettingsForm, SettingsLayers, SettingsService};

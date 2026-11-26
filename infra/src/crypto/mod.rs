@@ -6,5 +6,6 @@ pub mod password_manager;
 pub mod pwd_hash;
 pub mod random_key;
 pub mod token_encryption;
+pub mod token_hash;
 pub mod totp_encryption;
 pub mod verify;

@@ -1,7 +1,7 @@
 //! The runtime configuration snapshot.
 //!
 //! [`RuntimeConfig`] is a handle whose `Arc<Config>` snapshot can be replaced,
-//! and every reader goes through [`crate::AppState::config`], so a saved
+//! and the server exposes it through `AppState::config`, so a saved
 //! setting reaches all of them at once. Cloning it at the top of a handler (or
 //! a service call) costs one atomic increment.
 //!
@@ -12,7 +12,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use infra::config::Config;
+use crate::config::Config;
 
 /// A replaceable configuration snapshot shared by every reader.
 #[derive(Clone)]

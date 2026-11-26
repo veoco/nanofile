@@ -22,7 +22,7 @@ use infra::settings::{
 };
 
 use crate::repository::settings::SettingsRepository;
-use crate::settings::runtime::RuntimeConfig;
+use infra::settings::RuntimeConfig;
 
 pub struct SettingsLayers {
     /// The config file with the environment already applied.
