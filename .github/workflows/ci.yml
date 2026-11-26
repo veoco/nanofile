@@ -91,6 +91,9 @@ jobs:
               - 'server/tests/fixtures/**'
               - 'server/models/**'
               - 'tools/models/**'
+              # The layering guard is a CI gate itself; editing it must run the
+              # Rust suite so the change is exercised by every job that shields it.
+              - 'tools/check-layering.mjs'
               # build.rs shells out to the pinned esbuild/tailwind versions, so
               # a dependency bump is a build change.
               - 'package.json'
