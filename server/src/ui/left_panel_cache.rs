@@ -125,6 +125,7 @@ mod tests {
             id: id.to_string(),
             name: id.to_string(),
             size_display: "1 B".to_string(),
+            visibility: "private".to_string(),
         }
     }
 

@@ -55,6 +55,19 @@
                    placeholder="{{ t.tr("repo.search_placeholder") }}"
                    aria-label="{{ t.tr("repo.search_placeholder") }}">
         </label>
+        {# Sharing state is the list's other axis: the same filter the badges
+           describe, so a reader can answer "what did I publish?" without
+           reading every row. #}
+        <div class="nf-libfilter" role="group" aria-label="{{ t.tr("repo.filter_label") }}">
+            <button type="button" class="nf-fchip is-on" data-lib-filter="all"
+                    aria-pressed="true">{{ t.tr("repo.filter_all") }}</button>
+            <button type="button" class="nf-fchip" data-lib-filter="private"
+                    aria-pressed="false">{{ t.tr("repo.filter_private") }}</button>
+            <button type="button" class="nf-fchip" data-lib-filter="shared"
+                    aria-pressed="false">{{ t.tr("repo.filter_shared") }}</button>
+            <button type="button" class="nf-fchip" data-lib-filter="public"
+                    aria-pressed="false">{{ t.tr("repo.filter_public") }}</button>
+        </div>
         <span class="nf-libcount" id="repo-count" role="status">{% if repos.len() == 1 %}{{ t.trf("repo.count_one", [("n", "1")]) }}{% else %}{{ t.trf("repo.count_many", [("n", repos.len().to_string())]) }}{% endif %}</span>
         <span class="spacer"></span>
         {# The file list's sort control: one flat text button per field with an
@@ -100,14 +113,30 @@
             data-is-owner="{% if r.is_owner %}1{% else %}0{% endif %}"
             data-visibility="{{ r.visibility }}"
             data-permission="{{ r.permission }}">
-            <span class="nf-lib-ic">
+            {# The folder stays the library glyph; the state emblem in its corner
+               says why the row is here (shared with users, or open to every
+               account) without spending another column. The badge below repeats
+               it in words, so the emblem never carries the meaning alone. #}
+            <span class="nf-lib-ic is-{{ r.visibility }}">
                 {{ icons::icon_folder("w-[15px] h-[15px]") }}
+                {% if r.visibility == "shared" %}
+                <span class="nf-lib-ic-mark" aria-hidden="true">{{ icons::icon_user("w-[7px] h-[7px]") }}</span>
+                {% else if r.visibility == "public" %}
+                <span class="nf-lib-ic-mark" aria-hidden="true">{{ icons::icon_globe("w-[7px] h-[7px]") }}</span>
+                {% endif %}
             </span>
             <span class="nf-lib-main">
                 <a class="nf-lib-nm" href="/libraries/{{ r.id }}/files/">{{ r.name }}</a>
-                {% if !r.is_owner %}
-                <span class="nf-lib-badge">
-                    {% if r.visibility == "public" %}{{ t.tr("repo.public_library") }}{% else %}{{ t.tr("repo.shared_with_me") }}{% endif %}
+                {% if !r.is_owner || r.visibility != "private" %}
+                <span class="nf-lib-badge"
+                      {% if !r.is_owner && !r.owner_name.is_empty() %}title="{{ t.trf("repo.owner_title", [("name", &r.owner_name)]) }}"{% endif %}>
+                    {% if r.is_owner %}
+                        {% if r.visibility == "public" %}{{ t.tr("repo.public_library") }}{% else %}{{ t.tr("repo.badge_shared_owned") }}{% endif %}
+                    {% else if r.visibility == "public" %}
+                        {{ t.tr("repo.public_library") }}
+                    {% else %}
+                        {{ t.tr("repo.shared_with_me") }}
+                    {% endif %}
                 </span>
                 {% endif %}
                 {% if r.encrypted %}
@@ -117,10 +146,13 @@
                     {{ icons::icon_lock("w-3 h-3") }}
                 </span>
                 {% endif %}
-                {% if !r.is_owner && !r.owner_name.is_empty() %}
-                <span class="nf-lib-desc">{{ r.owner_name }}</span>
-                {% else if !r.description.is_empty() %}
+                {# The description is what identifies a library, whoever owns it.
+                   A recipient still needs the owner's name when there is no
+                   description; when there is one, the badge's tooltip keeps it. #}
+                {% if !r.description.is_empty() %}
                 <span class="nf-lib-desc">{{ r.description }}</span>
+                {% else if !r.is_owner && !r.owner_name.is_empty() %}
+                <span class="nf-lib-desc">{{ t.trf("repo.from_owner", [("name", &r.owner_name)]) }}</span>
                 {% endif %}
             </span>
             <span class="nf-lib-size">{{ r.size_display }}</span>

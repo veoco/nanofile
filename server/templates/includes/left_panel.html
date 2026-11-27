@@ -37,7 +37,14 @@
         <div class="js-repo-item" data-repo-id="{{ r.id }}">
             <a href="/libraries/{{ r.id }}/files/"
                class="row-link{% if current_repo_id.as_deref() == Some(r.id) %} on{% endif %}">
-                <span class="ic">{{ icons::icon_folder("w-[15px] h-[15px]") }}</span>
+                <span class="ic is-{{ r.visibility }}">
+                    {{ icons::icon_folder("w-[15px] h-[15px]") }}
+                    {% if r.visibility == "shared" %}
+                    <span class="ic-mark" aria-hidden="true">{{ icons::icon_user("w-[7px] h-[7px]") }}</span>
+                    {% else if r.visibility == "public" %}
+                    <span class="ic-mark" aria-hidden="true">{{ icons::icon_globe("w-[7px] h-[7px]") }}</span>
+                    {% endif %}
+                </span>
                 <span class="nm">{{ r.name }}</span>
                 <span class="ct">{{ r.size_display }}</span>
             </a>

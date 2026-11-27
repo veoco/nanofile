@@ -134,8 +134,9 @@ var filterEl = document.getElementById("repo-filter");
 var countEl = document.getElementById("repo-count");
 var noMatchEl = document.getElementById("repo-no-match");
 var sortGroup = document.querySelector(".js-repo-sort");
+var visibilityBtns = document.querySelectorAll("[data-lib-filter]");
 // The server renders name-ascending, the state the buttons and this module start from.
-var listState = { key: "name", order: "asc", query: "" };
+var listState = { key: "name", order: "asc", query: "", visibility: "all" };
 
 function repoRows() {
     if (!repoListEl) return [];
@@ -147,19 +148,41 @@ function updateCount(shown) {
     countEl.textContent = __t(shown === 1 ? "repo.count_one" : "repo.count_many", { n: String(shown) });
 }
 
+// The sharing-state chips are one choice at a time, like the file list's view
+// switch: the active chip carries the accent and `aria-pressed` carries it for
+// assistive tech. A row's `data-visibility` is the same value the server used to
+// render its badge, so the two can never disagree.
+function setVisibilityFilter(value) {
+    listState.visibility = value;
+    Array.prototype.forEach.call(visibilityBtns, function (btn) {
+        var on = btn.getAttribute("data-lib-filter") === value;
+        btn.classList.toggle("is-on", on);
+        btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+    applyFilter();
+}
+
 function applyFilter() {
     var q = listState.query.trim().toLowerCase();
     var shown = 0;
     repoRows().forEach(function (row) {
+        var byVisibility = listState.visibility === "all"
+            || row.dataset.visibility === listState.visibility;
         var hay = ((row.dataset.name || "") + " " + (row.dataset.description || "")).toLowerCase();
-        var hit = !q || hay.indexOf(q) !== -1;
+        var hit = byVisibility && (!q || hay.indexOf(q) !== -1);
         row.hidden = !hit;
         if (hit) shown++;
     });
     updateCount(shown);
     if (noMatchEl) {
         noMatchEl.hidden = shown !== 0;
-        noMatchEl.textContent = shown === 0 ? __t("repo.no_match", { q: listState.query.trim() }) : "";
+        if (shown === 0) {
+            noMatchEl.textContent = q
+                ? __t("repo.no_match", { q: listState.query.trim() })
+                : __t("repo.filter_empty");
+        } else {
+            noMatchEl.textContent = "";
+        }
     }
 }
 
@@ -463,6 +486,12 @@ if (filterEl) {
         }
     });
 }
+
+Array.prototype.forEach.call(visibilityBtns, function (btn) {
+    btn.addEventListener("click", function () {
+        setVisibilityFilter(btn.getAttribute("data-lib-filter"));
+    });
+});
 
 if (sortGroup) {
     sortGroup.addEventListener("click", function (e) {

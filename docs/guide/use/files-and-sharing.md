@@ -67,8 +67,9 @@ Emptying the trash is final. Restore first, or download a copy before you empty 
 
 A **shared library** is different from a share link: it is visible to signed-in
 accounts (and can be synced by the official clients), not to anonymous visitors.
-Libraries an administrator shared with you appear on `/libraries/` with a badge;
-read-only ones open and sync without an upload control. Administrators manage the
+Libraries an administrator shared with you appear on `/libraries/` with a status
+badge and their description; the list can also be filtered by sharing state.
+Read-only ones open and sync without an upload control. Administrators manage the
 audience from the library row's **Sharing** dialog — only them, selected users, or
 every account (read-only). See
 [Users and sharing](/guide/admin/users-and-sharing#sharing-policy).

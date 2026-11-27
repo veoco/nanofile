@@ -413,11 +413,26 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
   /* ─── Sidebar rows (library list + browse block) ─────────────────────── */
   .row-link {
     @apply flex items-center gap-[9px] h-[30px] px-[7px] rounded-ctl text-[13px] text-ink-2 no-underline;
+    /* The rail's surface colour, so a shared/public emblem's cutout matches the
+       selected and the hovered row as well as the plain one. */
+    --row-link-bg: var(--color-panel);
   }
-  .row-link:hover { @apply bg-raised text-ink; }
-  .row-link.on    { background: var(--tint-active); @apply text-ink font-medium; }
-  .row-link .ic   { @apply w-[15px] h-[15px] shrink-0 text-ink-3; }
+  .row-link:hover { @apply bg-raised text-ink; --row-link-bg: var(--color-raised); }
+  .row-link.on    {
+    @apply text-ink font-medium;
+    background: var(--tint-active);
+    --row-link-bg: color-mix(in srgb, var(--color-accent) 10%, var(--color-panel));
+  }
+  .row-link .ic   { @apply relative grid place-items-center w-[15px] h-[15px] shrink-0 text-ink-3; }
   .row-link.on .ic { color: var(--color-accent); }
+  .row-link .ic-mark {
+    @apply absolute inline-flex items-center justify-center w-[10px] h-[10px]
+           rounded-full text-ink-2;
+    right: -2px;
+    bottom: -2px;
+    background-color: var(--row-link-bg);
+  }
+  .row-link .ic-mark svg { @apply w-[7px] h-[7px]; }
   .row-link .nm   { @apply flex-1 min-w-0 truncate; }
   .row-link .ct   { @apply shrink-0 text-[11px] tabular-nums text-ink-3; }
 
@@ -754,15 +769,23 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
      extra line is the description, which sits beside the name instead of under
      it, so every row stays one line high and the names still line up. */
   .nf-libfind { @apply w-[300px] max-w-[40vw] shrink-0; }
+  /* The sharing-state filter shares the toolbar with search and sort: three
+     independent axes, so the chips stay plain buttons rather than a second
+     tab bar. */
+  .nf-libfilter { @apply flex items-center gap-1 shrink-0; }
+  .nf-libfilter .nf-fchip { @apply border-0 cursor-pointer; }
   .nf-libcount { @apply shrink-0 text-[12px] tabular-nums text-ink-3 whitespace-nowrap; }
 
   .nf-lib {
     @apply relative grid items-center gap-3 h-10 px-4 border-b border-line;
     grid-template-columns: 22px minmax(0, 1fr) 74px 118px 26px;
+    /* The state emblem sits on the row's own surface; this keeps its cutout
+       matching the hover tint as well as the resting canvas. */
+    --lib-row-bg: var(--color-canvas);
   }
   .nf-lib-body > .nf-lib:last-child { border-bottom: 0; }
   .nf-lib:not(.nf-lib-head):hover,
-  .nf-lib:not(.nf-lib-head):focus-within { @apply bg-raised; }
+  .nf-lib:not(.nf-lib-head):focus-within { @apply bg-raised; --lib-row-bg: var(--color-raised); }
   /* Pinned under the toolbar while the list scrolls, like the file list's own
      header. `z-[1]` and not `z-sticky`: the sort popover hangs below the
      toolbar and would be painted over by anything at the toolbar's level.
@@ -774,8 +797,19 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
     top: var(--file-toolbar-h);
   }
   .nf-lib-head .r { @apply text-right; }
-  .nf-lib-ic { @apply grid place-items-center text-ink-3; }
+  .nf-lib-ic { @apply relative grid place-items-center text-ink-3; }
   .nf-lib-ic svg { @apply w-[15px] h-[15px]; }
+  /* Shared/public: a small glyph cut into the folder's corner. The folder alone
+     keeps saying "library"; the emblem says who else can see it, and the badge
+     next to the name repeats that in words. */
+  .nf-lib-ic-mark {
+    @apply absolute inline-flex items-center justify-center w-[10px] h-[10px]
+           rounded-full text-ink-2;
+    right: -2px;
+    bottom: -2px;
+    background-color: var(--lib-row-bg);
+  }
+  .nf-lib-ic-mark svg { @apply w-[7px] h-[7px]; }
   .nf-lib-main { @apply flex items-center gap-2 min-w-0 text-[13px]; }
   .nf-lib-nm { @apply text-ink no-underline truncate; }
   /* The whole row is the click target, but the link stays on the name so

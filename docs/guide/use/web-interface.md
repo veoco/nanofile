@@ -26,14 +26,19 @@ console is covered in [Configuration](/guide/configure/configuration) and
 ## Libraries
 
 `/libraries/` lists the libraries you can reach, sortable by name, modified time or
-size, and filterable.
+size, searchable, and filterable by sharing state (**All**, **Private**, **Shared**,
+**Public**).
 
 - **New library** sits in the page header. The web interface creates a **regular**
   library; an **encrypted library is created by a client** (it carries a lock badge in
   the list), and its password is entered in the client — the server cannot supply it.
 - Libraries **shared with you** and libraries an administrator made **public** also
-  appear here, with a badge and their owner. You can open and sync them, but only the
-  owner gets the edit/delete menu.
+  appear here. Each row names its sharing state — "Shared with me" for a recipient,
+  "Shared" for the owner, "Public" for a published library — and the library icon gains
+  a small person or globe emblem; the rail's library tree uses the same emblems. The
+  description sits under the name; the owner's name, shown to recipients, moves into
+  the badge's tooltip. You can open and sync these libraries, but only the owner gets
+  the edit/delete menu.
 - The **⋯** menu on a row opens **edit**: change the name and description, set
   **history retention** (how many versions to keep, how many days to keep them), and
   see that library's WebDAV address. Administrators also get **Sharing**, which sets

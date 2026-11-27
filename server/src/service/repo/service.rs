@@ -1311,6 +1311,9 @@ pub struct LeftPanelRepo {
     pub id: String,
     pub name: String,
     pub size_display: String,
+    /// The administrator-managed scope, so the rail can mark a shared or public
+    /// library with the same corner glyph the list uses.
+    pub visibility: String,
 }
 
 pub async fn load_left_panel_repos(
@@ -1332,6 +1335,7 @@ pub async fn load_left_panel_repos(
             id: row.repo.id,
             name: row.repo.name,
             size_display: format_size(row.repo.size),
+            visibility: row.visibility,
         })
         .collect())
 }
