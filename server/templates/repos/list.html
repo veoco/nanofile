@@ -49,15 +49,10 @@
     </div>
     {% else %}
     <div class="nf-toolbar">
-        <label class="nf-find nf-libfind">
-            {{ icons::icon_search("w-[13px] h-[13px] shrink-0") }}
-            <input id="repo-filter" type="search" autocomplete="off"
-                   placeholder="{{ t.tr("repo.search_placeholder") }}"
-                   aria-label="{{ t.tr("repo.search_placeholder") }}">
-        </label>
         {# Sharing state is the list's other axis: the same filter the badges
            describe, so a reader can answer "what did I publish?" without
-           reading every row. #}
+           reading every row. It leads the toolbar, with search after it:
+           the coarse axis first, then the box that narrows the set it left. #}
         <div class="nf-libfilter" role="group" aria-label="{{ t.tr("repo.filter_label") }}">
             <button type="button" class="nf-fchip is-on" data-lib-filter="all"
                     aria-pressed="true">{{ t.tr("repo.filter_all") }}</button>
@@ -68,6 +63,12 @@
             <button type="button" class="nf-fchip" data-lib-filter="public"
                     aria-pressed="false">{{ t.tr("repo.filter_public") }}</button>
         </div>
+        <label class="nf-find nf-libfind">
+            {{ icons::icon_search("w-[13px] h-[13px] shrink-0") }}
+            <input id="repo-filter" type="search" autocomplete="off"
+                   placeholder="{{ t.tr("repo.search_placeholder") }}"
+                   aria-label="{{ t.tr("repo.search_placeholder") }}">
+        </label>
         <span class="nf-libcount" id="repo-count" role="status">{% if repos.len() == 1 %}{{ t.trf("repo.count_one", [("n", "1")]) }}{% else %}{{ t.trf("repo.count_many", [("n", repos.len().to_string())]) }}{% endif %}</span>
         <span class="spacer"></span>
         {# The file list's sort control: one flat text button per field with an

@@ -115,6 +115,29 @@ test("the list spans the same box as its toolbar", async ({ page }) => {
   expect(box.head).toEqual(box.toolbar);
 });
 
+// Sharing state leads the toolbar and the search box follows it: the state is
+// the coarser axis, so it is read first and the box narrows what it leaves.
+test("the sharing filter leads the toolbar and search follows it", async ({ page }) => {
+  await openLibraries(page);
+
+  const box = await page.evaluate(() => {
+    const toolbar = document.querySelector(".nf-toolbar")!;
+    const rect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      return { left: Math.round(r.left), right: Math.round(r.right) };
+    };
+    return {
+      filter: rect(toolbar.querySelector(".nf-libfilter")!),
+      find: rect(toolbar.querySelector("label.nf-find")!),
+      inset: Math.round(
+        toolbar.getBoundingClientRect().left + parseFloat(getComputedStyle(toolbar).paddingLeft),
+      ),
+    };
+  });
+  expect(box.filter.left).toBe(box.inset);
+  expect(box.find.left).toBeGreaterThanOrEqual(box.filter.right);
+});
+
 // The header band is one more row of the grid, so its hairline is the rows' own `--color-line`;
 // the two are asserted to be the same colour rather than a named token.
 test("the column header's hairline matches the rows'", async ({ page }) => {
