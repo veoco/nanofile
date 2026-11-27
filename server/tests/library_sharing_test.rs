@@ -132,10 +132,62 @@ async fn public_library_is_a_grepo_for_every_account() {
 #[tokio::test]
 async fn public_reader_can_sync_but_cannot_write_or_create_links() {
     let f = setup().await;
+    // A published library is not necessarily empty: seed one file so browsing and
+    // downloading are exercised through the real read paths.
+    let up = f
+        .server
+        .client()
+        .upload_file(&f.admin_token, &f.repo_id, "/", "public.txt", b"public")
+        .await;
+    assert!(up.status().is_success(), "admin upload failed");
     assert_eq!(set_visibility(&f, "public").await.status(), 200);
 
     let token = member_token(&f).await;
     let client = f.server.client();
+
+    // Browsing and downloading are the whole point of a public library: the listing
+    // must answer 200 with `dir_perm: r` and the file bytes must be served.
+    let resp = client.list_dir(&f.user_token, &f.repo_id, "/").await;
+    assert_eq!(resp.status(), 200, "public reader must be able to list");
+    assert_eq!(
+        resp.headers().get("dir_perm").map(|v| v.to_str().unwrap()),
+        Some("r"),
+        "the desktop client's cloud file browser keys read-only mode off dir_perm"
+    );
+    let entries: Value = resp.json().await.unwrap();
+    assert!(
+        entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "public.txt"),
+        "public reader must see the file: {entries}"
+    );
+    let resp = client
+        .download_file(&f.user_token, &f.repo_id, "/public.txt")
+        .await;
+    assert_eq!(resp.status(), 200, "public reader must be able to download");
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"public");
+
+    // The detail endpoint answers the published shape the clients classify as
+    // "Shared with all" (a grepo owned by "Organization").
+    let detail: Value = client
+        .get_repo(&f.user_token, &f.repo_id)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(detail["type"], "grepo");
+    assert_eq!(detail["owner"], "Organization");
+
+    let resp = client
+        .create_dir(&f.user_token, &f.repo_id, "/blocked")
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "a public reader must not create a folder"
+    );
 
     let resp = client.get_sync("/seafhttp/accessible-repos", &token).await;
     assert_eq!(resp.status(), 200);
@@ -566,4 +618,432 @@ async fn user_search_is_administrator_only_and_capped() {
     let body = resp.json::<Value>().await.unwrap();
     assert_eq!(body["users"][0]["email"], "reader@example.com");
     assert_eq!(body["users"][0]["name"], "reader");
+}
+
+/// One `/api2/repos/` entry by id.
+fn api2_repo<'a>(repos: &'a Value, repo_id: &str) -> &'a Value {
+    repos
+        .as_array()
+        .unwrap_or_else(|| panic!("expected an array, got {repos}"))
+        .iter()
+        .find(|r| r["id"] == repo_id)
+        .unwrap_or_else(|| panic!("library {repo_id} missing from {repos}"))
+}
+
+/// One `/api/v2.1/repos/` entry by id.
+fn v21_repo<'a>(body: &'a Value, repo_id: &str) -> Option<&'a Value> {
+    body["repos"]
+        .as_array()?
+        .iter()
+        .find(|r| r["repo_id"] == repo_id)
+}
+
+/// Fields the desktop client reads unconditionally.
+///
+/// `ServerRepo::fromJSON` (`seafile-client/client/src/api/server-repo.cpp:17-50`)
+/// reads these keys for every entry; a missing key silently becomes the empty
+/// string/zero, so an entry it cannot classify is worse than a failed request.
+fn assert_desktop_parses(repo: &Value) {
+    for key in [
+        "id",
+        "name",
+        "type",
+        "permission",
+        "mtime",
+        "size",
+        "encrypted",
+        "virtual",
+        "version",
+    ] {
+        assert!(
+            repo.get(key).is_some(),
+            "the desktop client reads `{key}`: {repo}"
+        );
+    }
+    let head = repo["head_commit_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("head_commit_id must be a string: {repo}"));
+    assert_eq!(head.len(), 40, "head_commit_id must be 40 hex: {repo}");
+    assert!(
+        head.chars().all(|c| c.is_ascii_hexdigit()),
+        "head_commit_id must be 40 hex: {repo}"
+    );
+    // SeaDrive's `parse_repo_list()` skips entries whose version is 0, which would
+    // silently hide the library from the mounted drive.
+    assert!(
+        repo["version"].as_i64().unwrap_or(0) >= 1,
+        "version must be non-zero: {repo}"
+    );
+}
+
+/// The desktop client's category decision for one entry.
+///
+/// `RepoTreeModel::setRepos()` (`seafile-client/client/src/ui/repo-tree-model.cpp:160-170`)
+/// sends `repo` to "My Libraries", `srepo` to "Shared with me", `grepo` with
+/// `group_id == 0` to "Shared with all" and any other `grepo` to a group category.
+/// `ServerRepo::fromJSON` maps the JSON `owner` to `group_name` and `groupid` to
+/// `group_id` for `grepo`, so an absent `groupid` reads as 0 (`json_integer_value(NULL)`).
+/// Returns (category, readonly).
+fn desktop_view(repo: &Value) -> (&'static str, bool) {
+    let repo_type = repo["type"].as_str().unwrap_or_default();
+    let readonly = repo["permission"].as_str() != Some("rw");
+    match repo_type {
+        "repo" => ("my libraries", readonly),
+        "srepo" => ("shared with me", readonly),
+        "grepo" => {
+            let group_id = repo.get("groupid").and_then(Value::as_i64).unwrap_or(0);
+            if group_id == 0 {
+                ("shared with all", readonly)
+            } else {
+                ("shared with groups", readonly)
+            }
+        }
+        // No type → the client falls back to `checkGroupRepo()`, an empty-named
+        // group category. Treat that as a failure in the assertions below.
+        _ => ("unclassified", readonly),
+    }
+}
+
+/// How SeaDrive's `parse_repo_list()` (`seadrive-fuse/src/sync-mgr.c:1294-1435`)
+/// classifies one entry. It rejects the whole response when a required member is
+/// missing or malformed, so the presence/format assertions are part of the contract.
+fn seadrive_view(repo: &Value) -> &'static str {
+    assert_desktop_parses(repo);
+    let repo_type = repo["type"].as_str().expect("type");
+    let owner = repo["owner"].as_str().expect("owner");
+    assert_eq!(
+        repo["id"].as_str().map(str::len),
+        Some(36),
+        "SeaDrive requires a UUID: {repo}"
+    );
+    match repo_type {
+        "repo" => "mine",
+        "srepo" => "shared",
+        "grepo" if owner == "Organization" => "public",
+        "grepo" => "group",
+        other => panic!("SeaDrive rejects type {other:?}: {repo}"),
+    }
+}
+
+/// What Android and iOS need from one `/api/v2.1/repos/` entry.
+///
+/// Both clients request that endpoint for the library list
+/// (`seadroid/.../ui/repo/RepoService.java:25` and every `SeafRepos.handleData:` fetch
+/// in `seafile-iOS/Pod/Classes/SeafRepos.m`), require `repo_id`/`repo_name` strings,
+/// and group by `type` (`RepoType.TYPE_MINE/TYPE_SHARED/TYPE_PUBLIC`; iOS'
+/// `MINE_REPO`/`SHARE_REPO`/`PUBLIC_REPO`). Only `type == "group"` entries may carry
+/// `group_id`/`group_name`.
+fn assert_mobile_parses(repo: &Value, expected_type: &str) {
+    for key in [
+        "repo_id",
+        "repo_name",
+        "type",
+        "permission",
+        "size",
+        "encrypted",
+        "last_modified",
+        "owner_email",
+        "owner_name",
+    ] {
+        assert!(
+            repo.get(key).is_some(),
+            "the mobile clients read `{key}`: {repo}"
+        );
+    }
+    assert_eq!(repo["type"], expected_type);
+    assert!(
+        repo["repo_name"].is_string(),
+        "iOS rejects the whole list when repo_name is not a string: {repo}"
+    );
+    assert!(
+        repo.get("group_id").is_none() && repo.get("group_name").is_none(),
+        "only a group-type entry may carry group fields: {repo}"
+    );
+}
+
+async fn update_share(f: &SharingFixture, permission: &str) -> reqwest::Response {
+    f.server
+        .client()
+        .post_json(
+            &format!(
+                "/api2/repos/{}/dir/shared_items/?p=/&share_type=user&username={}",
+                f.repo_id, f.user_email
+            ),
+            Some(&f.admin_token),
+            &json!({ "permission": permission }),
+        )
+        .await
+}
+
+/// The official clients must see each sharing state exactly as a real seafile does:
+/// the desktop client's four categories, SeaDrive's parse rules, and the v2.1 type
+/// vocabulary the mobile clients group by.
+#[tokio::test]
+async fn official_clients_classify_the_sharing_states_like_upstream() {
+    let f = setup().await;
+    let client = f.server.client();
+
+    // ---- selected user, read-only -------------------------------------------------
+    assert_eq!(add_share(&f, "r").await.status(), 200);
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let repo = api2_repo(&repos, &f.repo_id);
+    assert_eq!(desktop_view(repo), ("shared with me", true));
+    assert_eq!(repo["type"], "srepo");
+    assert_eq!(repo["owner"], "admin@example.com");
+    assert_eq!(repo["owner_name"], "admin");
+    assert!(
+        repo.get("share_from").is_none(),
+        "a personal share is an `srepo`, not a published library: {repo}"
+    );
+    assert_eq!(seadrive_view(repo), "shared");
+
+    let body: Value = client
+        .get("/api/v2.1/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_mobile_parses(v21_repo(&body, &f.repo_id).unwrap(), "shared");
+    assert_eq!(v21_repo(&body, &f.repo_id).unwrap()["permission"], "r");
+
+    // ---- the same user upgraded to read-write -------------------------------------
+    assert_eq!(update_share(&f, "rw").await.status(), 200);
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        desktop_view(api2_repo(&repos, &f.repo_id)),
+        ("shared with me", false)
+    );
+
+    // ---- published to every account ------------------------------------------------
+    assert_eq!(set_visibility(&f, "public").await.status(), 200);
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let repo = api2_repo(&repos, &f.repo_id);
+    assert_eq!(desktop_view(repo), ("shared with all", true));
+    assert_eq!(repo["type"], "grepo");
+    assert_eq!(repo["owner"], "Organization");
+    assert_eq!(repo["share_from"], "admin@example.com");
+    assert_eq!(repo["share_from_name"], "admin");
+    assert!(
+        repo.get("groupid").is_none(),
+        "`grepo` with a group id would land in a group category instead of \
+         \"Shared with all\": {repo}"
+    );
+    assert_eq!(seadrive_view(repo), "public");
+
+    let body: Value = client
+        .get("/api/v2.1/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_mobile_parses(v21_repo(&body, &f.repo_id).unwrap(), "public");
+
+    // The owner's own listing keeps the library in "My Libraries" (type `repo`,
+    // owner permission `rw`), matching seahub's `mine` block.
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let repo = api2_repo(&repos, &f.repo_id);
+    assert_eq!(desktop_view(repo), ("my libraries", false));
+    assert_eq!(repo["type"], "repo");
+    assert_eq!(repo["permission"], "rw");
+    assert_eq!(seadrive_view(repo), "mine");
+
+    let body: Value = client
+        .get("/api/v2.1/repos/", Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_mobile_parses(v21_repo(&body, &f.repo_id).unwrap(), "mine");
+
+    // ---- restricted again: every client's list must drop it ------------------------
+    assert_eq!(set_visibility(&f, "private").await.status(), 200);
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !repos
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == f.repo_id),
+        "a private library must disappear from the recipient's list: {repos}"
+    );
+}
+
+/// The desktop client's share dialog sends the exact encodings below; the endpoints
+/// must accept them (not just the JSON forms the web UI uses).
+///
+/// Sources: `PrivateShareRequest` (`seafile-client/src/api/requests.cpp:1037-1083`)
+/// puts `permission`/`share_type`/`username` in the form on PUT and in the query on
+/// POST/DELETE, always with `p` in the query; `GetPrivateShareItemsRequest`
+/// (`requests.cpp:1170-1235`) parses a bare array whose `user_info.name` is the email;
+/// `SearchUsersRequest` reads `{"users": […]}`; `FetchGroupsRequest` reads a top-level
+/// array. The recipient side is Android's `deleteRepoShare`
+/// (`seadroid/.../ui/repo/RepoService.java:56-57`), which adds `from=<owner>`.
+#[tokio::test]
+async fn desktop_share_dialog_encodings_are_accepted() {
+    let f = setup().await;
+    let client = f.server.client();
+    let shared_items = format!("/api2/repos/{}/dir/shared_items/", f.repo_id);
+    let with_p = format!("{shared_items}?p=/");
+
+    // Opening the dialog lists the shares (bare array).
+    let resp = client.get(&with_p, Some(&f.admin_token)).await;
+    assert_eq!(resp.status(), 200);
+    assert!(
+        resp.json::<Value>()
+            .await
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Adding a share: everything but `p` arrives as form fields.
+    let resp = client
+        .put_form(
+            &with_p,
+            Some(&f.admin_token),
+            &[
+                ("permission", "rw"),
+                ("share_type", "user"),
+                ("username", f.user_email.as_str()),
+            ],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the desktop client's PUT failed: {:?}",
+        resp.text().await
+    );
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["failed"], json!([]));
+    assert_eq!(body["success"][0]["user_info"]["name"], f.user_email);
+    assert_eq!(body["success"][0]["user_info"]["nickname"], "reader");
+    assert_eq!(body["success"][0]["permission"], "rw");
+
+    // Re-listing returns what the dialog's model parses.
+    let items: Value = client
+        .get(&with_p, Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    let items = items.as_array().unwrap();
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["share_type"], "user");
+    assert_eq!(items[0]["user_info"]["name"], f.user_email);
+    assert_eq!(items[0]["permission"], "rw");
+
+    // Changing the permission: `p`/`share_type`/`username` in the query, permission
+    // in the form.
+    let resp = client
+        .post_form(
+            &format!(
+                "{shared_items}?p=/&share_type=user&username={}",
+                f.user_email
+            ),
+            Some(&f.admin_token),
+            &[("permission", "r")],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "the desktop client's POST failed");
+    let items: Value = client
+        .get(&with_p, Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(items[0]["permission"], "r");
+
+    // The dialog's completer endpoints.
+    let users: Value = client
+        .get("/api2/search-user/?q=reader", Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(users["users"][0]["email"], f.user_email);
+    assert!(users["users"][0].get("contact_email").is_some());
+    let groups: Value = client
+        .get("/api2/groups/?with_msg=false", Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        groups.as_array().is_some(),
+        "the group completer parses a bare array: {groups}"
+    );
+
+    // Removing the share: every parameter is in the query.
+    let resp = client
+        .delete(
+            &format!(
+                "{shared_items}?p=/&share_type=user&username={}",
+                f.user_email
+            ),
+            Some(&f.admin_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "the desktop client's DELETE failed");
+    let items: Value = client
+        .get(&with_p, Some(&f.admin_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(items.as_array().unwrap().is_empty());
+
+    // Android's "leave share" call carries the owner in `from`, which the server
+    // ignores (it derives the owner from the row).
+    assert_eq!(add_share(&f, "r").await.status(), 200);
+    let resp = client
+        .delete(
+            &format!(
+                "/api2/beshared-repos/{}/?share_type=personal&from=admin@example.com",
+                f.repo_id
+            ),
+            Some(&f.user_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "Android's leave-share DELETE failed");
+    let repos: Value = client
+        .get("/api2/repos/", Some(&f.user_token))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !repos
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == f.repo_id),
+        "a left share must disappear from the list: {repos}"
+    );
 }
