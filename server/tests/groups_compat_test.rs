@@ -1,11 +1,11 @@
 //! Guard the group routes that remain, and the absence of the ones that do not.
 //!
-//! nanofile has no groups and no user-to-user library sharing; the two group
-//! routes that survive are stateless stubs, kept because an official client
-//! fails on a load path without them (see `handler::groups`). This file pins
-//! both halves: the stub must answer 200 with the shape the clients parse, and
-//! every removed route must be gone rather than silently answering something
-//! else.
+//! nanofile has no groups; library sharing is administrator-managed and covered by
+//! `library_sharing_test`. The two group routes that survive are stateless stubs,
+//! kept because an official client fails on a load path without them (see
+//! `handler::groups`). This file pins both halves: the stub must answer 200 with
+//! the shape the clients parse, and every removed route must be gone rather than
+//! silently answering something else.
 
 use crate::common;
 
@@ -76,20 +76,20 @@ async fn test_groups_v21_rejects_an_invalid_with_repos() {
     assert_eq!(resp.status(), 400);
 }
 
-/// The routes that carried groups and user-to-user sharing are gone.
+/// The routes that carried groups and user-to-user sharing are gone. The
+/// administrator-managed share endpoints that replaced part of them are tested in
+/// the library-sharing suite; only the still-missing shapes belong here.
 #[tokio::test]
 async fn removed_share_and_group_routes_are_not_mounted() {
     let f = TestFixture::new().await;
     let token = Some(f.api_token.as_str());
     let repo = f.repo_id.as_str();
 
-    let removed: [(&str, &str); 8] = [
+    let removed: [(&str, &str); 6] = [
         ("GET", "/api2/groupandcontacts/"),
-        ("GET", "/api2/search-user/?q=someone"),
         ("GET", "/api2/beshared-repos/{repo}/"),
         ("POST", "/api2/beshared-repos/{repo}/"),
         ("PUT", "/api2/beshared-repos/{repo}/"),
-        ("DELETE", "/api2/beshared-repos/{repo}/"),
         ("GET", "/api/v2.1/repos/{repo}/custom-share-permissions/"),
         (
             "GET",
@@ -118,7 +118,11 @@ async fn removed_share_and_group_routes_are_not_mounted() {
             }
             other => panic!("unhandled method {other}"),
         };
-        assert_eq!(resp.status(), 404, "{method} {path} must be unmounted");
+        let status = resp.status();
+        assert!(
+            matches!(status.as_u16(), 404 | 405),
+            "{method} {path} must not answer a removed operation (got {status})"
+        );
     }
 }
 

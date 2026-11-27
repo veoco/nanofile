@@ -30,6 +30,7 @@ pub mod head_commit;
 pub mod history_prune;
 pub mod invitation_code;
 pub mod job_run;
+pub mod library_share;
 pub mod locked_file;
 pub mod member;
 pub mod metadata_config;
@@ -76,6 +77,7 @@ use crate::repository::head_commit::*;
 use crate::repository::history_prune::*;
 use crate::repository::invitation_code::*;
 use crate::repository::job_run::*;
+use crate::repository::library_share::*;
 use crate::repository::locked_file::*;
 use crate::repository::member::*;
 use crate::repository::metadata_config::*;
@@ -103,6 +105,8 @@ pub struct Repositories {
     pub user: Arc<dyn UserRepository>,
     pub repo: Arc<dyn RepoRepository>,
     pub member: Arc<dyn MemberRepository>,
+    /// Transactional visibility/member writes for administrator-managed sharing.
+    pub library_share: Arc<dyn LibraryShareRepository>,
     pub commit: Arc<dyn CommitRepository>,
     /// Inserts a library and its owner membership in one transaction.
     pub provisioning: Arc<dyn RepoProvisioningRepository>,
@@ -176,6 +180,7 @@ impl Repositories {
             user: Arc::new(DbUserRepository::new(db.clone())),
             repo: Arc::new(DbRepoRepository::new(db.clone())),
             member: Arc::new(DbMemberRepository::new(db.clone())),
+            library_share: Arc::new(DbLibraryShareRepository::new(db.clone())),
             commit: Arc::new(DbCommitRepository::new(db.clone())),
             provisioning: Arc::new(DbRepoProvisioningRepository::new(db.clone())),
             head_commit: Arc::new(DbHeadCommitRepository::new(db.clone())),

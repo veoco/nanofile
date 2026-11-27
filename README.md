@@ -13,7 +13,7 @@ seahub stack.
 
 - **File sync** — the official Seafile clients keep libraries in sync automatically.
 - **Web interface** — browse, preview, download, star, activity feed and trash.
-- **Sharing** — share links with a password, an expiry and a view count; anonymous upload links.
+- **Sharing** — share links with a password, an expiry and a view count; anonymous upload links. Administrators can also share a library with selected users (read-only or read-write) or publish it read-only to every account.
 - **Sign-in security** — TOTP two-factor authentication, trusted devices, login lockout and API keys.
 - **Admin console** — users, quotas, email delivery, system settings and background tasks.
 - **Confined parsing** — document, image, EXIF, media, face detection and OCR parsing runs in bounded child processes.

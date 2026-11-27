@@ -1,8 +1,10 @@
 //! Group routes — client-compatibility stubs only.
 //!
 //! nanofile has no groups: nothing creates, joins or lists one, the `groups` /
-//! `group_members` tables were dropped, and no library is shared to a group. These
-//! handlers exist because an official client fails on a load path without them:
+//! `group_members` tables were dropped, and no library is shared to a group.
+//! Administrator-managed library sharing exists (see
+//! [`crate::handler::library_share`]), but it never uses a group. These handlers
+//! exist because an official client fails on a load path without them:
 //!
 //! * `GET /api/v2.1/groups/` — seadroid subscribes to it before the library list
 //!   (`Objs.java:93-146`); a 404 rejects the whole chain, so it must answer 200 with a

@@ -63,6 +63,16 @@ of a fake preview, but their text is still indexed for search.
 
 Emptying the trash is final. Restore first, or download a copy before you empty it.
 
+## Shared libraries
+
+A **shared library** is different from a share link: it is visible to signed-in
+accounts (and can be synced by the official clients), not to anonymous visitors.
+Libraries an administrator shared with you appear on `/libraries/` with a badge;
+read-only ones open and sync without an upload control. Administrators manage the
+audience from the library row's **Sharing** dialog — only them, selected users, or
+every account (read-only). See
+[Users and sharing](/guide/admin/users-and-sharing#sharing-policy).
+
 ## Share links
 
 A share link lets somebody without an account download a file or a folder.

@@ -19,10 +19,10 @@
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 20 | 45 | 100 | 0 |
+| Account Operations - User | 165 | 20 | 50 | 95 | 0 |
 | Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **29** | **58** | **180** | **37** |
+| **Total** | **304** | **29** | **63** | **175** | **37** |
 
 ## authentication
 
@@ -297,23 +297,23 @@ Nanofile 没有邀请功能；注册走网页流程或由管理员创建。
 
 ### List share
 
-不存在用户间分享。
+不存在群组分享；用户共享由管理员管理。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [List shared users/groups of a library](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-dir-shared-items)<br>`GET /api2/repos/{repo_id}/dir/shared_items/` | 有差异 | [本地接口](/zh/reference/api/directories#get-api2-repos-repo-id-dir-shared-items) | 列出下载分享链接；这里没有用户/群组分享。 |
+| [List shared users/groups of a library](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-dir-shared-items)<br>`GET /api2/repos/{repo_id}/dir/shared_items/` | 有差异 | [本地接口](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items) | 返回该库的用户共享裸数组；仅管理员 owner、仅库根（`p=/`），没有群组共享。 |
 | [List libraries shared to me](https://seafile-api.readme.io/reference/get_api2-beshared-repos)<br>`GET /api2/beshared-repos/` | 未实现 | — |  |
 
 ### Share to user/group
 
-Nanofile 没有用户间或群组分享，只有链接分享。
+用户共享由管理员管理，只作用于整库；不支持群组共享。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [Share a library to user/group](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/` | 未实现 | — |  |
-| [Unshare a library from user/group](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id-dir-shared-items)<br>`DELETE /api2/repos/{repo_id}/dir/shared_items/` | 未实现 | — |  |
-| [Update user share permission of a library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id-dir-shared-items)<br>`POST /api2/repos/{repo_id}/dir/shared_items/` | 未实现 | — |  |
-| [Delete a library shared to me (leave the share)](https://seafile-api.readme.io/reference/delete_api2-beshared-repos-repo-id)<br>`DELETE /api2/beshared-repos/{repo_id}/` | 未实现 | — |  |
+| [Share a library to user/group](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/` | 有差异 | [本地接口](/zh/reference/api/sharing#put-api2-repos-repo-id-dir-shared-items) | 仅用户共享；仅管理员 owner；仅整库。 |
+| [Unshare a library from user/group](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id-dir-shared-items)<br>`DELETE /api2/repos/{repo_id}/dir/shared_items/` | 有差异 | [本地接口](/zh/reference/api/sharing#delete-api2-repos-repo-id-dir-shared-items) | 仅用户共享；仅管理员 owner；移除最后一个成员后回到 private。 |
+| [Update user share permission of a library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id-dir-shared-items)<br>`POST /api2/repos/{repo_id}/dir/shared_items/` | 有差异 | [本地接口](/zh/reference/api/sharing#post-api2-repos-repo-id-dir-shared-items) | 仅用户共享；仅管理员 owner。 |
+| [Delete a library shared to me (leave the share)](https://seafile-api.readme.io/reference/delete_api2-beshared-repos-repo-id)<br>`DELETE /api2/beshared-repos/{repo_id}/` | 有差异 | [本地接口](/zh/reference/api/sharing#delete-api2-beshared-repos-repo-id) | 仅个人共享；owner 自己调用会被拒。 |
 | [Batch share libraries to user/group](https://seafile-api.readme.io/reference/post_api-v2-1-repos-batch)<br>`POST /api/v2.1/repos/batch/` | 未实现 | — |  |
 | [Share a folder](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items-p-path)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/p={path}` | 未实现 | — |  |
 | [List shared folders](https://seafile-api.readme.io/reference/get_api-v2-1-shared-folders)<br>`GET /api/v2.1/shared-folders/` | 未实现 | — |  |
@@ -410,11 +410,11 @@ Nanofile 没有用户间或群组分享，只有链接分享。
 
 ### User search
 
-没有用户目录搜索。
+搜索仅对管理员开放，供客户端共享对话框使用。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [Search user](https://seafile-api.readme.io/reference/get_api2-search-user)<br>`GET /api2/search-user/` | 未实现 | — |  |
+| [Search user](https://seafile-api.readme.io/reference/get_api2-search-user)<br>`GET /api2/search-user/` | 有差异 | [本地接口](/zh/reference/api/sharing#get-api2-search-user) | 仅管理员；按邮箱子串匹配启用账号，最多 50 条，不含联系人。 |
 
 ### Wiki
 
@@ -546,7 +546,7 @@ Nanofile 没有 Wiki。
 
 ### Share
 
-没有用户/群组分享。
+管理员共享管理的页面尚未实现；用户级共享本身见[分享](/zh/reference/api/sharing#library-sharing)。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
@@ -741,7 +741,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 - **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。`zip-task` 用 `POST`。
 - **WebDAV。** 位于 `/dav/{repo_id}/`（不是 `/seafdav`），Basic 凭据是邮箱加 WebDAV API 密钥，加密资料库返回 `403`，不保存属性也不强制执行锁。
 - **通知。** `/notification` 使用 Seafile 通知协议与按订阅签发的 JWT；它不属于 Web API 参考。
-- **没有用户间分享。** 没有分享给用户/群组、没有目录级权限、没有评论、Wiki、邀请、快照标签、OCR 与人脸识别；这些官方分组在上表中为 `未实现`。
+- **管理员共享。** 资料库可以是私有、共享给指定用户或公开给所有账号；群组共享、目录级权限、评论、Wiki、邀请、快照标签、OCR 与人脸识别均未实现，这些官方分组在上表中为 `未实现`。
 
 ## WebDAV {#webdav}
 

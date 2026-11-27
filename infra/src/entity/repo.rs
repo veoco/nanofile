@@ -46,6 +46,12 @@ pub struct Model {
     /// Keep file history for at most this many days. 0 = unlimited.
     #[sea_orm(not_null, default_value = 0)]
     pub history_ttl_days: i32,
+    /// Administrator-managed sharing scope: `private` (owner only), `shared`
+    /// (the accounts in `repo_members`) or `public` (every active account).
+    /// Absent means `private`; the column was added by
+    /// `m20261127_000001_add_repo_visibility`.
+    #[sea_orm(not_null, default_value = "private", length = 10)]
+    pub visibility: String,
     /// `"repo"`; "type" is reserved, hence the `r#` escape and explicit column name.
     #[sea_orm(column_name = "type", not_null, default_value = "repo", length = 20)]
     pub r#type: String,

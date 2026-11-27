@@ -15,6 +15,7 @@ pub mod device;
 pub mod fs;
 pub mod permission;
 pub mod repo_path;
+pub mod repo_visibility;
 pub mod session_source;
 pub mod tag;
 pub mod token;

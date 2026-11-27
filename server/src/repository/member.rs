@@ -39,20 +39,30 @@ pub trait MemberRepository: Send + Sync {
     ) -> Result<DeleteResult, AppError>;
     async fn delete_by_repo(&self, repo_id: &str) -> Result<DeleteResult, AppError>;
 
+    /// Delete every membership grant except the owner's row. Used when a
+    /// library becomes `public` or `private`.
+    async fn delete_by_repo_except_owner(
+        &self,
+        repo_id: &str,
+        owner_id: i32,
+    ) -> Result<DeleteResult, AppError>;
+
     async fn create_member(
         &self,
         params: CreateMemberParams,
     ) -> Result<repo_member::Model, AppError>;
 
-    /// Look up a repo's owner and the user's membership permission in a single LEFT JOIN query:
-    /// `(owner_id, permission)`, where `permission` is `None` if the user is not a member.
+    /// Look up a repo's owner, the user's membership permission and the repo's
+    /// administrator-managed visibility in a single LEFT JOIN query:
+    /// `(owner_id, permission, visibility)`, where `permission` is `None` if the
+    /// user is not a member.
     ///
     /// This is the canonical permission check query used by `domain::permission`.
     async fn find_repo_owner_and_permission(
         &self,
         repo_id: &str,
         user_id: i32,
-    ) -> Result<Option<(i32, Option<String>)>, AppError>;
+    ) -> Result<Option<(i32, Option<String>, String)>, AppError>;
 
     async fn find_by_repo_ids(
         &self,
@@ -159,16 +169,29 @@ impl MemberRepository for DbMemberRepository {
         Ok(result)
     }
 
+    async fn delete_by_repo_except_owner(
+        &self,
+        repo_id: &str,
+        owner_id: i32,
+    ) -> Result<DeleteResult, AppError> {
+        let result = repo_member::Entity::delete_many()
+            .filter(repo_member::Column::RepoId.eq(repo_id))
+            .filter(repo_member::Column::UserId.ne(owner_id))
+            .exec(self.db.as_ref())
+            .await?;
+        Ok(result)
+    }
+
     async fn find_repo_owner_and_permission(
         &self,
         repo_id: &str,
         user_id: i32,
-    ) -> Result<Option<(i32, Option<String>)>, AppError> {
+    ) -> Result<Option<(i32, Option<String>, String)>, AppError> {
         let row = self
             .db
             .query_one_raw(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "SELECT r.owner_id, m.permission FROM repos r \
+                "SELECT r.owner_id, m.permission, r.visibility FROM repos r \
                  LEFT JOIN repo_members m ON r.id = m.repo_id AND m.user_id = $1 \
                  WHERE r.id = $2",
                 vec![user_id.into(), repo_id.to_owned().into()],
@@ -177,7 +200,10 @@ impl MemberRepository for DbMemberRepository {
             .map(|r| {
                 let owner_id: i32 = r.try_get("", "owner_id").unwrap_or(0);
                 let permission: Option<String> = r.try_get("", "permission").ok();
-                (owner_id, permission)
+                let visibility: String = r
+                    .try_get("", "visibility")
+                    .unwrap_or_else(|_| "private".to_string());
+                (owner_id, permission, visibility)
             });
         Ok(row)
     }

@@ -59,6 +59,24 @@ impl AuthUser {
         .await
     }
 
+    /// Require the account behind this credential to be an administrator.
+    ///
+    /// Sessions satisfy every capability, so an admin-only endpoint cannot rely
+    /// on the route table alone; this is the account-level check that goes with
+    /// it.
+    pub async fn require_admin(&self, state: &AppState) -> Result<(), AppError> {
+        let user_record = state
+            .repos
+            .user
+            .find_by_id(self.user_id)
+            .await?
+            .ok_or(AppError::Unauthorized)?;
+        if !user_record.is_admin {
+            return Err(AppError::Forbidden);
+        }
+        Ok(())
+    }
+
     /// [`Self::require_repo_read`] for a write on a library named outside the URL path.
     pub async fn require_repo_write(
         &self,

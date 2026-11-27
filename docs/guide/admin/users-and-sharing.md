@@ -91,11 +91,22 @@ aliases; the name was wrong, not the value — this is the quota of one account,
 a cap on every account together, and a saved setting row is moved to the new key on
 upgrade.
 
-A library belongs to exactly one account; nanofile has no user-to-user library
-sharing. Usage is the sum of `repos.size` over the libraries the account owns, and
-every logical growth — an upload, a directory copy, a trash/history restore, or a
-sub-library created from a folder — is checked against the owner's quota at the
-moment it commits. An overwrite is charged only for the size difference.
+A library belongs to exactly one account. Usage is the sum of `repos.size` over
+the libraries the account owns, and every logical growth — an upload, a directory
+copy, a trash/history restore, or a sub-library created from a folder — is checked
+against the owner's quota at the moment it commits. An overwrite is charged only
+for the size difference.
+
+Administrators can publish a library they own to other accounts without copying
+it: on **Libraries**, the row menu's **Sharing** dialog sets one of three
+visibility modes — **Only me**, **Selected users** (read-only or read-write per
+account) or **All users** (read-only). Only an administrator who owns the library
+can change this; group sharing and folder-level sharing are not implemented. A
+public library is readable by every active account and can be synced read-only;
+the owner's quota still covers its content. An account that still owns a shared
+or public library cannot be deleted or demoted from administrator until the
+sharing is revoked. See the [API reference](/reference/api/sharing#library-sharing)
+for the wire contract.
 
 `repo.size` is the logical size of the files in the library's HEAD, not the bytes on
 disk. Deleting a file or a library frees quota immediately, while its blocks stay

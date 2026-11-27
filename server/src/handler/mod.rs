@@ -155,6 +155,7 @@ pub mod fileops;
 pub mod groups;
 pub mod history;
 pub mod json_or_form;
+pub mod library_share;
 pub mod links;
 pub mod login;
 pub mod metadata;

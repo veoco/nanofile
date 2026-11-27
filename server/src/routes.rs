@@ -24,6 +24,11 @@ fn v1_routes() -> Router<Arc<AppState>> {
             get(crate::handler::repos::list_repos).post(crate::handler::repos::create_repo),
         )
         .nest("/api2/repos", repo_all)
+        .nest(
+            "/api2/repos",
+            crate::handler::library_share::repo_nested_routes(),
+        )
+        .nest("/api2", crate::handler::library_share::routes())
         .nest("/api2/repos", crate::handler::fileops::fileops_routes())
         .nest(
             "/api2/repos",
@@ -260,6 +265,10 @@ fn v2_routes() -> Router<Arc<AppState>> {
         .route(
             "/api/v2.1/repos/{repo_id}/related-users/",
             get(crate::handler::metadata::related_users),
+        )
+        .nest(
+            "/api/v2.1/repos",
+            crate::handler::library_share::visibility_routes(),
         )
         // Search file (v2.1). iOS sends the trailing slash; seadroid's Retrofit
         // annotation omits it, so both forms are registered.

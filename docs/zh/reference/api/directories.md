@@ -167,22 +167,4 @@
 
 新资料库带一个提交。需要 `library.create` 与源资料库的写权限。
 
-## 列出目录中的分享链接 {#get-api2-repos-repo-id-dir-shared-items}
-
-`GET /api2/repos/{repo_id}/dir/shared_items/?p=<path>`
-
-为恰好该目录路径创建的分享链接。
-
-**响应 `200`**
-
-```json
-{
-  "shared_items": [
-    { "share_type": "download", "token": "…", "path": "/photos", "repo_id": "…", "creator_email": "", "created_at": 1760000000 }
-  ]
-}
-```
-
-需要 `file.read`。Nanofile 没有用户/群组分享，因此只有下载链接。
-
-**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/rename/`、`dir/move/` 与请求体里的 `repo_id` 是 Nanofile 的便利接口；seahub 通过 `fileops` 与 `dir/` POST 重命名。
+**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/shared_items/` 现在用于管理员共享库，见[分享](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items)。`dir/rename/`、`dir/move/` 与请求体里的 `repo_id` 是 Nanofile 的便利接口；seahub 通过 `fileops` 与 `dir/` POST 重命名。

@@ -607,8 +607,17 @@ impl MetadataService {
     /// Related users as `{email, name, contact_email, avatar_url}` objects, matching
     /// seahub's `get_user_common_info` shape consumed by the mobile clients.
     pub async fn related_users(&self, repo_id: &str) -> Result<Vec<serde_json::Value>, AppError> {
+        // The owner is always related, even if a restored/repaired library has no
+        // owner membership row; explicit shares add the rest. A public library's
+        // "related users" are not every account.
+        let repo = self.repos.repo.find_by_id(repo_id).await?;
         let members = self.repos.member.find_by_repo_id(repo_id).await?;
-        let user_ids: Vec<i32> = members.into_iter().map(|m| m.user_id).collect();
+        let mut user_ids: Vec<i32> = members.into_iter().map(|m| m.user_id).collect();
+        if let Some(owner_id) = repo.as_ref().map(|r| r.owner_id)
+            && !user_ids.contains(&owner_id)
+        {
+            user_ids.push(owner_id);
+        }
         let users = self.repos.user.find_by_ids(&user_ids).await?;
         let origin = self.config.get().server.site_url_origin();
         Ok(users

@@ -711,7 +711,37 @@ const ROUTES: &[RouteEntry] = &[
     (
         "GET",
         "/api2/repos/{repo_id}/dir/shared_items/",
-        RouteAccess::Capability(Capability::FileRead),
+        RouteAccess::Capability(Capability::LibraryRead),
+    ),
+    (
+        "PUT",
+        "/api2/repos/{repo_id}/dir/shared_items/",
+        RouteAccess::Capability(Capability::LibraryUpdate),
+    ),
+    (
+        "POST",
+        "/api2/repos/{repo_id}/dir/shared_items/",
+        RouteAccess::Capability(Capability::LibraryUpdate),
+    ),
+    (
+        "DELETE",
+        "/api2/repos/{repo_id}/dir/shared_items/",
+        RouteAccess::Capability(Capability::LibraryUpdate),
+    ),
+    (
+        "DELETE",
+        "/api2/beshared-repos/{repo_id}/",
+        RouteAccess::Capability(Capability::LibraryUpdate),
+    ),
+    (
+        "GET",
+        "/api2/search-user/",
+        RouteAccess::Capability(Capability::AdminUserRead),
+    ),
+    (
+        "PUT",
+        "/api/v2.1/repos/{repo_id}/visibility/",
+        RouteAccess::Capability(Capability::LibraryUpdate),
     ),
     (
         "GET",

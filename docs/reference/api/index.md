@@ -181,7 +181,7 @@ document — is in [Seafile API compatibility](/reference/api/compatibility).
 | [Files and batch operations](/reference/api/files) | File metadata, file operations, batch copy/move/delete |
 | [Uploads and downloads](/reference/api/transfers) | Transfer endpoints, resumable uploads, ZIP downloads |
 | [History, revisions and trash](/reference/api/history) | File history, revisions and the trash |
-| [Sharing](/reference/api/sharing) | Share links, upload links, stars, activity and groups |
+| [Sharing](/reference/api/sharing) | Share links, upload links, administrator library sharing, stars, activity and group stubs |
 | [Metadata and search](/reference/api/metadata) | Metadata, tags, search and indexing |
 | [Sync protocol](/reference/api/sync) | `/seafhttp/` endpoints |
 | [Notification WebSocket](/reference/api/notification) | The notification protocol |

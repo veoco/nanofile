@@ -552,6 +552,7 @@ mod tests {
             repo_version: Set(1),
             history_limit: Set(0),
             history_ttl_days: Set(0),
+            visibility: Set("private".to_string()),
             r#type: Set("repo".to_string()),
         })
         .exec(db)

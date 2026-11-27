@@ -211,7 +211,7 @@ pub(crate) async fn create_share_link_impl(
         ));
     }
 
-    crate::service::permission::check_repo_read_permission(
+    crate::service::permission::check_repo_member_read_permission(
         repos.member.as_ref(),
         repo_id,
         creator_id,

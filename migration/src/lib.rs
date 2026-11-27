@@ -111,6 +111,7 @@ migrations!(
     m20261117_000001_create_pending_blocks,
     m20261123_000001_purge_nonretained_thumbnails,
     m20261124_000001_create_instance_meta,
+    m20261127_000001_add_repo_visibility,
 );
 
 #[cfg(test)]

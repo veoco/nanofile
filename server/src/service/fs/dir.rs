@@ -602,40 +602,6 @@ impl DirService {
         .map(|_| ())
     }
 
-    /// Share links pointing at a directory, as the desktop client's
-    /// `dir/shared_items/` lists them.
-    ///
-    /// Only the caller's own links are returned: a share token is a capability
-    /// URL, so a read-only member must not learn another member's token for a
-    /// path they can read.
-    pub async fn get_dir_shared_items(
-        &self,
-        repo_id: &str,
-        path: &str,
-        creator_id: i32,
-    ) -> Result<Vec<serde_json::Value>, AppError> {
-        let links = self
-            .repos
-            .share_link
-            .find_by_repo_and_path(repo_id, path)
-            .await?;
-
-        Ok(links
-            .into_iter()
-            .filter(|l| l.creator_id == creator_id)
-            .map(|l| {
-                serde_json::json!({
-                    "share_type": "download",
-                    "token": l.token,
-                    "path": l.path,
-                    "repo_id": l.repo_id,
-                    "creator_email": "",
-                    "created_at": l.created_at,
-                })
-            })
-            .collect())
-    }
-
     /// Create a sub-repository from a directory.
     pub async fn create_sub_repo(
         &self,

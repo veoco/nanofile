@@ -7,6 +7,7 @@
 //! follow seahub, where a missing token is already gone (success) and a foreign
 //! owner is a permission error (403).
 
+pub mod library;
 pub mod link;
 pub mod share;
 

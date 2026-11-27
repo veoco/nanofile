@@ -124,7 +124,7 @@
 | [文件与批量操作](/zh/reference/api/files) | 文件元数据、文件操作、批量复制/移动/删除 |
 | [上传与下载](/zh/reference/api/transfers) | 传输接口、断点续传、ZIP 下载 |
 | [历史、版本与回收站](/zh/reference/api/history) | 文件历史、版本与回收站 |
-| [分享](/zh/reference/api/sharing) | 分享链接、上传链接、收藏、动态与群组 |
+| [分享](/zh/reference/api/sharing) | 分享链接、上传链接、管理员共享库、收藏、动态与群组桩 |
 | [元数据与搜索](/zh/reference/api/metadata) | 元数据、标签、搜索与索引 |
 | [同步协议](/zh/reference/api/sync) | `/seafhttp/` 接口 |
 | [通知 WebSocket](/zh/reference/api/notification) | 通知协议 |

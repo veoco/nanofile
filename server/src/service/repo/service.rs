@@ -12,6 +12,8 @@ use base::error::AppError;
 use infra::common::util::{format_size, timestamp_rfc3339};
 use infra::entity::{repo, user};
 
+use crate::domain::repo_visibility::RepoVisibility;
+
 /// A headless library's `head_commit_id` on the wire.
 ///
 /// Upstream libraries always have a "Created library" commit, so clients treat
@@ -39,6 +41,14 @@ pub struct RepoInfo {
     /// nanofile does not model group-owned repos; always null.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub groupid: Option<i32>,
+    /// Set only on a `grepo` entry (`public` libraries): the account the library
+    /// belongs to. The desktop client reads a grepo's `owner` as the group name,
+    /// so the actual account travels here; it is the value the client shows as
+    /// "shared by" and uses when leaving a share.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub share_from_name: Option<String>,
     pub encrypted: bool,
     #[serde(rename = "enc_version", skip_serializing_if = "Option::is_none")]
     pub enc_version: Option<i32>,
@@ -318,38 +328,63 @@ impl RepoCrypto {
     }
 }
 
-/// One library the caller can access, with the caller-specific membership
-/// permission and owner identity resolved once.
+/// One library the caller can access, with the caller-specific permission and
+/// owner identity resolved once. `visibility` is the administrator-managed scope
+/// stored on the repository; the serializer uses it to decide whether a
+/// non-owner sees a personal share (`srepo`) or a published library (`grepo`).
 pub(crate) struct RepoAccess {
     pub repo: repo::Model,
     pub permission: String,
+    pub visibility: String,
     pub owner_email: String,
     pub owner_name: String,
 }
 
 /// Build the `RepoInfo` wire shape from a resolved access row.
 ///
-/// `user_id` decides `type` (`repo` for the owner, `srepo` for a member) and
-/// `permission` is that caller's membership row. Encryption fields are echoed from
-/// the stored row, so a library read here cannot disagree with a later `get`. The
-/// per-caller extras (`token`, `email`, duplicated ids) stay empty: only endpoints
-/// that hand the caller a credential of its own fill them (`create_repo`).
+/// `user_id` decides `type`: `repo` for the owner, `srepo` for an explicitly
+/// shared library, `grepo` for a `public` library (the same type the official
+/// server uses for an "all users" library, which the desktop client renders in
+/// its "Shared with all" category). Encryption fields are echoed from the stored
+/// row, so a library read here cannot disagree with a later `get`. The per-caller
+/// extras (`token`, `email`, duplicated ids) stay empty: only endpoints that hand
+/// the caller a credential of its own fill them (`create_repo`).
 fn build_repo_info_from_access(a: &RepoAccess, user_id: i32, root: Option<String>) -> RepoInfo {
     let r = &a.repo;
     let encrypted = r.encrypted != 0;
     let crypto = RepoCrypto::from_model(r);
-    let type_ = if r.owner_id == user_id {
-        "repo".to_string()
+    let is_owner = r.owner_id == user_id;
+    let is_public = a.visibility == RepoVisibility::Public.as_str();
+    let type_ = if is_owner {
+        "repo"
+    } else if is_public {
+        "grepo"
     } else {
-        "srepo".to_string()
+        "srepo"
+    };
+    // A public library has no group; the desktop client reads `owner` as the
+    // group name and `groupid` as the group id, and its "Shared with all"
+    // category is exactly "grepo with group_id 0". Upstream labels that owner
+    // "Organization", so the client renders the same shape as on a real seafile.
+    let (owner, owner_name, share_from, share_from_name) = if is_public && !is_owner {
+        (
+            "Organization".to_string(),
+            "Organization".to_string(),
+            Some(a.owner_email.clone()),
+            Some(a.owner_name.clone()),
+        )
+    } else {
+        (a.owner_email.clone(), a.owner_name.clone(), None, None)
     };
     RepoInfo {
         id: r.id.clone(),
         name: r.name.clone(),
         desc: r.description.clone(),
-        owner: a.owner_email.clone(),
-        owner_name: a.owner_name.clone(),
+        owner,
+        owner_name,
         groupid: None,
+        share_from,
+        share_from_name,
         encrypted,
         enc_version: if encrypted {
             Some(r.enc_version as i32)
@@ -360,7 +395,7 @@ fn build_repo_info_from_access(a: &RepoAccess, user_id: i32, root: Option<String
         mtime: r.updated_at,
         permission: a.permission.clone(),
         head_commit_id: r.head_commit_id.clone(),
-        type_,
+        type_: type_.to_string(),
         virtual_: false,
         root,
         salt: if encrypted && r.enc_version >= 3 {
@@ -389,6 +424,8 @@ fn build_repo_info_v21_from_access(a: &RepoAccess, user_id: i32) -> V21RepoInfo 
     let encrypted = r.encrypted != 0;
     let type_ = if r.owner_id == user_id {
         "mine"
+    } else if a.visibility == RepoVisibility::Public.as_str() {
+        "public"
     } else {
         "shared"
     };
@@ -416,8 +453,10 @@ fn build_repo_info_v21_from_access(a: &RepoAccess, user_id: i32) -> V21RepoInfo 
 }
 
 impl RepoService {
-    /// Load every library the caller is a member of, with the membership
-    /// permission and owner identity resolved in three batched queries.
+    /// Load every library the caller can reach: owned libraries, explicit member
+    /// grants and `public` libraries, with the owner identity resolved in batched
+    /// queries. One repository appears once; `owner` wins over a member grant,
+    /// which wins over public access.
     ///
     /// This is the one loader behind the v1 list, the v2.1 list, the web UI list
     /// and the sync accessible-repos response; each caller only serializes.
@@ -426,29 +465,54 @@ impl RepoService {
         user_id: i32,
         email: &str,
     ) -> Result<Vec<RepoAccess>, AppError> {
-        let memberships = repos.member.find_by_user_id(user_id).await?;
+        let mut entries: Vec<(repo::Model, String)> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
 
-        let mut seen = HashSet::with_capacity(memberships.len());
-        let repo_ids: Vec<String> = memberships
+        let owned = repos.repo.find_by_owner_id(user_id).await?;
+        for repo in owned {
+            seen.insert(repo.id.clone());
+            entries.push((repo, "rw".to_string()));
+        }
+
+        let memberships = repos.member.find_by_user_id(user_id).await?;
+        let missing_ids: Vec<String> = memberships
             .iter()
-            .filter(|m| seen.insert(m.repo_id.clone()))
+            .filter(|m| !seen.contains(&m.repo_id))
             .map(|m| m.repo_id.clone())
             .collect();
-
-        let repos_map: HashMap<String, repo::Model> = repos
+        let member_repos: HashMap<String, repo::Model> = repos
             .repo
-            .find_by_ids(&repo_ids)
+            .find_by_ids(&missing_ids)
             .await?
             .into_iter()
             .map(|r| (r.id.clone(), r))
             .collect();
+        for membership in &memberships {
+            if seen.contains(&membership.repo_id) {
+                continue;
+            }
+            let Some(repo) = member_repos.get(&membership.repo_id) else {
+                continue;
+            };
+            seen.insert(membership.repo_id.clone());
+            entries.push((repo.clone(), membership.permission.clone()));
+        }
 
-        // Batch-load the owners of non-owned repos (not the requester) for the
-        // owner fields.
-        let owner_ids: Vec<i32> = repos_map
-            .values()
-            .filter(|r| r.owner_id != user_id)
-            .map(|r| r.owner_id)
+        for repo in repos
+            .repo
+            .find_by_visibility(RepoVisibility::Public.as_str())
+            .await?
+        {
+            if seen.insert(repo.id.clone()) {
+                entries.push((repo, "r".to_string()));
+            }
+        }
+
+        // Batch-load the owners of the non-owned entries for the owner fields.
+        let owner_ids: Vec<i32> = entries
+            .iter()
+            .map(|(repo, _)| repo.owner_id)
+            .filter(|owner_id| *owner_id != user_id)
             .collect();
         let owners: HashMap<i32, user::Model> = repos
             .user
@@ -458,20 +522,14 @@ impl RepoService {
             .map(|u| (u.id, u))
             .collect();
 
-        let mut result = Vec::with_capacity(memberships.len());
-        let mut emitted = HashSet::with_capacity(memberships.len());
-        for m in &memberships {
-            if !emitted.insert(m.repo_id.as_str()) {
-                continue;
-            }
-            let Some(r) = repos_map.get(&m.repo_id) else {
-                continue;
-            };
-            let is_owner = r.owner_id == user_id;
-            let (owner_email, owner_name) = resolve_owner(r.owner_id, email, is_owner, &owners);
+        let mut result = Vec::with_capacity(entries.len());
+        for (repo, permission) in entries {
+            let is_owner = repo.owner_id == user_id;
+            let (owner_email, owner_name) = resolve_owner(repo.owner_id, email, is_owner, &owners);
             result.push(RepoAccess {
-                repo: r.clone(),
-                permission: m.permission.clone(),
+                visibility: repo.visibility.clone(),
+                repo,
+                permission,
                 owner_email,
                 owner_name,
             });
@@ -480,7 +538,9 @@ impl RepoService {
         Ok(result)
     }
 
-    /// Load one library with the caller's membership permission and owner.
+    /// Load one library with the caller's permission and owner. A caller with
+    /// neither ownership, a member grant nor `public` access gets `NotFound`,
+    /// which does not confirm that the library exists.
     pub(crate) async fn load_repo_access_one(
         repos: &Repositories,
         repo_id: &str,
@@ -492,13 +552,20 @@ impl RepoService {
             .find_by_id(repo_id)
             .await?
             .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
-        let membership = repos
-            .member
-            .find_by_repo_and_user(repo_id, user_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("repo not found".into()))?;
 
         let is_owner = repo.owner_id == user_id;
+        let permission = if is_owner {
+            "rw".to_string()
+        } else if let Some(membership) =
+            repos.member.find_by_repo_and_user(repo_id, user_id).await?
+        {
+            membership.permission
+        } else if repo.visibility == RepoVisibility::Public.as_str() {
+            "r".to_string()
+        } else {
+            return Err(AppError::NotFound("repo not found".into()));
+        };
+
         let owners: HashMap<i32, user::Model> = if is_owner {
             HashMap::new()
         } else {
@@ -511,8 +578,9 @@ impl RepoService {
         let (owner_email, owner_name) = resolve_owner(repo.owner_id, email, is_owner, &owners);
 
         Ok(RepoAccess {
+            visibility: repo.visibility.clone(),
             repo,
-            permission: membership.permission,
+            permission,
             owner_email,
             owner_name,
         })
@@ -777,6 +845,8 @@ impl RepoService {
             owner: email.to_string(),
             owner_name: email.split('@').next().unwrap_or("").to_string(),
             groupid: None,
+            share_from: None,
+            share_from_name: None,
             encrypted,
             enc_version: crypto.enc_version,
             size: 0,
@@ -819,12 +889,9 @@ impl RepoService {
         } else {
             None
         };
-        let mut info = build_repo_info_from_access(&access, user_id, root);
-        // The v1 single-endpoint has historically reported the *caller's* email
-        // in `owner` (the list reports the owner's). Keep that shape; it is
-        // pinned by the surface matrix and documented as a seahub divergence.
-        info.owner = email.to_string();
-        Ok(info)
+        // `owner` is the library's real owner. A shared or public library read
+        // through this endpoint must not report the caller as the owner.
+        Ok(build_repo_info_from_access(&access, user_id, root))
     }
 
     /// Rename a repo. Only the owner can rename.
@@ -1021,6 +1088,14 @@ impl RepoService {
             .await?
             .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
+        // seahub reports the caller's effective permission here (the list may be
+        // stale); a shared read-only library must not look writable.
+        let permission =
+            crate::service::permission::repo_permission(repos.member.as_ref(), repo_id, user_id)
+                .await?
+                .ok_or(AppError::Forbidden)?
+                .to_string();
+
         let token_value =
             ensure_sync_token_for(repos, repo_id, user_id, peer, sync_token_ttl_days).await?;
 
@@ -1055,7 +1130,7 @@ impl RepoService {
             pwd_hash: crypto.pwd_hash,
             pwd_hash_algo: crypto.pwd_hash_algo,
             pwd_hash_params: crypto.pwd_hash_params,
-            permission: r.permission,
+            permission,
         })
     }
 
@@ -1177,8 +1252,11 @@ impl RepoService {
                 let Some(repo_model) = repo_map.get(*repo_id) else {
                     return false;
                 };
-                // Owner has access without a member row; a membership grants read.
-                repo_model.owner_id == user_id || member_repo_ids.contains(*repo_id)
+                // Owner has access without a member row; a membership grants
+                // read; a public library grants read to every account.
+                repo_model.owner_id == user_id
+                    || member_repo_ids.contains(*repo_id)
+                    || repo_model.visibility == RepoVisibility::Public.as_str()
             })
             .map(str::to_string)
             .collect();
@@ -1239,28 +1317,23 @@ pub async fn load_left_panel_repos(
     repos: &Repositories,
     user_id: i32,
 ) -> Result<Vec<LeftPanelRepo>, AppError> {
-    let members = repos.member.find_by_user_id(user_id).await?;
-
-    let repo_ids: Vec<String> = members.iter().map(|m| m.repo_id.clone()).collect();
-    let repos_map: HashMap<String, repo::Model> = repos
-        .repo
-        .find_by_ids(&repo_ids)
+    // Reuse the list loader so the sidebar cannot disagree with the library page
+    // about which shared/public libraries are visible.
+    let email = repos
+        .user
+        .find_by_id(user_id)
         .await?
+        .map(|u| u.email)
+        .unwrap_or_default();
+    let rows = RepoService::load_repo_access(repos, user_id, &email).await?;
+    Ok(rows
         .into_iter()
-        .map(|r| (r.id.clone(), r))
-        .collect();
-
-    let mut repo_list = Vec::with_capacity(members.len());
-    for m in members {
-        if let Some(r) = repos_map.get(&m.repo_id) {
-            repo_list.push(LeftPanelRepo {
-                id: r.id.clone(),
-                name: r.name.clone(),
-                size_display: format_size(r.size),
-            });
-        }
-    }
-    Ok(repo_list)
+        .map(|row| LeftPanelRepo {
+            id: row.repo.id,
+            name: row.repo.name,
+            size_display: format_size(row.repo.size),
+        })
+        .collect())
 }
 
 /// Resolve an owner's email + display name, using the requester's email when the

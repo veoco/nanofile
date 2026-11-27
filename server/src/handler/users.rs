@@ -17,21 +17,6 @@ pub fn admin_user_routes() -> Router<Arc<AppState>> {
         .route("/users/{user_id}/", put(update_user).delete(delete_user))
 }
 
-/// Check that the authenticated user is an admin.
-async fn require_admin(state: &Arc<AppState>, auth: &AuthUser) -> Result<(), AppError> {
-    let user_record = state
-        .repos
-        .user
-        .find_by_id(auth.user_id)
-        .await?
-        .ok_or(AppError::Unauthorized)?;
-
-    if !user_record.is_admin {
-        return Err(AppError::Forbidden);
-    }
-    Ok(())
-}
-
 #[derive(Serialize)]
 pub struct UserAdminView {
     pub id: i32,
@@ -49,7 +34,7 @@ async fn list_users(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<UserAdminView>>, AppError> {
-    require_admin(&state, &auth).await?;
+    auth.require_admin(&state).await?;
 
     let svc = state.admin_user_service();
     let users = svc.list_users().await?;
@@ -92,7 +77,7 @@ async fn create_user(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CreateUserPayload>,
 ) -> Result<Json<UserAdminView>, AppError> {
-    require_admin(&state, &auth).await?;
+    auth.require_admin(&state).await?;
 
     // The admin console is not an exception to the configured password policy:
     // `/api2/accounts/` and the web forms enforce it, and an operator who set a
@@ -154,7 +139,7 @@ async fn update_user(
     Path(user_id): Path<i32>,
     Json(payload): Json<UpdateUserPayload>,
 ) -> Result<Json<UserAdminView>, AppError> {
-    require_admin(&state, &auth).await?;
+    auth.require_admin(&state).await?;
 
     let svc = state.admin_user_service();
     svc.update_user(
@@ -192,7 +177,7 @@ async fn delete_user(
     State(state): State<Arc<AppState>>,
     Path(user_id): Path<i32>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&state, &auth).await?;
+    auth.require_admin(&state).await?;
 
     let svc = state.admin_user_service();
     svc.delete_user(user_id).await?;

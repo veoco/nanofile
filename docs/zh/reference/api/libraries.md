@@ -8,7 +8,7 @@
 
 `GET /api2/repos/`
 
-返回调用者可见的全部资料库，按成员关系（创建）顺序；官方客户端会自行排序。绑定资料库的 API 密钥只能看到范围内的库。
+返回调用者能访问的全部资料库：自己拥有的、共享给调用者的，以及管理员公开给所有账号的。官方客户端会自行排序。绑定资料库的 API 密钥只能看到范围内的库。
 
 **响应 `200`**
 
@@ -34,7 +34,9 @@
 ]
 ```
 
-`permission` 是 `"rw"` 或 `"r"`。`version` 是资料库格式版本；SeaDrive 的 repo 列表解析器要求这个键，值为 0 的条目会被跳过。同一个值也会以 `repo_version` 出现，那是创建与 download-info 响应使用的字段名。加密资料库还会带 `enc_version`，以及调用者有权拿到的 `magic`/`random_key`/`salt`。
+`type` 对调用者自己拥有的是 `repo`，共享给调用者的是 `srepo`，管理员公开给所有账号的是 `grepo`。`grepo` 条目没有 `groupid`，`owner` 为 `"Organization"`，并额外带发布者的 `share_from` / `share_from_name`；官方桌面客户端把这种组合显示在“Shared with all”分类。
+
+`permission` 是 `"rw"` 或 `"r"`。`version` 是资料库格式版本；SeaDrive 的 repo 列表解析器要求这个键，值为 0 的条目会被跳过。同一个值也会以 `repo_version` 出现，那是创建与 download-info 响应使用的字段名。加密资料库还会带 `enc_version`，以及调用者有权拿到的 `magic`/`random_key`/`salt`。谁能设置可见性见[分享](/zh/reference/api/sharing#library-sharing)。
 
 ## 创建资料库 {#post-api2-repos}
 
@@ -116,7 +118,7 @@ Seafile 重载了这个路径，查询参数 `op` 选择操作：
 }
 ```
 
-`type` 对调用者自己拥有的资料库是 `mine`，共享给调用者的是 `shared`。`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。`enc_version` 为 3 或 4 的加密资料库还会带 `salt`，客户端用它派生密钥；其他资料库不含这个键。需要 `library.read`。
+`type` 对调用者自己拥有的资料库是 `mine`，共享给调用者的是 `shared`，管理员公开给所有账号的是 `public`（只读）。`last_modified` 是 RFC 3339；`mtime` 是同一时刻的 Unix 秒。`enc_version` 为 3 或 4 的加密资料库还会带 `salt`，客户端用它派生密钥；其他资料库不含这个键。需要 `library.read`。
 
 ## 获取资料库（v2.1） {#get-api-v2-1-repos-repo-id}
 

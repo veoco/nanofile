@@ -1,7 +1,7 @@
 // repos — library list interactions (create/edit/delete, filter, sort and the row menu), driven
 // by data-* event delegation.
 import { __t } from "../core/i18n.js";
-import { mutate } from "../core/api.js";
+import { apiFetch, mutate } from "../core/api.js";
 import { copyText, flashCopied } from "../core/clipboard.js";
 import { registerModalClose } from "../core/modal.js";
 import { Toast } from "../core/toast.js";
@@ -11,6 +11,7 @@ import { applySortIndicators, nextSortOrder } from "../browser/view-logic.js";
 
 var reposPageEl = document.getElementById("repos-page");
 var webdavBaseUrl = reposPageEl ? (reposPageEl.dataset.webdavBaseUrl || "") : "";
+var isAdmin = reposPageEl ? reposPageEl.dataset.isAdmin === "1" : false;
 
 function showCreateDialog() {
     document.getElementById('create-overlay').classList.remove('hidden');
@@ -201,9 +202,195 @@ function applySort() {
     applySortUI();
 }
 
+// ── Sharing (administrators only) ──────────────────────────────────────────
+// The list endpoint is the official client's `dir/shared_items/` shape: a bare
+// array of user shares. Membership changes write through the same endpoints the
+// desktop client uses, so both surfaces share one policy.
+var shareRepoId = "";
+var shareVisibility = "private";
+
+function shareUrl(path) {
+    return "/api2/repos/" + encodeURIComponent(shareRepoId) + "/dir/shared_items/?p=/" + path;
+}
+
+function showShareDialog(btn) {
+    shareRepoId = btn.getAttribute("data-id");
+    shareVisibility = btn.getAttribute("data-visibility") || "private";
+    document.getElementById("share-repo-id").value = shareRepoId;
+    document.getElementById("share-repo-name").textContent = btn.getAttribute("data-name") || "";
+    Array.prototype.forEach.call(
+        document.querySelectorAll('input[name="visibility"]'),
+        function (radio) {
+            radio.checked = radio.value === shareVisibility;
+        }
+    );
+    updateShareMode();
+    loadShareMembers();
+    document.getElementById("share-overlay").classList.remove("hidden");
+}
+
+function hideShareDialog() {
+    document.getElementById("share-overlay").classList.add("hidden");
+}
+
+function selectedVisibility() {
+    var checked = document.querySelector('input[name="visibility"]:checked');
+    return checked ? checked.value : "private";
+}
+
+function updateShareMode() {
+    var members = document.getElementById("share-members");
+    if (!members) return;
+    // The member editor only applies to "selected users"; a public or private
+    // library has nobody in the list.
+    members.hidden = selectedVisibility() !== "shared";
+}
+
+function renderShareMembers(items) {
+    var list = document.getElementById("share-member-list");
+    if (!list) return;
+    list.textContent = "";
+    if (!items.length) {
+        var empty = document.createElement("p");
+        empty.className = "text-[12px] text-ink-2";
+        empty.textContent = __t("repo.share_empty");
+        list.appendChild(empty);
+        return;
+    }
+    items.forEach(function (item) {
+        var info = item.user_info || {};
+        var email = info.name || "";
+        var row = document.createElement("div");
+        row.className = "flex items-center gap-2";
+        var label = document.createElement("span");
+        label.className = "flex-1 min-w-0 truncate text-[13px]";
+        label.textContent = (info.nickname ? info.nickname + " " : "") + email;
+        var select = document.createElement("select");
+        select.className = "input w-[112px]";
+        select.setAttribute("data-share-perm", email);
+        [["r", __t("repo.permission_read")], ["rw", __t("repo.permission_write")]].forEach(function (opt) {
+            var o = document.createElement("option");
+            o.value = opt[0];
+            o.textContent = opt[1];
+            if (opt[0] === item.permission) o.selected = true;
+            select.appendChild(o);
+        });
+        var remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-line";
+        remove.setAttribute("data-action", "share-remove");
+        remove.setAttribute("data-email", email);
+        remove.textContent = __t("repo.share_remove");
+        row.appendChild(label);
+        row.appendChild(select);
+        row.appendChild(remove);
+        list.appendChild(row);
+    });
+}
+
+function loadShareMembers() {
+    if (!shareRepoId) return;
+    apiFetch(shareUrl("")).then(function (res) {
+        return res.json();
+    }).then(function (items) {
+        items = Array.isArray(items) ? items : [];
+        // A private row whose members appeared behind its back (the first add
+        // switches the library to `shared`) must show the member editor instead
+        // of silently hiding it.
+        if (items.length && selectedVisibility() === "private") {
+            var shared = document.querySelector('input[name="visibility"][value="shared"]');
+            if (shared) shared.checked = true;
+            updateShareMode();
+        }
+        renderShareMembers(items);
+    }).catch(function () {
+        renderShareMembers([]);
+    });
+}
+
+function addShareMember() {
+    var user = document.getElementById("share-user-select");
+    var role = document.getElementById("share-permission-select");
+    if (!user || !user.value) return;
+    mutate(shareUrl(""), {
+        method: "PUT",
+        body: {
+            share_type: "user",
+            username: user.value,
+            permission: role ? role.value : "r",
+        },
+    }).then(function (resp) {
+        if (resp && resp.ok) {
+            shareVisibility = "shared";
+            var shared = document.querySelector('input[name="visibility"][value="shared"]');
+            if (shared) shared.checked = true;
+            updateShareMode();
+            loadShareMembers();
+        } else if (resp) Toast.error(__t("repo.share_failed") + resp.status);
+    }).catch(function (error) {
+        Toast.error(__t("repo.share_failed") + error.message);
+    });
+}
+
+function updateShareMember(email, permission) {
+    mutate(shareUrl("&share_type=user&username=" + encodeURIComponent(email)), {
+        method: "POST",
+        body: { permission: permission },
+    }).then(function (resp) {
+        if (resp && resp.ok) loadShareMembers();
+        else if (resp) Toast.error(__t("repo.share_failed") + resp.status);
+    }).catch(function (error) {
+        Toast.error(__t("repo.share_failed") + error.message);
+    });
+}
+
+function removeShareMember(email) {
+    mutate(shareUrl("&share_type=user&username=" + encodeURIComponent(email)), {
+        method: "DELETE",
+    }).then(function (resp) {
+        if (resp && resp.ok) loadShareMembers();
+        else if (resp) Toast.error(__t("repo.share_failed") + resp.status);
+    }).catch(function (error) {
+        Toast.error(__t("repo.share_failed") + error.message);
+    });
+}
+
+function saveShareVisibility(form) {
+    var visibility = selectedVisibility();
+    if (visibility === "public" && shareVisibility === "shared") {
+        ConfirmDialog.confirm(
+            __t("common.are_you_sure"),
+            __t("repo.share_public_confirm"),
+            { confirmText: __t("common.save") }
+        ).then(function (ok) {
+            if (ok) putShareVisibility(visibility);
+        });
+        return false;
+    }
+    putShareVisibility(visibility);
+    return false;
+}
+
+function putShareVisibility(visibility) {
+    mutate("/api/v2.1/repos/" + encodeURIComponent(shareRepoId) + "/visibility/", {
+        method: "PUT",
+        body: { visibility: visibility },
+    }).then(function (resp) {
+        if (resp && resp.ok) {
+            hideShareDialog();
+            window.location.reload();
+        } else if (resp) {
+            Toast.error(__t("repo.share_failed") + resp.status);
+        }
+    }).catch(function (error) {
+        Toast.error(__t("repo.share_failed") + error.message);
+    });
+}
+
 // The menu is built here, so the row carries only data: metadata columns and no buttons until
 // it is hovered or focused.
 function buildRepoMenu(row) {
+    var isOwner = row.dataset.isOwner === "1";
     var menu = document.createElement("div");
     menu.className = "nf-menu";
     menu.setAttribute("role", "menu");
@@ -212,32 +399,47 @@ function buildRepoMenu(row) {
         label: __t("repo.open"),
         href: "/libraries/" + encodeURIComponent(row.dataset.id) + "/files/",
     });
-    addMenuItem(menu, {
-        label: __t("repo.edit_library"),
-        attrs: {
-            "data-action": "show-edit",
-            "data-id": row.dataset.id,
-            "data-name": row.dataset.name,
-            "data-description": row.dataset.description,
-            "data-size": row.dataset.sizeDisplay,
-            "data-history-limit": row.dataset.historyLimit,
-            "data-history-ttl-days": row.dataset.historyTtlDays,
-        },
-    });
+    if (isAdmin && isOwner) {
+        addMenuItem(menu, {
+            label: __t("repo.share_settings"),
+            attrs: {
+                "data-action": "show-share",
+                "data-id": row.dataset.id,
+                "data-name": row.dataset.name,
+                "data-visibility": row.dataset.visibility,
+            },
+        });
+    }
+    if (isOwner) {
+        addMenuItem(menu, {
+            label: __t("repo.edit_library"),
+            attrs: {
+                "data-action": "show-edit",
+                "data-id": row.dataset.id,
+                "data-name": row.dataset.name,
+                "data-description": row.dataset.description,
+                "data-size": row.dataset.sizeDisplay,
+                "data-history-limit": row.dataset.historyLimit,
+                "data-history-ttl-days": row.dataset.historyTtlDays,
+            },
+        });
+    }
     addMenuItem(menu, {
         label: __t("repo.copy_webdav"),
         attrs: { "data-action": "copy-repo-webdav", "data-repo-id": row.dataset.id },
     });
-    addMenuSeparator(menu);
-    addMenuItem(menu, {
-        label: __t("common.delete"),
-        danger: true,
-        attrs: {
-            "data-action": "delete-repo",
-            "data-repo-id": row.dataset.id,
-            "data-repo-name": row.dataset.name,
-        },
-    });
+    if (isOwner) {
+        addMenuSeparator(menu);
+        addMenuItem(menu, {
+            label: __t("common.delete"),
+            danger: true,
+            attrs: {
+                "data-action": "delete-repo",
+                "data-repo-id": row.dataset.id,
+                "data-repo-name": row.dataset.name,
+            },
+        });
+    }
     return menu;
 }
 
@@ -285,12 +487,23 @@ document.addEventListener("click", function (e) {
     switch (action) {
         case "show-create": showCreateDialog(); break;
         case "show-edit": showEditDialog(el); break;
+        case "show-share": showShareDialog(el); break;
         case "delete-repo": deleteRepo(el); break;
         case "copy-webdav-url": copyWebdavUrl(); break;
         case "copy-repo-webdav": copyRepoWebdav(el); break;
         case "close-create": hideCreateDialog(); break;
         case "close-edit": hideEditDialog(); break;
+        case "close-share": hideShareDialog(); break;
+        case "share-add": addShareMember(); break;
+        case "share-remove": removeShareMember(el.dataset.email); break;
     }
+});
+
+// Permission edits happen in a select, so a click handler cannot see them.
+document.addEventListener("change", function (e) {
+    var select = e.target.closest("[data-share-perm]");
+    if (!select) return;
+    updateShareMember(select.getAttribute("data-share-perm"), select.value);
 });
 
 document.addEventListener("submit", function (e) {
@@ -298,6 +511,8 @@ document.addEventListener("submit", function (e) {
     if (createForm) { e.preventDefault(); submitCreate(createForm); return; }
     var editForm = e.target.closest('[data-form="edit"]');
     if (editForm) { e.preventDefault(); submitEdit(editForm); return; }
+    var shareForm = e.target.closest('[data-form="share"]');
+    if (shareForm) { e.preventDefault(); saveShareVisibility(shareForm); return; }
 });
 
 document.addEventListener("keydown", function (e) {
@@ -315,3 +530,11 @@ document.addEventListener("keydown", function (e) {
 
 registerModalClose("hideCreateDialog", hideCreateDialog);
 registerModalClose("hideEditDialog", hideEditDialog);
+registerModalClose("hideShareDialog", hideShareDialog);
+
+Array.prototype.forEach.call(
+    document.querySelectorAll('input[name="visibility"]'),
+    function (radio) {
+        radio.addEventListener("change", updateShareMode);
+    }
+);

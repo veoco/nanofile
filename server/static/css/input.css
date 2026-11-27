@@ -790,6 +790,12 @@ html[data-js] .nf-list[data-day-group]:not([data-day-grouped]) {
            bg-raised text-[10.5px] font-medium text-ink-2 whitespace-nowrap;
   }
   .nf-lib-tag svg { @apply w-2.5 h-2.5; }
+  /* Shared/public provenance: a quiet chip so the name and owner stay the row's
+     strongest text. */
+  .nf-lib-badge {
+    @apply inline-flex shrink-0 items-center h-[18px] px-1.5 rounded-[4px]
+           bg-raised text-[10.5px] font-medium text-ink-2 whitespace-nowrap;
+  }
   .nf-lib-desc { @apply flex-1 min-w-0 truncate text-[12px] text-ink-3; }
   .nf-lib-size,
   .nf-lib-when { @apply text-right tabular-nums text-ink-3 whitespace-nowrap; }

@@ -1237,6 +1237,7 @@ mod tests {
                 repo_version INTEGER NOT NULL DEFAULT 1,
                 history_limit INTEGER NOT NULL DEFAULT 0,
                 history_ttl_days INTEGER NOT NULL DEFAULT 0,
+                visibility VARCHAR(10) NOT NULL DEFAULT 'private',
                 type VARCHAR(20) NOT NULL DEFAULT 'repo'
             );
 

@@ -211,25 +211,8 @@ and blocks. Because it is a state change on `GET`, a browser session must send
 The new library starts with one commit. Requires `library.create` and write
 permission on the source library.
 
-## List share links in a directory {#get-api2-repos-repo-id-dir-shared-items}
-
-`GET /api2/repos/{repo_id}/dir/shared_items/?p=<path>`
-
-The share links created for exactly that directory path.
-
-**Response `200`**
-
-```json
-{
-  "shared_items": [
-    { "share_type": "download", "token": "…", "path": "/photos", "repo_id": "…", "creator_email": "", "created_at": 1760000000 }
-  ]
-}
-```
-
-Requires `file.read`. Nanofile has no user/group shares, so only download links
-appear.
-
 **Seafile** — `dir/`, `dir/detail/` and `dir/shared_items/` are the documented
-upstream routes. `dir/rename/`, `dir/move/` and the body-shaped `repo_id` are
+upstream routes. `dir/shared_items/` now manages administrator library sharing
+and is documented under [Sharing](/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items).
+`dir/rename/`, `dir/move/` and the body-shaped `repo_id` are
 Nanofile conveniences; seahub renames through `fileops` and its `dir/` POST.

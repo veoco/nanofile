@@ -107,8 +107,12 @@ async fn test_repo_tokens_unauthorized() {
 }
 
 /// B.10.2 — GET /api2/repos/{repo_id}/dir/shared_items/
+///
+/// Administrator-managed library sharing: a normal-account owner is outside the
+/// policy and gets 403. The administrator shape (bare array of user shares) is
+/// covered by `library_sharing_test`.
 #[tokio::test]
-async fn test_dir_shared_items_returns_list() {
+async fn test_dir_shared_items_requires_an_administrator() {
     let f = TestFixture::new().await;
 
     let resp = f
@@ -118,9 +122,7 @@ async fn test_dir_shared_items_returns_list() {
             Some(&f.api_token),
         )
         .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert_eq!(body["shared_items"].as_array().unwrap().len(), 0);
+    assert_eq!(resp.status(), 403);
 }
 
 #[tokio::test]

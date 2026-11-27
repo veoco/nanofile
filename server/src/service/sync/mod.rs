@@ -140,6 +140,8 @@ impl SyncService {
                 continue;
             }
             let r = row.repo;
+            let public =
+                row.visibility == crate::domain::repo_visibility::RepoVisibility::Public.as_str();
             result.push(AccessibleRepo {
                 version: r.repo_version,
                 id: r.id.clone(),
@@ -154,12 +156,20 @@ impl SyncService {
                 permission: row.permission,
                 type_: if r.owner_id == user_id {
                     "repo"
+                } else if public {
+                    // seafile-server renders every-reader libraries as grepo with
+                    // the "Organization" owner (`sync_api.go:399-416`).
+                    "grepo"
                 } else {
                     "srepo"
                 }
                 .to_string(),
                 // seafile-server lowercases shared owners (`sync_api.go:377`).
-                owner: row.owner_email.to_lowercase(),
+                owner: if public && r.owner_id != user_id {
+                    "Organization".to_string()
+                } else {
+                    row.owner_email.to_lowercase()
+                },
             });
         }
         Ok(result)
@@ -196,21 +206,24 @@ impl SyncService {
         // The permission is the token holder's own membership. Ownership is
         // tested explicitly: a token minted while a grant existed can outlive the
         // grant, and defaulting a missing row to "rw" would still report write.
-        let owner_id = self
-            .repos
-            .repo
-            .find_by_id(repo_id)
-            .await?
-            .map(|r| r.owner_id);
+        let repo_model = self.repos.repo.find_by_id(repo_id).await?;
+        let owner_id = repo_model.as_ref().map(|r| r.owner_id);
+        let is_public = repo_model.as_ref().is_some_and(|r| {
+            r.visibility == crate::domain::repo_visibility::RepoVisibility::Public.as_str()
+        });
         let permission = if owner_id == Some(record.user_id) {
             "rw".to_string()
+        } else if let Some(member) = self
+            .repos
+            .member
+            .find_by_repo_and_user(repo_id, record.user_id)
+            .await?
+        {
+            member.permission
+        } else if is_public {
+            "r".to_string()
         } else {
-            self.repos
-                .member
-                .find_by_repo_and_user(repo_id, record.user_id)
-                .await?
-                .map(|m| m.permission)
-                .unwrap_or_default()
+            String::new()
         };
 
         if permission.is_empty() {
@@ -1854,8 +1867,9 @@ impl SyncService {
 /// This is seafile-server's `share.SharedRepo` JSON (`fileserver/share/share.go`),
 /// not the REST repo shape: SeaDrive's daemon parses the response with the same
 /// `parse_repo_list()` it uses for `/api2/repos/`, and rejects the whole list when
-/// a member is missing or malformed. `type` is `repo` for the owner and `srepo`
-/// for a library shared to the caller; `head_commit_id` is the all-zero sentinel
+/// a member is missing or malformed. `type` is `repo` for the owner, `srepo` for
+/// a library shared to the caller and `grepo` for one published to every account
+/// (`owner` is then `"Organization"`); `head_commit_id` is the all-zero sentinel
 /// for a library that has no commit yet.
 #[derive(serde::Serialize)]
 pub struct AccessibleRepo {

@@ -15,7 +15,8 @@
 <main role="main" aria-label="{{ t.tr("a11y.main_content") }}"
       class="flex-1 min-w-0 min-h-0 flex flex-col relative bg-canvas">
     {% block content %}
-    <div id="repos-page" hidden data-webdav-base-url="{{ webdav_base_url }}"></div>
+    <div id="repos-page" hidden data-webdav-base-url="{{ webdav_base_url }}"
+         data-is-admin="{% if is_admin %}1{% else %}0{% endif %}"></div>
 
     <div class="topline">
         {# The file list's trail starts here, so on this page the same crumb is
@@ -93,12 +94,22 @@
             data-size-display="{{ r.size_display }}"
             data-mtime="{{ r.mtime }}"
             data-history-limit="{{ r.history_limit }}"
-            data-history-ttl-days="{{ r.history_ttl_days }}">
+            data-history-ttl-days="{{ r.history_ttl_days }}"
+            data-owner-email="{{ r.owner_email }}"
+            data-owner-name="{{ r.owner_name }}"
+            data-is-owner="{% if r.is_owner %}1{% else %}0{% endif %}"
+            data-visibility="{{ r.visibility }}"
+            data-permission="{{ r.permission }}">
             <span class="nf-lib-ic">
                 {{ icons::icon_folder("w-[15px] h-[15px]") }}
             </span>
             <span class="nf-lib-main">
                 <a class="nf-lib-nm" href="/libraries/{{ r.id }}/files/">{{ r.name }}</a>
+                {% if !r.is_owner %}
+                <span class="nf-lib-badge">
+                    {% if r.visibility == "public" %}{{ t.tr("repo.public_library") }}{% else %}{{ t.tr("repo.shared_with_me") }}{% endif %}
+                </span>
+                {% endif %}
                 {% if r.encrypted %}
                 <span class="nf-lib-lock" role="img"
                       title="{{ t.tr("repo.encrypted_hint") }}"
@@ -106,7 +117,9 @@
                     {{ icons::icon_lock("w-3 h-3") }}
                 </span>
                 {% endif %}
-                {% if !r.description.is_empty() %}
+                {% if !r.is_owner && !r.owner_name.is_empty() %}
+                <span class="nf-lib-desc">{{ r.owner_name }}</span>
+                {% else if !r.description.is_empty() %}
                 <span class="nf-lib-desc">{{ r.description }}</span>
                 {% endif %}
             </span>
@@ -215,6 +228,64 @@
             </div>
         </form>
 {% endcall %}
+
+{% if is_admin %}
+{# ─── Share Library Dialog (administrator only) ─── #}
+{% call modal::modal("share-overlay", labelledby="share-dialog-title", backdrop_close="hideShareDialog") %}
+        <h3 id="share-dialog-title" class="text-[15px] font-semibold text-ink mb-1">{{ t.tr("repo.share_settings") }}</h3>
+        <p class="text-[13px] text-ink-2 mb-4"><span id="share-repo-name"></span></p>
+        <form id="share-form" data-form="share">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" id="share-repo-id" value="">
+            <fieldset class="space-y-2">
+                <legend class="field-label mb-2">{{ t.tr("repo.visibility") }}</legend>
+                <label class="flex items-start gap-2 text-[13px]">
+                    <input type="radio" name="visibility" value="private" class="mt-0.5">
+                    <span>{{ t.tr("repo.visibility_private") }}</span>
+                </label>
+                <label class="flex items-start gap-2 text-[13px]">
+                    <input type="radio" name="visibility" value="shared" class="mt-0.5">
+                    <span>{{ t.tr("repo.visibility_shared") }}</span>
+                </label>
+                <label class="flex items-start gap-2 text-[13px]">
+                    <input type="radio" name="visibility" value="public" class="mt-0.5">
+                    <span>{{ t.tr("repo.visibility_public") }}</span>
+                </label>
+            </fieldset>
+            <div id="share-members" class="border-t border-line pt-4 mt-4">
+                <p class="field-label mb-2">{{ t.tr("repo.share_users") }}</p>
+                <div id="share-member-list" class="space-y-2 mb-3"></div>
+                <div class="flex items-end gap-2">
+                    <label class="flex-1 min-w-0">
+                        <span class="sr-only">{{ t.tr("repo.share_user") }}</span>
+                        <select id="share-user-select" class="input">
+                            {% for u in share_users %}
+                            <option value="{{ u.email }}">{{ u.name }} ({{ u.email }})</option>
+                            {% endfor %}
+                        </select>
+                    </label>
+                    <select id="share-permission-select" class="input w-[112px]">
+                        <option value="r">{{ t.tr("repo.permission_read") }}</option>
+                        <option value="rw">{{ t.tr("repo.permission_write") }}</option>
+                    </select>
+                    <button type="button" data-action="share-add" class="btn btn-line flex-shrink-0">
+                        {{ t.tr("repo.share_add") }}
+                    </button>
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end gap-2">
+                <button type="button" data-action="close-share"
+                        class="btn btn-secondary">
+                    {{ t.tr("common.cancel") }}
+                </button>
+                <button type="submit"
+                        class="btn btn-primary">
+                    {{ t.tr("common.save") }}
+                </button>
+            </div>
+        </form>
+{% endcall %}
+{% endif %}
 
 </div>
 {% endblock %}

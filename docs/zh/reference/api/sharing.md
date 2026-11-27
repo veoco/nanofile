@@ -1,8 +1,8 @@
 # 分享
 
-分享链接（下载文件或目录）、上传链接（让匿名访客上传）、收藏、动态流，以及官方客户端需要的群组桩接口。Nanofile 没有用户间资料库分享或群组管理，分享完全基于链接。
+分享链接（下载文件或目录）、上传链接（让匿名访客上传）、管理员共享库、收藏与动态流。Nanofile 没有群组：下面的群组接口只是官方客户端加载链需要的空桩。
 
-源码：`server/src/handler/links.rs`、`server/src/handler/share.rs`、`server/src/handler/upload_link.rs`、`server/src/handler/starred.rs`、`server/src/handler/activities.rs`、`server/src/handler/groups.rs`、`server/src/handler/smart_link.rs`、`server/src/service/sharing/`；测试：`server/tests/share_link_test.rs`、`server/tests/upload_link_test.rs`。
+源码：`server/src/handler/links.rs`、`server/src/handler/share.rs`、`server/src/handler/upload_link.rs`、`server/src/handler/library_share.rs`、`server/src/handler/starred.rs`、`server/src/handler/activities.rs`、`server/src/handler/groups.rs`、`server/src/handler/smart_link.rs`、`server/src/service/sharing/`；测试：`server/tests/share_link_test.rs`、`server/tests/upload_link_test.rs`、`server/tests/library_sharing_test.rs`。
 
 ## 公开页面
 
@@ -333,11 +333,95 @@ v2.1 收藏列表，按资料库、目录、文件分组。
 
 **Seafile** —— 路由与外层结构相同。Nanofile 不记录评论或分享事件，动态里只有文件与资料库操作。
 
+## 资料库共享 {#library-sharing}
+
+资料库默认只有 owner 可见。拥有该资料库的**管理员**可以把可见性设为三种互斥模式之一：
+
+| 可见性 | 谁可见 | 权限 |
+| --- | --- | --- |
+| `private` | owner | `rw` |
+| `shared` | `repo_members` 里的账号 | 每个成员 `r` 或 `rw`（默认 `r`） |
+| `public` | 所有启用账号 | 固定 `r` |
+
+只有拥有该库的管理员能修改共享；不支持群组共享，也不支持目录级共享（`p` 必须是 `/`）。加密库只能是 `private`。这些是 Nanofile 对 Seafile 接口的扩展：官方客户端把 `shared` 显示为 `srepo`（“共享给我的”），把 `public` 显示为没有群组 id 的 `grepo`（“Shared with all”）。`related-users` 只列 owner 与显式成员，不会把公开库的全部账号列出来。
+
+### 列出资料库的用户共享 {#get-api2-repos-repo-id-dir-shared-items}
+
+`GET /api2/repos/{repo_id}/dir/shared_items/?p=/`
+
+返回该库的用户共享，**顶层是数组**——官方桌面客户端共享对话框解析的形状。Nanofile 以前用这个路由列下载链接，现在链接由 `GET /api/v2.1/share-links/` 列出。
+
+**响应 `200`**
+
+```json
+[
+  {
+    "share_type": "user",
+    "user_info": {
+      "name": "reader@example.com",
+      "nickname": "Reader",
+      "contact_email": "reader@example.com",
+      "avatar_url": "https://files.example.com/avatars/reader@example.com/resized/72/"
+    },
+    "permission": "r",
+    "is_admin": false
+  }
+]
+```
+
+`user_info.name` 是账号邮箱（桌面客户端把它当用户名），`nickname` 是显示名。需要 `library.read`，且只有管理员 owner 可以调用。
+
+### 把资料库共享给用户 {#put-api2-repos-repo-id-dir-shared-items}
+
+`PUT /api2/repos/{repo_id}/dir/shared_items/?p=/`
+
+新增用户共享；已存在则替换权限。body 可以是桌面客户端发送的表单（`share_type=user&username=…&permission=r|rw`），也可以是同名字段的 JSON。`permission` 默认 `r`。把 `private` 库共享出去会同时变成 `shared`。
+
+公开库不能再列用户（`400`），需先取消公开；加密库、owner 自己、未知/停用用户、非 `/` 的 `p` 都会被拒。需要 `library.update` 与管理员的 owner 身份。
+
+**响应 `200`** —— `{"success": [<共享项>], "failed": [], "virtual_repo_id": null}`。
+
+### 修改用户权限 {#post-api2-repos-repo-id-dir-shared-items}
+
+`POST /api2/repos/{repo_id}/dir/shared_items/?p=/&share_type=user&username=<email>`
+
+body `permission=r|rw`（表单或 JSON）。用户必须已在共享列表中，否则 `404`。需要 `library.update` 与管理员的 owner 身份。**响应 `200`** —— `{"success": true}`。
+
+### 移除用户共享 {#delete-api2-repos-repo-id-dir-shared-items}
+
+`DELETE /api2/repos/{repo_id}/dir/shared_items/?p=/&share_type=user&username=<email>`
+
+删除授权；删掉 `shared` 库的最后一个成员后它会回到 `private`。幂等。需要 `library.update` 与管理员的 owner 身份。**响应 `200`** —— `{"success": true}`。
+
+### 退出共享 {#delete-api2-beshared-repos-repo-id}
+
+`DELETE /api2/beshared-repos/{repo_id}/?share_type=personal`
+
+被共享者移除自己的授权；桌面客户端的 **Leave share** 会调用它。接受并忽略 `from=<owner>`。owner 不能退出自己的库（`400`）；非成员调用返回 `200` 且不做任何改动。需要 `library.update`。**响应 `200`** —— `{"success": true}`。
+
+### 搜索用户 {#get-api2-search-user}
+
+`GET /api2/search-user/?q=<pattern>`
+
+桌面客户端共享对话框用它做用户补全。按邮箱子串匹配启用账号，最多返回 50 条，转义 `%`/`_`；空查询返回空列表而不是账号目录。需要 `admin.user.read` 且调用者是管理员。
+
+**响应 `200`** —— `{"users": [{"email": "…", "name": "Reader", "contact_email": "…", "avatar_url": "…"}]}`。
+
+### 设置资料库可见性 {#put-api-v2-1-repos-repo-id-visibility}
+
+`PUT /api/v2.1/repos/{repo_id}/visibility/`
+
+body（JSON 或表单）：`{"visibility": "private" | "shared" | "public"}`。
+
+`private` 与 `public` 会在同一操作中清空已列用户；`shared` 保留（允许空列表）。加密库只能是 `private`。需要 `library.update` 与管理员的 owner 身份。这是 Nanofile 扩展，官方客户端没有对应接口。
+
+**响应 `200`** —— `{"success": true}`。
+
 ## 列出群组 {#get-api2-groups}
 
 `GET /api2/groups/`
 
-桌面端的群组对话框在显示分享表单前会调用它。永远返回空数组：Nanofile 没有群组，也没有资料库分享。
+桌面端的群组对话框在显示分享表单前会调用它。永远返回空数组：Nanofile 没有群组。
 
 需要 `library.read`。
 

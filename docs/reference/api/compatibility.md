@@ -19,10 +19,10 @@ A `Same` row is a route contract, not a byte-for-byte promise: check the linked 
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 20 | 45 | 100 | 0 |
+| Account Operations - User | 165 | 20 | 50 | 95 | 0 |
 | Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **29** | **58** | **180** | **37** |
+| **Total** | **304** | **29** | **63** | **175** | **37** |
 
 ## authentication
 
@@ -297,23 +297,23 @@ Nanofile has no invitations; registration is a web flow or admin-only.
 
 ### List share
 
-No user-to-user shares exist.
+User shares are administrator-managed; group shares do not exist.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [List shared users/groups of a library](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-dir-shared-items)<br>`GET /api2/repos/{repo_id}/dir/shared_items/` | Differs | [our endpoint](/reference/api/directories#get-api2-repos-repo-id-dir-shared-items) | Lists download share links; user/group shares do not exist here. |
+| [List shared users/groups of a library](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-dir-shared-items)<br>`GET /api2/repos/{repo_id}/dir/shared_items/` | Differs | [our endpoint](/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items) | Returns the library's user shares as a bare array; administrator owner only, library root (`p=/`) only, no group shares. |
 | [List libraries shared to me](https://seafile-api.readme.io/reference/get_api2-beshared-repos)<br>`GET /api2/beshared-repos/` | Missing | — |  |
 
 ### Share to user/group
 
-Nanofile has no user-to-user or group shares; only link sharing.
+User shares are administrator-managed and apply to a whole library; group sharing is not supported.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [Share a library to user/group](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/` | Missing | — |  |
-| [Unshare a library from user/group](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id-dir-shared-items)<br>`DELETE /api2/repos/{repo_id}/dir/shared_items/` | Missing | — |  |
-| [Update user share permission of a library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id-dir-shared-items)<br>`POST /api2/repos/{repo_id}/dir/shared_items/` | Missing | — |  |
-| [Delete a library shared to me (leave the share)](https://seafile-api.readme.io/reference/delete_api2-beshared-repos-repo-id)<br>`DELETE /api2/beshared-repos/{repo_id}/` | Missing | — |  |
+| [Share a library to user/group](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/` | Differs | [our endpoint](/reference/api/sharing#put-api2-repos-repo-id-dir-shared-items) | User shares only; administrator owner only; whole-library only. |
+| [Unshare a library from user/group](https://seafile-api.readme.io/reference/delete_api2-repos-repo-id-dir-shared-items)<br>`DELETE /api2/repos/{repo_id}/dir/shared_items/` | Differs | [our endpoint](/reference/api/sharing#delete-api2-repos-repo-id-dir-shared-items) | User shares only; administrator owner only; the last member removal reverts to private. |
+| [Update user share permission of a library](https://seafile-api.readme.io/reference/post_api2-repos-repo-id-dir-shared-items)<br>`POST /api2/repos/{repo_id}/dir/shared_items/` | Differs | [our endpoint](/reference/api/sharing#post-api2-repos-repo-id-dir-shared-items) | User shares only; administrator owner only. |
+| [Delete a library shared to me (leave the share)](https://seafile-api.readme.io/reference/delete_api2-beshared-repos-repo-id)<br>`DELETE /api2/beshared-repos/{repo_id}/` | Differs | [our endpoint](/reference/api/sharing#delete-api2-beshared-repos-repo-id) | Personal shares only; the owner's own call is rejected. |
 | [Batch share libraries to user/group](https://seafile-api.readme.io/reference/post_api-v2-1-repos-batch)<br>`POST /api/v2.1/repos/batch/` | Missing | — |  |
 | [Share a folder](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-shared-items-p-path)<br>`PUT /api2/repos/{repo_id}/dir/shared_items/p={path}` | Missing | — |  |
 | [List shared folders](https://seafile-api.readme.io/reference/get_api-v2-1-shared-folders)<br>`GET /api/v2.1/shared-folders/` | Missing | — |  |
@@ -410,11 +410,11 @@ Only `/api2/account/info/`; there is no v2.1 profile API.
 
 ### User search
 
-No user directory search.
+Search is available to administrators for the client's share dialog.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [Search user](https://seafile-api.readme.io/reference/get_api2-search-user)<br>`GET /api2/search-user/` | Missing | — |  |
+| [Search user](https://seafile-api.readme.io/reference/get_api2-search-user)<br>`GET /api2/search-user/` | Differs | [our endpoint](/reference/api/sharing#get-api2-search-user) | Administrator only; active accounts by email substring, at most 50 results, no contacts. |
 
 ### Wiki
 
@@ -546,7 +546,7 @@ No organizations.
 
 ### Share
 
-No user/group shares.
+The administrator share-management views are not implemented; user-level sharing itself is documented under [Sharing](/reference/api/sharing#library-sharing).
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
@@ -745,7 +745,7 @@ Route-level rows cannot capture everything. These differences apply across the s
 - **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. `zip-task` mints with `POST`.
 - **WebDAV.** It lives at `/dav/{repo_id}/` (not `/seafdav`), takes an email plus a WebDAV API key as Basic credentials, refuses encrypted libraries with `403`, and does not store properties or enforce locks.
 - **Notification.** `/notification` speaks the Seafile notification protocol with per-subscription JWTs; it is not part of the Web API reference.
-- **No user-to-user sharing.** There are no shares to users or groups, no per-folder permissions, no comments, wikis, invitations, snapshot labels, OCR or face recognition. Those official groups are `Missing` above.
+- **Administrator-managed sharing.** A library can be private, shared with listed users, or public to all accounts; group sharing, per-folder permissions, comments, wikis, invitations, snapshot labels, OCR and face recognition are not implemented. Those official groups are `Missing` above.
 
 ## WebDAV {#webdav}
 

@@ -67,6 +67,7 @@ impl RepoProvisioningRepository for DbRepoProvisioningRepository {
             updated_at: Set(params.updated_at),
             history_limit: Set(0),
             history_ttl_days: Set(0),
+            visibility: Set("private".to_string()),
             r#type: Set(params.r#type),
         })
         .exec(&txn)

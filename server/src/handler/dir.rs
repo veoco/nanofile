@@ -6,7 +6,7 @@ use axum::{
     http::Request,
     response::{IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -144,10 +144,6 @@ pub fn dir_routes() -> Router<Arc<AppState>> {
         )
         .route("/{repo_id}/dir/move/", axum::routing::post(move_dir))
         .route("/{repo_id}/dir/rename/", axum::routing::post(rename_dir))
-        .route(
-            "/{repo_id}/dir/shared_items/",
-            axum::routing::get(dir_shared_items),
-        )
         .route(
             "/{repo_id}/dir/sub_repo/",
             axum::routing::get(create_sub_repo),
@@ -397,30 +393,6 @@ pub async fn rename_dir(
         auth.user_id,
     )
     .await
-}
-
-#[derive(Serialize)]
-pub struct DirSharedItemsResponse {
-    pub shared_items: Vec<serde_json::Value>,
-}
-
-pub async fn dir_shared_items(
-    access: RepoPathRead,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<DirQuery>,
-) -> Result<Json<DirSharedItemsResponse>, AppError> {
-    let repo_id = &access.repo_id;
-
-    let path = safe_normalize_path(&query.p.unwrap_or_else(|| "/".to_string()))
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let svc = state.dir_service();
-    let items = svc
-        .get_dir_shared_items(repo_id, &path, access.user.user_id)
-        .await?;
-
-    Ok(Json(DirSharedItemsResponse {
-        shared_items: items,
-    }))
 }
 
 /// GET /api2/repos/{repo_id}/dir/sub_repo/ — create a library from a folder.

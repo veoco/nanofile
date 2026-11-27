@@ -31,9 +31,14 @@ size, and filterable.
 - **New library** sits in the page header. The web interface creates a **regular**
   library; an **encrypted library is created by a client** (it carries a lock badge in
   the list), and its password is entered in the client — the server cannot supply it.
+- Libraries **shared with you** and libraries an administrator made **public** also
+  appear here, with a badge and their owner. You can open and sync them, but only the
+  owner gets the edit/delete menu.
 - The **⋯** menu on a row opens **edit**: change the name and description, set
   **history retention** (how many versions to keep, how many days to keep them), and
-  see that library's WebDAV address.
+  see that library's WebDAV address. Administrators also get **Sharing**, which sets
+  the library to only them, selected users, or every account; see
+  [Users and sharing](/guide/admin/users-and-sharing#sharing-policy).
 - Deleting a library moves it to the "Libraries" tab of the trash; it does not vanish
   on the spot.
 

@@ -10,6 +10,12 @@ use base::error::AppError;
 
 use super::auth_extractor::WebUser;
 
+/// One option in the administrator's share dialog user picker.
+pub struct ShareUserOption {
+    pub email: String,
+    pub name: String,
+}
+
 #[derive(Template)]
 #[template(path = "repos/list.html")]
 pub struct RepoListTemplate {
@@ -18,6 +24,7 @@ pub struct RepoListTemplate {
     pub user_email: String,
     pub is_admin: bool,
     pub repos: Vec<RepoInfo>,
+    pub share_users: Vec<ShareUserOption>,
     pub active_page: &'static str,
     pub csrf_token: String,
     pub left_panel_repos: Vec<crate::service::repo::service::LeftPanelRepo>,
@@ -37,6 +44,15 @@ pub struct RepoInfo {
     pub encrypted: bool,
     pub history_limit: i32,
     pub history_ttl_days: i32,
+    /// Real owner of the library (may be another account for shared/public).
+    pub owner_email: String,
+    pub owner_name: String,
+    /// The caller owns the library, so the row can offer edit/delete/share.
+    pub is_owner: bool,
+    /// `private` / `shared` / `public`; drives the badge and the share dialog.
+    pub visibility: String,
+    /// `rw` or `r` for this caller.
+    pub permission: String,
 }
 
 /// GET /libraries/ — list user's repos.
@@ -53,6 +69,7 @@ pub async fn list_repos(
 
     let mut repos = Vec::with_capacity(rows.len());
     for row in rows {
+        let is_owner = row.repo.owner_id == user.user_id;
         let r = row.repo;
         repos.push(RepoInfo {
             id: r.id,
@@ -64,10 +81,37 @@ pub async fn list_repos(
             encrypted: r.encrypted != 0,
             history_limit: r.history_limit,
             history_ttl_days: r.history_ttl_days,
+            owner_email: row.owner_email,
+            owner_name: row.owner_name,
+            is_owner,
+            visibility: row.visibility,
+            permission: row.permission,
         });
     }
 
     let ctx = crate::ui::ctx::build_page_ctx(&state, &user).await?;
+
+    let mut share_users = Vec::new();
+    if user.is_admin {
+        // The instance is small; a server-rendered picker keeps the dialog free
+        // of a second round-trip and of an exposed public user-search endpoint.
+        let mut users: Vec<_> = state
+            .repos
+            .user
+            .find_all()
+            .await?
+            .into_iter()
+            .filter(|u| u.is_active)
+            .collect();
+        users.sort_by_key(|u| u.email.to_lowercase());
+        share_users = users
+            .into_iter()
+            .map(|u| ShareUserOption {
+                name: u.nickname(),
+                email: u.email,
+            })
+            .collect();
+    }
 
     // Render in the list's default order (name, A→Z) so the first paint is
     // already final — browser-side sorting reordered rows and read as a flicker.
@@ -79,6 +123,7 @@ pub async fn list_repos(
         user_email: ctx.user_email,
         is_admin: ctx.is_admin,
         repos,
+        share_users,
         active_page: "repos",
         csrf_token: ctx.csrf_token,
         left_panel_repos: ctx.left_panel_repos,

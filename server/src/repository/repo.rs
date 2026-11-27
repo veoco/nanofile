@@ -70,6 +70,9 @@ pub trait RepoRepository: Send + Sync {
     async fn sum_sizes_by_owner(&self, user_ids: &[i32]) -> Result<Vec<(i32, i64)>, AppError>;
     /// Get all repos (used by garbage collection).
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError>;
+    /// Repos with the given administrator-managed visibility (`public` feeds
+    /// every account's list; `shared` has member rows instead).
+    async fn find_by_visibility(&self, visibility: &str) -> Result<Vec<repo::Model>, AppError>;
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
     async fn create_repo(&self, params: CreateRepoParams) -> Result<repo::Model, AppError>;
     async fn update(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError>;
@@ -218,6 +221,7 @@ impl RepoRepository for DbRepoRepository {
             updated_at: Set(params.updated_at),
             history_limit: Set(0),
             history_ttl_days: Set(0),
+            visibility: Set("private".to_string()),
             r#type: Set(params.r#type),
         };
         // NOTE: `ActiveModelTrait::insert` (`RETURNING *`) fails to map the `type` column back to
@@ -300,6 +304,13 @@ impl RepoRepository for DbRepoRepository {
 
     async fn find_all(&self) -> Result<Vec<repo::Model>, AppError> {
         Ok(repo::Entity::find().all(self.db.as_ref()).await?)
+    }
+
+    async fn find_by_visibility(&self, visibility: &str) -> Result<Vec<repo::Model>, AppError> {
+        Ok(repo::Entity::find()
+            .filter(repo::Column::Visibility.eq(visibility))
+            .all(self.db.as_ref())
+            .await?)
     }
 
     async fn create(&self, model: repo::ActiveModel) -> Result<repo::Model, AppError> {

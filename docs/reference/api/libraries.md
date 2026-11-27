@@ -13,9 +13,10 @@ Source: `server/src/handler/repos.rs`, `server/src/handler/password.rs`,
 
 `GET /api2/repos/`
 
-Returns every library the caller can see, in membership (creation) order; the
-official clients apply their own ordering. A library-scoped API key only sees its
-bound libraries.
+Returns every library the caller can reach: owned libraries, libraries shared
+with them, and libraries an administrator published to all accounts. The official
+clients apply their own ordering. A library-scoped API key only sees its bound
+libraries.
 
 **Response `200`**
 
@@ -41,12 +42,19 @@ bound libraries.
 ]
 ```
 
+`type` is `repo` for an owned library, `srepo` for one shared with the caller,
+and `grepo` for a library published to every account. A `grepo` entry has no
+`groupid`, reports `owner: "Organization"`, and adds `share_from` /
+`share_from_name` for the account that published it; the official desktop client
+renders that combination in its "Shared with all" category.
+
 `permission` is `"rw"` or `"r"`. `version` is the library format version;
 SeaDrive's repo-list parser requires the key and skips entries whose value is 0.
 The same value is also emitted as `repo_version`, the name the create and
 download-info responses use. For an encrypted library the response also carries
 `enc_version`, and `magic`/`random_key`/`salt` where the caller is entitled to
-them.
+them. See [Sharing](/reference/api/sharing#library-sharing) for who may set a
+library's visibility.
 
 ## Create a library {#post-api2-repos}
 
@@ -143,11 +151,12 @@ The v2.1 shape used by the mobile clients and the web interface.
 }
 ```
 
-`type` is `mine` for a library the caller owns and `shared` for one shared with
-them. `last_modified` is RFC 3339; `mtime` is the same instant as Unix seconds.
-An encrypted library with `enc_version` 3 or 4 also carries `salt`, the
-per-library salt the client needs to derive its key; the key is omitted for
-other libraries. Requires `library.read`.
+`type` is `mine` for a library the caller owns, `shared` for one shared with
+them, and `public` for a library published to every account (read-only).
+`last_modified` is RFC 3339; `mtime` is the same instant as Unix seconds. An
+encrypted library with `enc_version` 3 or 4 also carries `salt`, the per-library
+salt the client needs to derive its key; the key is omitted for other libraries.
+Requires `library.read`.
 
 ## Get a library (v2.1) {#get-api-v2-1-repos-repo-id}
 
