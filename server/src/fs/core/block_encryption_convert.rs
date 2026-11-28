@@ -55,10 +55,7 @@ impl ConversionReport {
             self.repos_scanned, self.blocks_checked, self.blocks_converted
         );
         if self.repos_skipped > 0 {
-            summary.push_str(&format!(
-                " ({} repositories resumed)",
-                self.repos_skipped
-            ));
+            summary.push_str(&format!(" ({} repositories resumed)", self.repos_skipped));
         }
         summary
     }
@@ -199,10 +196,15 @@ impl BlockEncryptionConverter {
                 }
                 let store = infra::storage::block_store::BlockStorage::new(block_dir.clone());
                 let repos = store.repo_ids().await.map_err(|e| {
-                    format!("cannot list the block store at {}: {e}", block_dir.display())
+                    format!(
+                        "cannot list the block store at {}: {e}",
+                        block_dir.display()
+                    )
                 })?;
                 if repos.is_empty() {
-                    Self::write_marker(block_dir).await.map_err(|e| e.to_string())?;
+                    Self::write_marker(block_dir)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     tracing::info!("empty block store marked converted for at-rest encryption");
                     return Ok(());
                 }
@@ -396,8 +398,12 @@ mod tests {
 
     /// A lazy-mode decorator over a raw store sharing one temp dir, so tests can
     /// write legacy plaintext via the raw store and inspect on-disk ciphertext.
-    fn temp_lazy_store() -> (tempfile::TempDir, DynBlockStorage, Arc<BlockStorage>, std::path::PathBuf)
-    {
+    fn temp_lazy_store() -> (
+        tempfile::TempDir,
+        DynBlockStorage,
+        Arc<BlockStorage>,
+        std::path::PathBuf,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let blocks = dir.path().join("data").join("blocks");
         std::fs::create_dir_all(&blocks).unwrap();
@@ -547,7 +553,10 @@ mod tests {
             raw.read_block(OTHER, &done_block).await.unwrap(),
             b"finished earlier"
         );
-        assert_eq!(&raw.read_block(REPO, &todo_block).await.unwrap()[..4], b"NFE1");
+        assert_eq!(
+            &raw.read_block(REPO, &todo_block).await.unwrap()[..4],
+            b"NFE1"
+        );
         // A finished pass therefore leaves only the marker.
         assert!(BlockEncryptionConverter::is_converted(&block_dir).await);
         assert!(!block_dir.join(".encryption_convert.log").exists());
@@ -559,7 +568,9 @@ mod tests {
         raw.write_block(REPO, b"status").await.unwrap();
         raw.invalidate_exists_cache();
 
-        let status = BlockEncryptionConverter::status(&store, &block_dir).await.unwrap();
+        let status = BlockEncryptionConverter::status(&store, &block_dir)
+            .await
+            .unwrap();
         assert!(!status.converted);
         assert_eq!(status.pending_repos, 1);
         assert_eq!(status.recorded_repos, 0);
@@ -568,7 +579,9 @@ mod tests {
             .await
             .unwrap();
 
-        let status = BlockEncryptionConverter::status(&store, &block_dir).await.unwrap();
+        let status = BlockEncryptionConverter::status(&store, &block_dir)
+            .await
+            .unwrap();
         assert!(status.converted);
         assert_eq!(status.pending_repos, 0);
     }
