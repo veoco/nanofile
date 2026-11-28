@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 async fn create_key(f: &TestFixture, body: &Value) -> String {
     let resp = f
         .client
-        .post_json("/api2/api-keys/", Some(&f.api_token), body)
+        .post_json("/api/keys/", Some(&f.api_token), body)
         .await;
     assert_eq!(resp.status(), 200, "key creation failed");
     resp.json::<Value>().await.unwrap()["key"]
@@ -38,7 +38,7 @@ fn key_body(capabilities: &[&str]) -> Value {
 async fn the_inventory_lists_every_kind_without_revealing_values() {
     let f = TestFixture::new().await;
 
-    let resp = f.client.get("/api2/credentials/", Some(&f.api_token)).await;
+    let resp = f.client.get("/api/credentials/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let body = resp.text().await.unwrap();
     let value: Value = serde_json::from_str(&body).expect("json");
@@ -91,14 +91,14 @@ async fn a_device_trust_can_be_revoked_through_the_api() {
         .await
         .expect("create trust token");
 
-    let resp = f.client.get("/api2/credentials/", Some(&f.api_token)).await;
+    let resp = f.client.get("/api/credentials/", Some(&f.api_token)).await;
     let value: Value = resp.json().await.unwrap();
     assert_eq!(value["device_trusts"][0]["device_id"], "trusted-device");
 
     let resp = f
         .client
         .delete(
-            &format!("/api2/credentials/device_trust/{}/", trust.id),
+            &format!("/api/credentials/device_trust/{}/", trust.id),
             Some(&f.api_token),
         )
         .await;
@@ -123,7 +123,7 @@ async fn an_unknown_kind_is_rejected() {
     let f = TestFixture::new().await;
     let resp = f
         .client
-        .delete("/api2/credentials/session/1/", Some(&f.api_token))
+        .delete("/api/credentials/session/1/", Some(&f.api_token))
         .await;
     assert_eq!(resp.status(), 400);
 }
@@ -157,7 +157,7 @@ async fn another_accounts_credential_is_not_reachable() {
     let resp = f
         .client
         .delete(
-            &format!("/api2/credentials/sync_token/{foreign}/"),
+            &format!("/api/credentials/sync_token/{foreign}/"),
             Some(&f.api_token),
         )
         .await;
@@ -181,7 +181,7 @@ async fn the_inventory_follows_the_device_capabilities() {
     let f = TestFixture::new().await;
 
     let reader = create_key(&f, &key_body(&["device.read"])).await;
-    let resp = f.client.get("/api2/credentials/", Some(&reader)).await;
+    let resp = f.client.get("/api/credentials/", Some(&reader)).await;
     assert_eq!(resp.status(), 200, "device.read is enough to list");
     let listed: Value = resp.json().await.unwrap();
     let token_id = listed["sync_tokens"][0]["id"].as_i64().expect("id");
@@ -189,7 +189,7 @@ async fn the_inventory_follows_the_device_capabilities() {
     let resp = f
         .client
         .delete(
-            &format!("/api2/credentials/sync_token/{token_id}/"),
+            &format!("/api/credentials/sync_token/{token_id}/"),
             Some(&reader),
         )
         .await;
@@ -199,14 +199,14 @@ async fn the_inventory_follows_the_device_capabilities() {
     let resp = f
         .client
         .delete(
-            &format!("/api2/credentials/sync_token/{token_id}/"),
+            &format!("/api/credentials/sync_token/{token_id}/"),
             Some(&writer),
         )
         .await;
     assert_eq!(resp.status(), 200, "device.write may revoke");
 
     let unrelated = create_key(&f, &key_body(&["library.read"])).await;
-    let resp = f.client.get("/api2/credentials/", Some(&unrelated)).await;
+    let resp = f.client.get("/api/credentials/", Some(&unrelated)).await;
     assert_eq!(resp.status(), 403);
 }
 

@@ -156,7 +156,7 @@ Metadata for one file, including its last modifier and star state.
 
 ## Rename a file {#post-api2-repos-repo-id-file-rename}
 
-`POST /api2/repos/{repo_id}/file/rename/`
+`POST /api/repos/{repo_id}/file/rename/`
 
 **Body** (JSON) — `{"repo_id": "…", "p": "/old.txt", "new_name": "new.txt"}`.
 
@@ -164,9 +164,11 @@ Metadata for one file, including its last modifier and star state.
 directory answers `409` and changes nothing. Requires write permission and
 `file.write`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Move a file {#post-api2-repos-repo-id-file-move}
 
-`POST /api2/repos/{repo_id}/file/move/`
+`POST /api/repos/{repo_id}/file/move/`
 
 **Body** (JSON) — `{"repo_id": "…", "p": "/a.txt", "new_parent_dir": "/target"}`.
 A move inside one library is a single commit; cross-library moves are not
@@ -175,14 +177,18 @@ supported.
 **Response `200`** — empty body. A destination that already contains an entry
 with the same name answers `409` and changes nothing. Requires `file.write`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## EXIF metadata {#get-api2-repos-repo-id-file-exif}
 
-`GET /api2/repos/{repo_id}/file/exif/?p=<path>`
+`GET /api/repos/{repo_id}/file/exif/?p=<path>`
 
 Returns the image's EXIF tags as a JSON object, or `null` when it has none (a
 non-image, or a file the sandbox could not parse).
 
 Requires `file.read`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Thumbnail {#get-api2-repos-repo-id-thumbnail}
 

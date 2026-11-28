@@ -176,7 +176,7 @@ Android model declares it as a number and never calls this endpoint.
 
 ## Rename a directory {#post-api2-repos-repo-id-dir-rename}
 
-`POST /api2/repos/{repo_id}/dir/rename/`
+`POST /api/repos/{repo_id}/dir/rename/`
 
 **Body** (JSON) — `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`.
 The library id is part of the body, unlike the other directory endpoints.
@@ -185,14 +185,18 @@ The library id is part of the body, unlike the other directory endpoints.
 directory answers `409` and changes nothing. Requires write permission and
 `file.write`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Move a directory {#post-api2-repos-repo-id-dir-move}
 
-`POST /api2/repos/{repo_id}/dir/move/`
+`POST /api/repos/{repo_id}/dir/move/`
 
 **Body** (JSON) — `{"repo_id": "…", "p": "/old/name", "new_parent_dir": "/target"}`.
 Moving to the same library is one commit. Requires `file.write`.
 
 **Response `200`** — empty body.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Create a library from a directory {#get-api2-repos-repo-id-dir-sub-repo}
 

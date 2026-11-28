@@ -429,7 +429,7 @@ async fn test_file_revision_v21_downloads_old_version() {
         .client
         .get(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/?p=/hist.txt&commit_id={}",
+                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id={}",
                 f.repo_id, old_commit
             ),
             Some(&f.api_token),
@@ -458,7 +458,7 @@ async fn test_file_revision_v21_supports_ranges_and_validators() {
     let commit = body["data"][1]["commit_id"].as_str().unwrap().to_string();
 
     let url = format!(
-        "{}/api/v2.1/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
+        "{}/api/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
         f.server.base_url, f.repo_id
     );
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -518,7 +518,7 @@ async fn test_file_revision_v21_invalid_commit() {
         .client
         .get(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
+                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
                 f.repo_id
             ),
             Some(&f.api_token),
@@ -549,7 +549,7 @@ async fn test_restore_file_revision_v21() {
         .client
         .post_json(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/restore/?p=/hist.txt&commit_id={}",
+                "/api/repos/{}/file/revision/restore/?p=/hist.txt&commit_id={}",
                 f.repo_id, old_commit
             ),
             Some(&f.api_token),
@@ -600,7 +600,7 @@ async fn test_restore_file_revision_v21_requires_write() {
     let resp = client
         .post_json(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/restore/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
+                "/api/repos/{}/file/revision/restore/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
                 repo_id
             ),
             Some(&other_token),

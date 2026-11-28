@@ -395,7 +395,7 @@ function saveShareVisibility(form) {
 }
 
 function putShareVisibility(visibility) {
-    mutate("/api/v2.1/repos/" + encodeURIComponent(shareRepoId) + "/visibility/", {
+    mutate("/api/repos/" + encodeURIComponent(shareRepoId) + "/visibility/", {
         method: "PUT",
         body: { visibility: visibility },
     }).then(function (resp) {

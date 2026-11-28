@@ -270,7 +270,7 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 ## 更新文件的索引文本 {#post-api2-index-file-text}
 
-`POST /api2/index-file-text/`
+`POST /api/index-file-text/`
 
 直接设置某个文件的全文索引内容，跳过提取。供转换服务使用。
 
@@ -278,15 +278,19 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 **响应 `200`** —— `{"status": "ok"}`。仅资料库所有者或管理员；需要 `search.write`，且全文索引开启。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 读取文件的索引文本 {#get-api2-repos-repo-id-file-index-text}
 
-`GET /api2/repos/{repo_id}/file/index-text/?p=<path>`
+`GET /api/repos/{repo_id}/file/index-text/?p=<path>`
 
 **响应 `200`** —— `{"content": "…"}`；文件未索引时 `content` 为 `null`。需要 `file.read`，且全文索引开启。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 重建单个文件的索引 {#post-api2-repos-repo-id-file-reindex}
 
-`POST /api2/repos/{repo_id}/file/reindex/`
+`POST /api/repos/{repo_id}/file/reindex/`
 
 同步重建一个文件的索引。
 
@@ -294,9 +298,11 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 **响应 `200`** —— `{"status": "ok", "indexed": true}`。需要该资料库的写权限与 `search.reindex`，不要求资料库所有者或管理员。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 重建资料库索引 {#post-api2-reindex}
 
-`POST /api2/reindex/`
+`POST /api/reindex/`
 
 启动后台全文重建。
 
@@ -304,9 +310,11 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 **响应 `200`** —— `{"status": "ok", "task_id": "…"}`。仅所有者或管理员；需要 `search.reindex`。同一资料库同时只有一个重建任务；请求按用户每小时限流（`auth.reindex_max_per_hour`）。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 重建进度 {#get-api2-reindex-progress}
 
-`GET /api2/reindex-progress/?task_id=<id>`
+`GET /api/reindex-progress/?task_id=<id>`
 
 **响应 `200`**
 
@@ -326,4 +334,6 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 
 `state` 是 `running`、`completed` 或 `failed`。只有任务创建者或管理员能读；其他人返回 `404`。需要 `search.reindex`。
 
-**Seafile** —— 元数据配置、标签、标签文件、文件标签、记录与 related-users 都是官方记录的上游路由。元数据的视图、列、标签链接、标签合并、Seafile 的 OCR 接口与人脸识别接口没有实现。Nanofile 可选的 `[ocr]` 服务于自己的全文索引，不是这套 API。搜索接口与参考一致；索引控制是 seahub 有、参考没写的接口。
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
+**Seafile** —— 元数据配置、标签、标签文件、文件标签、记录与 related-users 都是官方记录的上游路由。元数据的视图、列、标签链接、标签合并、Seafile 的 OCR 接口与人脸识别接口没有实现。Nanofile 可选的 `[ocr]` 服务于自己的全文索引，不是这套 API。搜索接口与参考一致；索引控制是 Nanofile 自己 `/api/` 下的路由。

@@ -73,7 +73,7 @@ test("sharing state is visible on the row and filters the list", async ({ page }
   const privateId = await createRepo(state.baseURL, state.adminToken, privateName);
   const publicId = await createRepo(state.baseURL, state.adminToken, publicName);
   const setPublic = await fetch(
-    `${state.baseURL}/api/v2.1/repos/${publicId}/visibility/`,
+    `${state.baseURL}/api/repos/${publicId}/visibility/`,
     {
       method: "PUT",
       headers: {

@@ -54,11 +54,12 @@ Requires `account.write`; keys carrying it may call this.
 
 ## Create an account {#post-api2-account}
 
-`POST /api2/account/`
+`POST /api/accounts/`
 
 Administrator only. Creates an account from `email` and `password` form fields;
-the password policy applies. The same handler is mounted at
-`POST /api2/accounts/` for clients that used seahub's second spelling.
+the password policy applies. Nanofile serves only this plural spelling: seahub's
+separate singular route is not mounted here, so a client that used it must send
+the request here instead.
 
 **Body** — URL-encoded form:
 
@@ -69,16 +70,11 @@ the password policy applies. The same handler is mounted at
 
 **Response `200`** — empty body. `403` for a non-administrator.
 
-### Create an account (second spelling) {#post-api2-accounts}
-
-`POST /api2/accounts/`
-
-The same handler as `POST /api2/account/`, for clients that used seahub's
-other spelling. Same form fields, response and permission.
-
 Self-registration is a web flow (`/accounts/register/`), not this endpoint: it
 enforces the registration mode, invitation codes, email verification and rate
 limits.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Get an avatar {#get-api2-avatars-user-email-resized-size}
 
@@ -121,7 +117,7 @@ Uploads a new primary avatar for the authenticated account.
 
 ## List users {#get-api2-admin-users}
 
-`GET /api2/admin/users/`
+`GET /api/admin/users/`
 
 Administrator only. Returns every account.
 
@@ -145,9 +141,11 @@ Administrator only. Returns every account.
 Requires `admin.user.read`. This is Nanofile's own administration surface; it is
 not seahub's `/api/v2.1/admin/users/` API, whose field names and options differ.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Create a user {#post-api2-admin-users}
 
-`POST /api2/admin/users/`
+`POST /api/admin/users/`
 
 Administrator only.
 
@@ -164,9 +162,11 @@ Administrator only.
 **Response `200`** — the created user in the list shape. Requires
 `admin.user.write`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Update a user {#put-api2-admin-users-user-id}
 
-`PUT /api2/admin/users/{user_id}/`
+`PUT /api/admin/users/{user_id}/`
 
 Administrator only. Replaces the account's administration flags.
 
@@ -175,12 +175,16 @@ the full state you want. `user_id` is the numeric `id` from the list.
 
 **Response `200`** — the updated user. Requires `admin.user.write`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Delete a user {#delete-api2-admin-users-user-id}
 
-`DELETE /api2/admin/users/{user_id}/`
+`DELETE /api/admin/users/{user_id}/`
 
 Administrator only. Deletes the account and its data. **Response `200`** —
 `{"success": true}`. Requires `admin.user.write`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Unseen messages {#get-api2-unseen-messages}
 

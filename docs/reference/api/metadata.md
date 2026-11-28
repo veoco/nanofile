@@ -305,7 +305,7 @@ former and Android the latter.
 
 ## Update a file's indexed text {#post-api2-index-file-text}
 
-`POST /api2/index-file-text/`
+`POST /api/index-file-text/`
 
 Sets the full-text index content for one file, bypassing extraction. For
 conversion services.
@@ -315,16 +315,20 @@ conversion services.
 **Response `200`** — `{"status": "ok"}`. Library owner or administrator only;
 requires `search.write` and full-text indexing enabled.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Read a file's indexed text {#get-api2-repos-repo-id-file-index-text}
 
-`GET /api2/repos/{repo_id}/file/index-text/?p=<path>`
+`GET /api/repos/{repo_id}/file/index-text/?p=<path>`
 
 **Response `200`** — `{"content": "…"}`, or `null` for `content` when the file is
 not indexed. Requires `file.read` and full-text indexing enabled.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Reindex a file {#post-api2-repos-repo-id-file-reindex}
 
-`POST /api2/repos/{repo_id}/file/reindex/`
+`POST /api/repos/{repo_id}/file/reindex/`
 
 Reindexes one file synchronously.
 
@@ -334,9 +338,11 @@ Reindexes one file synchronously.
 permission on the library plus `search.reindex`; library owner or administrator
 is not required.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Rebuild a library's index {#post-api2-reindex}
 
-`POST /api2/reindex/`
+`POST /api/reindex/`
 
 Starts a background full-text rebuild.
 
@@ -346,9 +352,11 @@ Starts a background full-text rebuild.
 only; requires `search.reindex`. One rebuild per library at a time; the request
 is rate limited per user per hour (`auth.reindex_max_per_hour`).
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Reindex progress {#get-api2-reindex-progress}
 
-`GET /api2/reindex-progress/?task_id=<id>`
+`GET /api/reindex-progress/?task_id=<id>`
 
 **Response `200`**
 
@@ -369,9 +377,11 @@ is rate limited per user per hour (`auth.reindex_max_per_hour`).
 `state` is `running`, `completed` or `failed`. Only the task's creator or an
 administrator can read it; others get `404`. Requires `search.reindex`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 **Seafile** — metadata config, tags, tag files, file tags, records and
 related-users are the documented upstream routes. The metadata *views*, columns,
 tag links, tag merge, the Seafile OCR endpoints and face-recognition endpoints
 are not implemented. Nanofile's optional `[ocr]` feature feeds its own full-text
-index and is not this API. The search endpoints match the reference; the indexing controls are seahub
-endpoints the reference does not document.
+index and is not this API. The search endpoints match the reference; the indexing
+controls are Nanofile's own `/api/` routes.

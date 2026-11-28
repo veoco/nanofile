@@ -48,7 +48,7 @@ async fn set_visibility(f: &SharingFixture, visibility: &str) -> reqwest::Respon
     f.server
         .client()
         .put_json(
-            &format!("/api/v2.1/repos/{}/visibility/", f.repo_id),
+            &format!("/api/repos/{}/visibility/", f.repo_id),
             Some(&f.admin_token),
             &json!({ "visibility": visibility }),
         )
@@ -448,7 +448,7 @@ async fn only_an_administrator_owner_can_manage_sharing() {
     let resp = f
         .client
         .put_json(
-            &format!("/api/v2.1/repos/{}/visibility/", f.repo_id),
+            &format!("/api/repos/{}/visibility/", f.repo_id),
             Some(&f.api_token),
             &json!({"visibility": "public"}),
         )
@@ -464,7 +464,7 @@ async fn only_an_administrator_owner_can_manage_sharing() {
         .server
         .client()
         .put_json(
-            &format!("/api/v2.1/repos/{}/visibility/", s.repo_id),
+            &format!("/api/repos/{}/visibility/", s.repo_id),
             Some(&other_token),
             &json!({"visibility": "public"}),
         )
@@ -490,7 +490,7 @@ async fn encrypted_libraries_cannot_be_shared_or_published() {
         .server
         .client()
         .put_json(
-            &format!("/api/v2.1/repos/{repo_id}/visibility/"),
+            &format!("/api/repos/{repo_id}/visibility/"),
             Some(&f.admin_token),
             &json!({"visibility": "public"}),
         )
@@ -580,7 +580,7 @@ async fn administrator_cannot_demote_itself_while_owning_a_shared_library() {
         .server
         .client()
         .put_json(
-            &format!("/api2/admin/users/{}/", f.admin_id),
+            &format!("/api/admin/users/{}/", f.admin_id),
             Some(&f.admin_token),
             &json!({"is_admin": false, "is_active": true}),
         )
@@ -592,7 +592,7 @@ async fn administrator_cannot_demote_itself_while_owning_a_shared_library() {
         .server
         .client()
         .put_json(
-            &format!("/api2/admin/users/{}/", f.admin_id),
+            &format!("/api/admin/users/{}/", f.admin_id),
             Some(&f.admin_token),
             &json!({"is_admin": false, "is_active": true}),
         )

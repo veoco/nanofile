@@ -343,7 +343,7 @@ async fn test_v1_upload_links_shape() {
     let resp = f
         .client
         .post_json(
-            "/api2/upload-links",
+            "/api/upload-links",
             Some(&f.api_token),
             &json!({ "repo_id": f.repo_id, "path": "/" }),
         )
@@ -364,7 +364,7 @@ async fn test_v1_upload_links_shape() {
     );
 
     let token = created["token"].as_str().unwrap().to_string();
-    let resp = f.client.get("/api2/upload-links", Some(&f.api_token)).await;
+    let resp = f.client.get("/api/upload-links", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let items: Value = resp.json().await.unwrap();
     assert_eq!(items.as_array().unwrap().len(), 1);
@@ -372,7 +372,7 @@ async fn test_v1_upload_links_shape() {
 
     let resp = f
         .client
-        .delete(&format!("/api2/upload-links/{token}"), Some(&f.api_token))
+        .delete(&format!("/api/upload-links/{token}"), Some(&f.api_token))
         .await;
     assert_eq!(resp.status(), 200);
 }

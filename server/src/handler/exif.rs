@@ -15,7 +15,7 @@ pub struct ExifQuery {
     pub p: Option<String>,
 }
 
-/// GET /api2/repos/{repo_id}/file/exif/?p=/path
+/// GET /api/repos/{repo_id}/file/exif/?p=/path
 ///
 /// Return EXIF metadata for an image file as a JSON object.
 /// Returns `null` if the file contains no EXIF data.

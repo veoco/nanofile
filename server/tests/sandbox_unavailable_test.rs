@@ -90,7 +90,7 @@ async fn a_document_is_not_indexed_without_the_worker() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            &format!("/api/repos/{}/file/reindex/", f.repo_id),
             Some(token),
             &serde_json::json!({ "p": path }),
         )
@@ -184,7 +184,7 @@ async fn exif_is_an_error_without_the_image_worker() {
     let resp = f
         .client
         .get(
-            &format!("/api2/repos/{}/file/exif/?p=/shot.png", f.repo_id),
+            &format!("/api/repos/{}/file/exif/?p=/shot.png", f.repo_id),
             Some(&f.api_token),
         )
         .await;

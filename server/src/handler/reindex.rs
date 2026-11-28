@@ -40,7 +40,7 @@ pub struct IndexFileTextResponse {
     pub status: String,
 }
 
-/// POST /api2/index-file-text/ — update one file's full-text index with custom text.
+/// POST /api/index-file-text/ — update one file's full-text index with custom text.
 pub async fn index_file_text(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -72,10 +72,10 @@ pub async fn index_file_text(
     }))
 }
 
-/// POST /api2/reindex/
+/// POST /api/reindex/
 ///
 /// Rebuild a repository's full-text index as a background job polled via
-/// `GET /api2/reindex-progress/`. Owner or admin only; a per-repo dedup lock and a
+/// `GET /api/reindex-progress/`. Owner or admin only; a per-repo dedup lock and a
 /// per-user rate limiter cap the frequency.
 pub async fn reindex(
     auth: AuthUser,
@@ -122,7 +122,7 @@ pub async fn reindex(
     }))
 }
 
-/// GET /api2/reindex-progress/ — poll a background reindex task; only its creator or
+/// GET /api/reindex-progress/ — poll a background reindex task; only its creator or
 /// an admin may query. Completed tasks are purged after an hour by the run store.
 pub async fn reindex_progress(
     auth: AuthUser,

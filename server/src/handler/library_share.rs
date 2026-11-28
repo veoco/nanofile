@@ -260,7 +260,7 @@ async fn search_user(
     })))
 }
 
-/// `PUT /api/v2.1/repos/{repo_id}/visibility/` — publish, restrict or unpublish.
+/// `PUT /api/repos/{repo_id}/visibility/` — publish, restrict or unpublish.
 async fn set_visibility(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -281,6 +281,10 @@ async fn set_visibility(
     Ok(ok_json())
 }
 
-pub fn visibility_routes() -> Router<Arc<AppState>> {
+/// The Nanofile-only library routes under `/api/repos/{repo_id}/`.
+///
+/// Library visibility (private / shared / public) is this server's own
+/// administrator-managed sharing model; Seafile has no such endpoint.
+pub fn nanofile_repo_routes() -> Router<Arc<AppState>> {
     Router::new().route("/{repo_id}/visibility/", axum::routing::put(set_visibility))
 }

@@ -88,7 +88,7 @@ them.
 
 A single file or a selection can be re-indexed from the web interface: the
 **re-index** button in the details drawer, or the bulk **re-index** when several
-entries are selected. `POST /api2/reindex/` rebuilds a single library: its body is
+entries are selected. `POST /api/reindex/` rebuilds a single library: its body is
 `{"repo_id": ...}` and only the library owner or an administrator may call it.
 There is no whole-site endpoint; rebuild each library in turn, or set
 `index.backfill_enabled` and restart the server to backfill every library.

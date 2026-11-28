@@ -75,7 +75,7 @@ Every request is classified as one of three credentials:
 
 The route-to-capability table lives in `server/src/domain/capability.rs`; a new
 route that is not classified fails closed. `server/tests/capability_coverage_test.rs`
-checks that the table covers every route.
+checks that the table covers every `/api2`, `/api/v2.1` and `/api` route.
 
 ## Verified against upstream
 

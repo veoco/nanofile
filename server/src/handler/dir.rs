@@ -142,12 +142,20 @@ pub fn dir_routes() -> Router<Arc<AppState>> {
                 .post(dir_post_handler)
                 .delete(delete_dir),
         )
-        .route("/{repo_id}/dir/move/", axum::routing::post(move_dir))
-        .route("/{repo_id}/dir/rename/", axum::routing::post(rename_dir))
         .route(
             "/{repo_id}/dir/sub_repo/",
             axum::routing::get(create_sub_repo),
         )
+}
+
+/// The Nanofile-only directory routes under `/api/repos/{repo_id}/dir/`.
+///
+/// Seafile renames/moves a directory through `op=` on the directory endpoint;
+/// separate rename/move routes are this server's own additions.
+pub fn nanofile_dir_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/{repo_id}/dir/move/", axum::routing::post(move_dir))
+        .route("/{repo_id}/dir/rename/", axum::routing::post(rename_dir))
 }
 
 pub async fn list_dir(

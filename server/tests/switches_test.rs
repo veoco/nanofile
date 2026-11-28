@@ -177,7 +177,7 @@ async fn admin_api_registration_enforces_the_password_policy() {
 
     let resp = client
         .post_form(
-            "/api2/accounts/",
+            "/api/accounts/",
             Some(&token),
             &[("email", "weak@example.com"), ("password", "x")],
         )
@@ -191,7 +191,7 @@ async fn admin_api_registration_enforces_the_password_policy() {
 
     let resp = client
         .post_form(
-            "/api2/accounts/",
+            "/api/accounts/",
             Some(&token),
             &[("email", "ok@example.com"), ("password", "goodpassword1")],
         )

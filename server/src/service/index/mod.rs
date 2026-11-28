@@ -8,7 +8,7 @@
 //!
 //! The index is derived data: a file that cannot be read is counted and logged,
 //! never a reason to fail the request that scheduled the work. A *backfill* must
-//! not touch a document a client pinned by hand (`/api2/index-file-text/`) or
+//! not touch a document a client pinned by hand (`/api/index-file-text/`) or
 //! re-read a file it already processed. An *explicit* request refreshes even a
 //! pinned document.
 

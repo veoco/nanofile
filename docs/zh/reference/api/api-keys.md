@@ -27,7 +27,7 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 | admin | `admin.user.read`、`admin.user.write` |
 | key | `key.read`、`key.write`（保留：永不授予，密钥管理只接受会话） |
 
-写能力隐含对应的读能力；`sync.token` 还隐含 `sync.write` 与 `sync.read`。未知 id 会被拒绝。实时列表见 [`GET /api2/api-keys/catalog/`](#get-api2-api-keys-catalog)，它同时返回每个能力的 `enforced_by` 路由。
+写能力隐含对应的读能力；`sync.token` 还隐含 `sync.write` 与 `sync.read`。未知 id 会被拒绝。实时列表见 [`GET /api/keys/catalog/`](#get-api2-api-keys-catalog)，它同时返回每个能力的 `enforced_by` 路由。
 
 ## 预设
 
@@ -43,7 +43,7 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 ## 获取能力目录 {#get-api2-api-keys-catalog}
 
-`GET /api2/api-keys/catalog/`
+`GET /api/keys/catalog/`
 
 返回能力、预设与有效期选项，客户端可渲染与设置页相同的选择器。
 
@@ -62,9 +62,11 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 返回的能力集合取决于调用者是否为管理员：`admin.*` 只提供给管理员。`max_ttl_days` 为 `0` 表示服务器不设上限。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 列出 API 密钥 {#get-api2-api-keys}
 
-`GET /api2/api-keys/`
+`GET /api/keys/`
 
 **响应 `200`**
 
@@ -88,9 +90,11 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 这里永远不返回密钥本体，只保留前 8 个字符用于显示。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 创建 API 密钥 {#post-api2-api-keys}
 
-`POST /api2/api-keys/`
+`POST /api/keys/`
 
 **请求体**（JSON）
 
@@ -114,29 +118,37 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 创建成功会给所有者发一封尽力而为的通知邮件。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 获取单个 API 密钥 {#get-api2-api-keys-id}
 
-`GET /api2/api-keys/{id}/`
+`GET /api/keys/{id}/`
 
 返回一个密钥的视图（与列表项相同）。未知 id 或别人的密钥返回 `404`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 更新 API 密钥 {#put-api2-api-keys-id}
 
-`PUT /api2/api-keys/{id}/`
+`PUT /api/keys/{id}/`
 
 接受 `name`、`capabilities`、`all_repos`、`repo_permissions`、`expires_in_days`、`expires_at`、`never` 的任意子集，但最终状态必须合法。`all_repos: true` 把密钥改为全库，不能带绑定（只给 `all_repos: true` 会清掉已存的绑定）；`all_repos: false` 要求非空的 `repo_permissions`，所以把全库密钥改回受限范围却不给绑定会返回 `400`。省略的字段保持不变；三个有效期字段都省略时保留当前过期时间；出现时必须只有一个。
 
 **响应 `200`** —— 更新后的视图。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 删除 API 密钥 {#delete-api2-api-keys-id}
 
-`DELETE /api2/api-keys/{id}/`
+`DELETE /api/keys/{id}/`
 
 立即吊销。**响应 `200`** —— `{"success": true}`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 列出凭据 {#get-api2-credentials}
 
-`GET /api2/credentials/`
+`GET /api/credentials/`
 
 账号持有的全部长期凭据：客户端会话、浏览器会话、同步令牌、受信设备，以及 API 密钥数量（内容只能通过仅限会话的密钥接口读取）。
 
@@ -156,13 +168,17 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 
 不包含令牌本体。需要 `device.read`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 吊销单个凭据 {#delete-api2-credentials-kind-id}
 
-`DELETE /api2/credentials/{kind}/{id}/`
+`DELETE /api/credentials/{kind}/{id}/`
 
 `kind` 是 `browser_session`、`sync_token` 或 `device_trust`；`id` 是清单里的行 id。客户端设备要整台吊销，走 [`DELETE /api2/devices/`](#delete-api2-devices)，因为一台设备持有多个凭据。需要 `device.write`。
 
 **响应 `200`** —— `{"revoked": "sync_token", "id": 1}`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 列出设备 {#get-api2-devices}
 

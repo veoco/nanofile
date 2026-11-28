@@ -335,7 +335,7 @@ async fn test_webdav_get_and_head() {
         let resp = f
             .client
             .post_json(
-                "/api2/api-keys/",
+                "/api/keys/",
                 Some(&f.api_token),
                 &serde_json::json!({
                     "name": "dav-read",
@@ -424,7 +424,7 @@ async fn test_revision_download() {
         .client
         .get(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
+                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
                 f.repo_id
             ),
             Some(&f.api_token),

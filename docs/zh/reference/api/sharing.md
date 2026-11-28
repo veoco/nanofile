@@ -53,9 +53,11 @@
 
 ## 删除分享链接 {#delete-api2-shared-links-token}
 
-`DELETE /api2/shared-links/{token}`
+`DELETE /api/shared-links/{token}`
 
 删除调用者的一条链接。**响应 `200`** —— `{"success": true}`。需要 `share_link.write`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 列出分享链接（v2.1） {#get-api-v2-1-share-links}
 
@@ -134,7 +136,7 @@
 
 ## 列出上传链接 {#get-api2-upload-links}
 
-`GET /api2/upload-links/`
+`GET /api/upload-links/`
 
 调用者的上传链接。**响应 `200`**
 
@@ -152,19 +154,25 @@
 
 需要 `upload_link.read`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 创建上传链接 {#post-api2-upload-links}
 
-`POST /api2/upload-links/`
+`POST /api/upload-links/`
 
 **请求体**（JSON）—— `repo_id`、`path`、可选 `password` 与 `expires_at`（Unix 秒）。
 
 **响应 `200`** —— 旧版列表形状的一项。需要 `upload_link.write` 与资料库写权限。上传链接不能指向加密资料库；`server.share_upload_enabled` 关闭时拒绝创建。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 删除上传链接 {#delete-api2-upload-links-token}
 
-`DELETE /api2/upload-links/{token}`
+`DELETE /api/upload-links/{token}`
 
 **响应 `200`** —— `{"success": true}`。需要 `upload_link.write`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 列出上传链接（v2.1） {#get-api-v2-1-upload-links}
 
@@ -409,13 +417,15 @@ body `permission=r|rw`（表单或 JSON）。用户必须已在共享列表中�
 
 ### 设置资料库可见性 {#put-api-v2-1-repos-repo-id-visibility}
 
-`PUT /api/v2.1/repos/{repo_id}/visibility/`
+`PUT /api/repos/{repo_id}/visibility/`
 
 body（JSON 或表单）：`{"visibility": "private" | "shared" | "public"}`。
 
 `private` 与 `public` 会在同一操作中清空已列用户；`shared` 保留（允许空列表）。加密库只能是 `private`。需要 `library.update` 与管理员的 owner 身份。这是 Nanofile 扩展，官方客户端没有对应接口。
 
 **响应 `200`** —— `{"success": true}`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 列出群组 {#get-api2-groups}
 

@@ -236,7 +236,7 @@ export async function createUser(
   email: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api2/accounts/`, {
+  const res = await fetch(`${baseURL}/api/accounts/`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${adminToken}`,
@@ -260,7 +260,7 @@ export async function createAdminUser(
   email: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api2/admin/users/`, {
+  const res = await fetch(`${baseURL}/api/admin/users/`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${adminToken}`,

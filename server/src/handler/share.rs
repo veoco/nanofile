@@ -20,12 +20,18 @@ pub struct CreateShareLinkRequest {
 }
 
 pub fn share_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/",
-            axum::routing::get(list_share_links).post(create_share_link),
-        )
-        .route("/{token}", axum::routing::delete(delete_share_link))
+    Router::new().route(
+        "/",
+        axum::routing::get(list_share_links).post(create_share_link),
+    )
+}
+
+/// The legacy v1 delete route (`DELETE /api/shared-links/{token}`).
+///
+/// seahub only registered the collection path; deleting by token in the path is
+/// this server's own legacy shape, so it lives on the Nanofile prefix.
+pub fn nanofile_share_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/{token}", axum::routing::delete(delete_share_link))
 }
 
 pub async fn list_share_links(

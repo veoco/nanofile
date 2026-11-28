@@ -91,7 +91,7 @@ function renderHistoryList(items, repoId, path) {
     var commitId = item.commit_id || "";
     var fileName = path.split("/").pop() || "";
     var revUrl =
-      "/api/v2.1/repos/" +
+      "/api/repos/" +
       encodeURIComponent(repoId) +
       "/file/revision/?p=" +
       encodeURIComponent(path) +
@@ -150,7 +150,7 @@ if (historyListEl) {
 
     try {
       await apiFetch(
-        "/api/v2.1/repos/" +
+        "/api/repos/" +
           encodeURIComponent(repoId) +
           "/file/revision/restore/?p=" +
           encodeURIComponent(path) +
@@ -708,7 +708,7 @@ document.addEventListener("click", async function (e) {
     var indexedCount = 0;
     var skippedCount = 0;
     for (var j = 0; j < files.length; j++) {
-      var resp = await apiFetch("/api2/repos/" + encodeURIComponent(files[j].repoId) + "/file/reindex/", {
+      var resp = await apiFetch("/api/repos/" + encodeURIComponent(files[j].repoId) + "/file/reindex/", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ p: files[j].path }),

@@ -14,7 +14,7 @@ use server::repository::api_key::UpdateApiKeyParams;
 async fn create_key(f: &TestFixture, body: &Value) -> String {
     let resp = f
         .client
-        .post_json("/api2/api-keys/", Some(&f.api_token), body)
+        .post_json("/api/keys/", Some(&f.api_token), body)
         .await;
     assert_eq!(resp.status(), 200, "key creation failed");
     resp.json::<Value>().await.unwrap()["key"]
@@ -224,7 +224,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/move/", f.repo_id),
+            &format!("/api/repos/{}/file/move/", f.repo_id),
             Some(&key),
             &json!({"repo_id": other, "p": "/keep.txt", "new_parent_dir": "/moved"}),
         )
@@ -234,7 +234,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/rename/", f.repo_id),
+            &format!("/api/repos/{}/file/rename/", f.repo_id),
             Some(&key),
             &json!({"repo_id": other, "p": "/keep.txt", "new_name": "renamed.txt"}),
         )
@@ -244,7 +244,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/move/", f.repo_id),
+            &format!("/api/repos/{}/dir/move/", f.repo_id),
             Some(&key),
             &json!({"repo_id": other, "p": "/keepdir", "new_parent_dir": "/moved"}),
         )
@@ -254,7 +254,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            &format!("/api/repos/{}/dir/rename/", f.repo_id),
             Some(&key),
             &json!({"repo_id": other, "p": "/keepdir", "new_name": "renameddir"}),
         )
@@ -302,7 +302,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
             .await;
         assert_eq!(resp.status(), 403, "{path} created a link for B");
     }
-    for path in ["/api/v2.1/upload-links/", "/api2/upload-links"] {
+    for path in ["/api/v2.1/upload-links/", "/api/upload-links"] {
         let resp = f
             .client
             .post_json(path, Some(&key), &json!({"repo_id": other, "path": "/"}))
@@ -390,14 +390,14 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     // Body/query index and metadata operations.
     let resp = f
         .client
-        .post_json("/api2/reindex/", Some(&key), &json!({"repo_id": other}))
+        .post_json("/api/reindex/", Some(&key), &json!({"repo_id": other}))
         .await;
     assert_eq!(resp.status(), 403, "reindex B outside the key scope");
 
     let resp = f
         .client
         .post_json(
-            "/api2/index-file-text/",
+            "/api/index-file-text/",
             Some(&key),
             &json!({"repo_id": other, "path": "/keep.txt", "text": "escaped"}),
         )
@@ -537,12 +537,12 @@ async fn link_tokens_are_scoped_to_the_key_library() {
     // The v1 delete routes carry the same tokens and need the same guard.
     let resp = f
         .client
-        .delete(&format!("/api2/shared-links/{share_token}"), Some(&key))
+        .delete(&format!("/api/shared-links/{share_token}"), Some(&key))
         .await;
     assert_eq!(resp.status(), 404, "v1 delete B share link");
     let resp = f
         .client
-        .delete(&format!("/api2/upload-links/{upload_token}"), Some(&key))
+        .delete(&format!("/api/upload-links/{upload_token}"), Some(&key))
         .await;
     assert_eq!(resp.status(), 404, "v1 delete B upload link");
 }
@@ -570,7 +570,7 @@ async fn credential_inventory_and_sync_token_revoke_are_scoped() {
 
     let inventory: Value = f
         .client
-        .get("/api2/credentials/", Some(&key))
+        .get("/api/credentials/", Some(&key))
         .await
         .json()
         .await
@@ -594,7 +594,7 @@ async fn credential_inventory_and_sync_token_revoke_are_scoped() {
 
     let owner_inventory: Value = f
         .client
-        .get("/api2/credentials/", Some(&f.api_token))
+        .get("/api/credentials/", Some(&f.api_token))
         .await
         .json()
         .await
@@ -611,7 +611,7 @@ async fn credential_inventory_and_sync_token_revoke_are_scoped() {
     let resp = f
         .client
         .delete(
-            &format!("/api2/credentials/sync_token/{token_id}/"),
+            &format!("/api/credentials/sync_token/{token_id}/"),
             Some(&key),
         )
         .await;
@@ -619,7 +619,7 @@ async fn credential_inventory_and_sync_token_revoke_are_scoped() {
 
     let owner_after: Value = f
         .client
-        .get("/api2/credentials/", Some(&f.api_token))
+        .get("/api/credentials/", Some(&f.api_token))
         .await
         .json()
         .await
@@ -702,20 +702,20 @@ async fn a_key_cannot_manage_keys() {
     )
     .await;
 
-    let resp = f.client.get("/api2/api-keys/", Some(&key)).await;
+    let resp = f.client.get("/api/keys/", Some(&key)).await;
     assert_eq!(resp.status(), 403, "a key must not list keys");
 
     let resp = f
         .client
         .post_json(
-            "/api2/api-keys/",
+            "/api/keys/",
             Some(&key),
             &key_body(&["library.read"], true, &[]),
         )
         .await;
     assert_eq!(resp.status(), 403, "a key must not mint keys");
 
-    let resp = f.client.get("/api2/api-keys/catalog/", Some(&key)).await;
+    let resp = f.client.get("/api/keys/catalog/", Some(&key)).await;
     assert_eq!(resp.status(), 403, "the catalog is part of the key surface");
 }
 
@@ -725,7 +725,7 @@ async fn an_expired_key_is_rejected() {
     let key = create_key(&f, &key_body(&["library.read"], true, &[])).await;
     let keys: Value = f
         .client
-        .get("/api2/api-keys/", Some(&f.api_token))
+        .get("/api/keys/", Some(&f.api_token))
         .await
         .json()
         .await
@@ -795,7 +795,7 @@ async fn using_a_key_records_when_it_was_last_used() {
     async fn last_used(f: &TestFixture, key_id: i64) -> Option<i64> {
         let listed: Value = f
             .client
-            .get("/api2/api-keys/", Some(&f.api_token))
+            .get("/api/keys/", Some(&f.api_token))
             .await
             .json()
             .await
@@ -811,7 +811,7 @@ async fn using_a_key_records_when_it_was_last_used() {
 
     let listed: Value = f
         .client
-        .get("/api2/api-keys/", Some(&f.api_token))
+        .get("/api/keys/", Some(&f.api_token))
         .await
         .json()
         .await
@@ -844,8 +844,8 @@ async fn a_session_satisfies_every_capability_but_is_still_classified() {
     for path in [
         "/api2/repos/",
         "/api2/starredfiles/",
-        "/api2/api-keys/",
-        "/api2/api-keys/catalog/",
+        "/api/keys/",
+        "/api/keys/catalog/",
         "/api2/account/info/",
         "/api2/devices/",
         "/api2/groups/",
@@ -888,7 +888,7 @@ async fn a_read_ceiling_cannot_mint_upload_links() {
     )
     .await;
 
-    for path in ["/api/v2.1/upload-links/", "/api2/upload-links"] {
+    for path in ["/api/v2.1/upload-links/", "/api/upload-links"] {
         let resp = f
             .client
             .post_json(
@@ -1049,7 +1049,7 @@ async fn webdav_rejects_an_expired_key() {
     let resp = f
         .client
         .post_json(
-            "/api2/api-keys/",
+            "/api/keys/",
             Some(&f.api_token),
             &json!({
                 "name": "webdav-expired",

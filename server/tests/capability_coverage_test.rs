@@ -1,13 +1,13 @@
 //! Route-coverage guard for the unified API-key capability table.
 //!
-//! `required_access` fails closed: a `/api2` or `/api/v2.1` route that is not in
+//! `required_access` fails closed: a `/api2`, `/api/v2.1` or `/api` route that is not in
 //! the table is denied to API keys. That is the right default, but it is also
 //! silent, so this test pins the inventory: every route the server registers
 //! must be classified.
 
 use server::domain::capability::{RouteAccess, required_access};
 
-/// Every `/api2` and `/api/v2.1` route the server registers, with the method a
+/// Every `/api2`, `/api/v2.1` and `/api` route the server registers, with the method a
 /// client would use. Kept literal (rather than derived) on purpose: it is the
 /// independent copy that catches a table entry disappearing.
 #[rustfmt::skip]
@@ -23,14 +23,13 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/client-login/"),
     ("GET",    "/api2/account/info/"),
     ("PUT",    "/api2/account/info/"),
-    ("POST",   "/api2/account/"),
-    ("POST",   "/api2/accounts/"),
+    ("POST",   "/api/accounts/"),
     ("GET",    "/api2/avatars/user/a@b.c/resized/96/"),
     ("POST",   "/api/v2.1/user-avatar/"),
     ("GET",    "/api2/devices/"),
     ("DELETE", "/api2/devices/"),
-    ("GET",    "/api2/credentials/"),
-    ("DELETE", "/api2/credentials/{kind}/{id}/"),
+    ("GET",    "/api/credentials/"),
+    ("DELETE", "/api/credentials/{kind}/{id}/"),
     ("GET",    "/api2/unseen_messages/"),
     ("GET",    "/api2/repos/"),
     ("POST",   "/api2/repos/"),
@@ -56,8 +55,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/v2.1/repos/{repo_id}/dir/"),
     ("DELETE", "/api/v2.1/repos/{repo_id}/dir/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/dir/detail/"),
-    ("POST",   "/api2/repos/{repo_id}/dir/move/"),
-    ("POST",   "/api2/repos/{repo_id}/dir/rename/"),
+    ("POST",   "/api/repos/{repo_id}/dir/move/"),
+    ("POST",   "/api/repos/{repo_id}/dir/rename/"),
     ("GET",    "/api2/repos/{repo_id}/dir/shared_items/"),
     ("GET",    "/api2/repos/{repo_id}/file/"),
     ("POST",   "/api2/repos/{repo_id}/file/"),
@@ -65,12 +64,12 @@ const ROUTES: &[(&str, &str)] = &[
     ("DELETE", "/api2/repos/{repo_id}/file/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/file/"),
     ("DELETE", "/api/v2.1/repos/{repo_id}/file/"),
-    ("POST",   "/api2/repos/{repo_id}/file/rename/"),
-    ("POST",   "/api2/repos/{repo_id}/file/move/"),
+    ("POST",   "/api/repos/{repo_id}/file/rename/"),
+    ("POST",   "/api/repos/{repo_id}/file/move/"),
     ("GET",    "/api2/repos/{repo_id}/file/detail/"),
-    ("GET",    "/api2/repos/{repo_id}/file/exif/"),
-    ("GET",    "/api2/repos/{repo_id}/file/index-text/"),
-    ("POST",   "/api2/repos/{repo_id}/file/reindex/"),
+    ("GET",    "/api/repos/{repo_id}/file/exif/"),
+    ("GET",    "/api/repos/{repo_id}/file/index-text/"),
+    ("POST",   "/api/repos/{repo_id}/file/reindex/"),
     ("GET",    "/api2/repos/{repo_id}/thumbnail/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file-uploaded-bytes/"),
     ("POST",   "/api/v2.1/repos/{repo_id}/zip-task/"),
@@ -99,20 +98,20 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/v2.1/repos/{repo_id}/trash2/revert/"),
     ("GET",    "/api2/repo_history_changes/{repo_id}/"),
     ("GET",    "/api/v2.1/repos/{repo_id}/file/history/"),
-    ("GET",    "/api/v2.1/repos/{repo_id}/file/revision/"),
-    ("POST",   "/api/v2.1/repos/{repo_id}/file/revision/restore/"),
+    ("GET",    "/api/repos/{repo_id}/file/revision/"),
+    ("POST",   "/api/repos/{repo_id}/file/revision/restore/"),
     ("GET",    "/api2/shared-links/"),
     ("POST",   "/api2/shared-links/"),
-    ("DELETE", "/api2/shared-links/{token}"),
+    ("DELETE", "/api/shared-links/{token}"),
     ("GET",    "/api/v2.1/share-links/"),
     ("POST",   "/api/v2.1/share-links/"),
     ("POST",   "/api/v2.1/multi-share-links/"),
     ("GET",    "/api/v2.1/share-links/{token}/"),
     ("PUT",    "/api/v2.1/share-links/{token}/"),
     ("DELETE", "/api/v2.1/share-links/{token}/"),
-    ("GET",    "/api2/upload-links/"),
-    ("POST",   "/api2/upload-links/"),
-    ("DELETE", "/api2/upload-links/{token}"),
+    ("GET",    "/api/upload-links/"),
+    ("POST",   "/api/upload-links/"),
+    ("DELETE", "/api/upload-links/{token}"),
     ("GET",    "/api/v2.1/upload-links/"),
     ("POST",   "/api/v2.1/upload-links/"),
     ("DELETE", "/api/v2.1/upload-links/clean-invalid/"),
@@ -145,9 +144,9 @@ const ROUTES: &[(&str, &str)] = &[
     ("GET",    "/api2/search/"),
     ("GET",    "/api/v2.1/search-file/"),
     ("GET",    "/api/v2.1/search-file"),
-    ("POST",   "/api2/reindex/"),
-    ("GET",    "/api2/reindex-progress/"),
-    ("POST",   "/api2/index-file-text/"),
+    ("POST",   "/api/reindex/"),
+    ("GET",    "/api/reindex-progress/"),
+    ("POST",   "/api/index-file-text/"),
     ("GET",    "/api2/repo-tokens/"),
     ("GET",    "/api2/repos/{repo_id}/download-info/"),
     ("GET",    "/api/v2.1/smart-link/"),
@@ -155,16 +154,16 @@ const ROUTES: &[(&str, &str)] = &[
     // only route there that authenticates with `AuthUser`, so it needs a
     // classification like any other. Nothing else in this inventory pins it.
     ("GET",    "/repos/{repo_id}/files/{*path}"),
-    ("GET",    "/api2/admin/users/"),
-    ("POST",   "/api2/admin/users/"),
-    ("PUT",    "/api2/admin/users/{user_id}/"),
-    ("DELETE", "/api2/admin/users/{user_id}/"),
-    ("GET",    "/api2/api-keys/"),
-    ("POST",   "/api2/api-keys/"),
-    ("GET",    "/api2/api-keys/catalog/"),
-    ("GET",    "/api2/api-keys/{key_id}/"),
-    ("PUT",    "/api2/api-keys/{key_id}/"),
-    ("DELETE", "/api2/api-keys/{key_id}/"),
+    ("GET",    "/api/admin/users/"),
+    ("POST",   "/api/admin/users/"),
+    ("PUT",    "/api/admin/users/{user_id}/"),
+    ("DELETE", "/api/admin/users/{user_id}/"),
+    ("GET",    "/api/keys/"),
+    ("POST",   "/api/keys/"),
+    ("GET",    "/api/keys/catalog/"),
+    ("GET",    "/api/keys/{key_id}/"),
+    ("PUT",    "/api/keys/{key_id}/"),
+    ("DELETE", "/api/keys/{key_id}/"),
 ];
 
 fn method(name: &str) -> &'static str {
@@ -275,19 +274,19 @@ fn sensitive_routes_have_the_expected_access() {
         ))
     );
     assert_eq!(
-        required_access("GET", "/api2/api-keys/"),
+        required_access("GET", "/api/keys/"),
         Some(RouteAccess::SessionOnly)
     );
     // Writing a file's index text is its own capability: rebuilding an index and
     // writing one file's indexed content are different powers.
     assert_eq!(
-        required_access("POST", "/api2/index-file-text/"),
+        required_access("POST", "/api/index-file-text/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::SearchWrite
         ))
     );
     assert_eq!(
-        required_access("POST", "/api2/reindex/"),
+        required_access("POST", "/api/reindex/"),
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::SearchReindex
         ))

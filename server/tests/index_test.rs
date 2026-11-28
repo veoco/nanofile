@@ -459,7 +459,7 @@ async fn test_dir_rename_and_move_update_index() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            &format!("/api/repos/{}/dir/rename/", f.repo_id),
             Some(token),
             &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
         )
@@ -484,7 +484,7 @@ async fn test_dir_rename_and_move_update_index() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/move/", f.repo_id),
+            &format!("/api/repos/{}/dir/move/", f.repo_id),
             Some(token),
             &serde_json::json!({
                 "repo_id": f.repo_id,
@@ -547,7 +547,7 @@ async fn a_dir_rename_never_hides_the_document() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            &format!("/api/repos/{}/dir/rename/", f.repo_id),
             Some(token),
             &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
         )
@@ -780,7 +780,7 @@ async fn test_reindex_endpoint() {
     let resp = f
         .client
         .post_json(
-            "/api2/reindex/",
+            "/api/reindex/",
             Some(token),
             &serde_json::json!({"repo_id": f.repo_id}),
         )
@@ -796,7 +796,7 @@ async fn test_reindex_endpoint() {
         let resp = f
             .client
             .get(
-                &format!("/api2/reindex-progress/?task_id={task_id}"),
+                &format!("/api/reindex-progress/?task_id={task_id}"),
                 Some(token),
             )
             .await;
@@ -852,7 +852,7 @@ async fn a_reindex_pass_parks_while_the_server_is_busy() {
     let resp = f
         .client
         .post_json(
-            "/api2/reindex/",
+            "/api/reindex/",
             Some(token),
             &serde_json::json!({"repo_id": f.repo_id}),
         )
@@ -945,7 +945,7 @@ async fn a_parked_reindex_cancels_rather_than_fails() {
     let resp = f
         .client
         .post_json(
-            "/api2/reindex/",
+            "/api/reindex/",
             Some(token),
             &serde_json::json!({"repo_id": f.repo_id}),
         )
@@ -1023,7 +1023,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .post_json(
-            "/api2/index-file-text/",
+            "/api/index-file-text/",
             Some(token),
             &serde_json::json!({
                 "repo_id": f.repo_id,
@@ -1048,7 +1048,7 @@ async fn test_index_file_text_for_binary() {
     let resp = f
         .client
         .post_json(
-            "/api2/index-file-text/",
+            "/api/index-file-text/",
             Some(token),
             &serde_json::json!({
                 "repo_id": f.repo_id,
@@ -1437,7 +1437,7 @@ async fn reindex_path(f: &common::TestFixture, token: &str, path: &str) -> bool 
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            &format!("/api/repos/{}/file/reindex/", f.repo_id),
             Some(token),
             &serde_json::json!({ "p": path }),
         )

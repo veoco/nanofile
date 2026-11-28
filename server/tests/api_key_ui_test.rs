@@ -266,7 +266,7 @@ async fn changing_the_password_revokes_every_key() {
     let resp = f
         .client
         .post_json(
-            "/api2/api-keys/",
+            "/api/keys/",
             Some(&f.api_token),
             &serde_json::json!({
                 "name": "before-change",

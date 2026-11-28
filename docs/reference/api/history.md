@@ -71,7 +71,7 @@ Commits that did not change the file's content are skipped. Requires
 
 ## Download a revision {#get-api-v2-1-repos-repo-id-file-revision}
 
-`GET /api/v2.1/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
+`GET /api/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
 
 Streams the file's bytes as they were in that commit, with
 `Content-Disposition: attachment`. Supports `Range`, `Content-Length`, and
@@ -79,17 +79,21 @@ Streams the file's bytes as they were in that commit, with
 considered). Requires `history.read`.
 
 **Seafile** — the official reference documents this operation under the legacy
-`/api2/repos/{repo_id}/file/revision/`; Nanofile serves it under `/api/v2.1/`
+`/api2/repos/{repo_id}/file/revision/`; Nanofile serves it under `/api/`
 (the path the web interface uses). The bytes and query parameters are the same.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Restore a revision {#post-api-v2-1-repos-repo-id-file-revision-restore}
 
-`POST /api/v2.1/repos/{repo_id}/file/revision/restore/?p=<path>&commit_id=<id>`
+`POST /api/repos/{repo_id}/file/revision/restore/?p=<path>&commit_id=<id>`
 
 Points the file back at the revision's content and commits the change. History
 is not rewritten.
 
 **Response `200`** — `{"success": true}`. Requires `history.write`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List file trash {#get-api-v2-1-repos-repo-id-trash}
 

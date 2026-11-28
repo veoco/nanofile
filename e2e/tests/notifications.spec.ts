@@ -71,7 +71,7 @@ test("creating an API key from the API notifies the owner", async ({ page, brows
   const csrf = (await session.page.context().cookies()).find(
     (cookie) => cookie.name === "sfcsrftoken",
   );
-  const res = await session.page.request.post("/api2/api-keys/", {
+  const res = await session.page.request.post("/api/keys/", {
     // A cookie session must echo the CSRF token for any state-changing method,
     // and this endpoint takes JSON.
     headers: {

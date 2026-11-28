@@ -22,7 +22,7 @@ async fn admin_api_create_user_rejects_a_password_below_the_policy() {
     let weak = server
         .client()
         .post_json(
-            "/api2/admin/users/",
+            "/api/admin/users/",
             Some(&token),
             &serde_json::json!({"email": "weak@example.com", "password": "short"}),
         )
@@ -36,7 +36,7 @@ async fn admin_api_create_user_rejects_a_password_below_the_policy() {
     let accepted = server
         .client()
         .post_json(
-            "/api2/admin/users/",
+            "/api/admin/users/",
             Some(&token),
             &serde_json::json!({"email": "ok@example.com", "password": "password123"}),
         )

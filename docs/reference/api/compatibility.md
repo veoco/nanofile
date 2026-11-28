@@ -36,7 +36,7 @@ A `Same` row is a route contract, not a byte-for-byte promise: check the linked 
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [Generate repo api token](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-repo-api-tokens)<br>`POST /api/v2.1/repos/{repo_id}/repo-api-tokens/` | Differs | [our endpoint](/reference/api/libraries#get-api2-repo-tokens) | The legacy `/api2/repo-tokens/` mints repository sync tokens; there is no HTTP repo-token API. Use `/api2/api-keys/` for scoped access. |
+| [Generate repo api token](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-repo-api-tokens)<br>`POST /api/v2.1/repos/{repo_id}/repo-api-tokens/` | Differs | [our endpoint](/reference/api/libraries#get-api2-repo-tokens) | The legacy `/api2/repo-tokens/` mints repository sync tokens; there is no HTTP repo-token API. Use `/api/keys/` for scoped access. |
 
 ## Via Repo-Token
 
@@ -47,7 +47,7 @@ The `/api/v2.1/via-repo-token/` surface is a mirror of the normal API for Repo-T
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
 | [List repo api tokens](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-repo-api-tokens)<br>`GET /api/v2.1/repos/{repo_id}/repo-api-tokens/` | Differs | [our endpoint](/reference/api/api-keys#get-api2-api-keys) | Not implemented as a route. API keys are the equivalent scoped credential. |
-| [Update repo api token](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`PUT /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | Differs | [our endpoint](/reference/api/api-keys#put-api2-api-keys-id) | Not implemented. An API key can be renamed/re-scoped through `/api2/api-keys/{id}/`. |
+| [Update repo api token](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`PUT /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | Differs | [our endpoint](/reference/api/api-keys#put-api2-api-keys-id) | Not implemented. An API key can be renamed/re-scoped through `/api/keys/{id}/`. |
 | [Delete repo api token](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`DELETE /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | Differs | [our endpoint](/reference/api/api-keys#delete-api2-api-keys-id) | Not implemented. Revoke the equivalent API key instead. |
 
 ### Dir / Files
@@ -190,7 +190,7 @@ Nanofile has no comments.
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
 | [Get file history](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-file-history)<br>`GET /api/v2.1/repos/{repo_id}/file/history/` | Differs | [our endpoint](/reference/api/history#get-api-v2-1-repos-repo-id-file-history) | Envelope is `{data, page, page_next}`; `next_start_commit` is absent and only one page is returned. |
-| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | Differs | [our endpoint](/reference/api/history#get-api-v2-1-repos-repo-id-file-revision) | Served under `/api/v2.1/repos/{repo_id}/file/revision/`. |
+| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | Differs | [our endpoint](/reference/api/history#get-api-v2-1-repos-repo-id-file-revision) | Served under `/api/repos/{repo_id}/file/revision/`. |
 
 ### Files
 
@@ -449,12 +449,12 @@ Nanofile has no wiki.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#get-api2-admin-users) | Nanofile's own administration API (`/api2/admin/users/`) returns a different shape. |
-| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#post-api2-admin-users) | Use `/api2/admin/users/` (JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`). |
+| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#get-api2-admin-users) | Nanofile's own administration API (`/api/admin/users/`) returns a different shape. |
+| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#post-api2-admin-users) | Use `/api/admin/users/` (JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`). |
 | [Search user](https://seafile-api.readme.io/reference/get_api-v2-1-admin-search-user)<br>`GET /api/v2.1/admin/search-user/` | Missing | — |  |
-| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | Missing | — | No single-user GET; list `/api2/admin/users/` and filter. |
-| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#put-api2-admin-users-user-id) | Use `/api2/admin/users/{id}/`; the id is numeric. |
-| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#delete-api2-admin-users-user-id) | Use `/api2/admin/users/{id}/`; the id is numeric. |
+| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | Missing | — | No single-user GET; list `/api/admin/users/` and filter. |
+| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#put-api2-admin-users-user-id) | Use `/api/admin/users/{id}/`; the id is numeric. |
+| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#delete-api2-admin-users-user-id) | Use `/api/admin/users/{id}/`; the id is numeric. |
 
 ### Departments
 
@@ -652,7 +652,7 @@ Face recognition is not implemented; the feature reports off.
 
 ## Served here, absent from the official reference {#undocumented}
 
-These routes are served but are not an operation in the official reference. Most are seahub endpoints the reference omits (the v2.1 variants, legacy transfer helpers, trash2, related-users); the ones marked \* are Nanofile-only. The `/seafhttp/`, `/dav/` and `/notification` surfaces, and the browser transfer endpoints (`/upload-aj/`, `/download-api/`, `/zip/`, the progress shims), are documented on their own pages and are not repeated here.
+These routes are served but are not an operation in the official reference. Most are seahub endpoints the reference omits (the v2.1 variants, legacy transfer helpers, trash2, related-users). Nanofile-only endpoints (the `/api/` namespace) are documented separately; this table now lists only paths Seafile's own server also registers. The `/seafhttp/`, `/dav/` and `/notification` surfaces, and the browser transfer endpoints (`/upload-aj/`, `/download-api/`, `/zip/`, the progress shims), are documented on their own pages and are not repeated here.
 
 | Endpoint | Documented at |
 | --- | --- |
@@ -663,10 +663,6 @@ These routes are served but are not an operation in the official reference. Most
 | `POST /api2/client-sso-link/` | [docs](/reference/api/authentication#post-api2-client-sso-link) |
 | `GET /api2/client-sso-link/{token}/` | [docs](/reference/api/authentication#get-api2-client-sso-link-token) |
 | `PUT /api2/account/info/` | [docs](/reference/api/accounts#put-api2-account-info) |
-| `POST /api2/account/` | [docs](/reference/api/accounts#post-api2-account) |
-| `POST /api2/accounts/` | [docs](/reference/api/accounts#post-api2-accounts) |
-| `GET /api2/credentials/` \* | [docs](/reference/api/api-keys#get-api2-credentials) |
-| `DELETE /api2/credentials/{kind}/{id}/` \* | [docs](/reference/api/api-keys#delete-api2-credentials-kind-id) |
 | `GET /api2/unseen_messages/` | [docs](/reference/api/accounts#get-api2-unseen-messages) |
 | `GET /api/v2.1/repos/` | [docs](/reference/api/libraries#get-api-v2-1-repos) |
 | `GET /api/v2.1/repos/{repo_id}/` | [docs](/reference/api/libraries#get-api-v2-1-repos-repo-id) |
@@ -681,15 +677,8 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api/v2.1/repos/{repo_id}/dir/` | [docs](/reference/api/directories#get-api-v2-1-repos-repo-id-dir) |
 | `POST /api/v2.1/repos/{repo_id}/dir/` | [docs](/reference/api/directories#post-api-v2-1-repos-repo-id-dir) |
 | `DELETE /api/v2.1/repos/{repo_id}/dir/` | [docs](/reference/api/directories#delete-api-v2-1-repos-repo-id-dir) |
-| `POST /api2/repos/{repo_id}/dir/move/` \* | [docs](/reference/api/directories#post-api2-repos-repo-id-dir-move) |
-| `POST /api2/repos/{repo_id}/dir/rename/` \* | [docs](/reference/api/directories#post-api2-repos-repo-id-dir-rename) |
 | `POST /api2/repos/{repo_id}/file/` | [docs](/reference/api/files#post-api2-repos-repo-id-file) |
 | `DELETE /api2/repos/{repo_id}/file/` | [docs](/reference/api/files#delete-api2-repos-repo-id-file) |
-| `POST /api2/repos/{repo_id}/file/rename/` \* | [docs](/reference/api/files#post-api2-repos-repo-id-file-rename) |
-| `POST /api2/repos/{repo_id}/file/move/` \* | [docs](/reference/api/files#post-api2-repos-repo-id-file-move) |
-| `GET /api2/repos/{repo_id}/file/exif/` \* | [docs](/reference/api/files#get-api2-repos-repo-id-file-exif) |
-| `GET /api2/repos/{repo_id}/file/index-text/` | [docs](/reference/api/metadata#get-api2-repos-repo-id-file-index-text) |
-| `POST /api2/repos/{repo_id}/file/reindex/` | [docs](/reference/api/metadata#post-api2-repos-repo-id-file-reindex) |
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/reference/api/files#get-api2-repos-repo-id-thumbnail) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/reference/api/transfers#get-repos-repo-id-files-path) |
@@ -706,15 +695,10 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api/v2.1/repos/{repo_id}/trash2/search/` | [docs](/reference/api/history#get-api-v2-1-repos-repo-id-trash2-search) |
 | `POST /api/v2.1/repos/{repo_id}/trash2/revert/` | [docs](/reference/api/history#post-api-v2-1-repos-repo-id-trash2-revert) |
 | `GET /api2/repo_history_changes/{repo_id}/` | [docs](/reference/api/history#get-api2-repo-history-changes-repo-id) |
-| `POST /api/v2.1/repos/{repo_id}/file/revision/restore/` \* | [docs](/reference/api/history#post-api-v2-1-repos-repo-id-file-revision-restore) |
 | `GET /api2/shared-links/` | [docs](/reference/api/sharing#get-api2-shared-links) |
 | `POST /api2/shared-links/` | [docs](/reference/api/sharing#post-api2-shared-links) |
-| `DELETE /api2/shared-links/{token}` | [docs](/reference/api/sharing#delete-api2-shared-links-token) |
 | `GET /api/v2.1/share-links/{token}/` | [docs](/reference/api/sharing#get-api-v2-1-share-links-token) |
 | `PUT /api/v2.1/share-links/{token}/` | [docs](/reference/api/sharing#put-api-v2-1-share-links-token) |
-| `GET /api2/upload-links/` | [docs](/reference/api/sharing#get-api2-upload-links) |
-| `POST /api2/upload-links/` | [docs](/reference/api/sharing#post-api2-upload-links) |
-| `DELETE /api2/upload-links/{token}` | [docs](/reference/api/sharing#delete-api2-upload-links-token) |
 | `DELETE /api/v2.1/upload-links/clean-invalid/` | [docs](/reference/api/sharing#delete-api-v2-1-upload-links-clean-invalid) |
 | `GET /api/v2.1/upload-links/{token}/` | [docs](/reference/api/sharing#get-api-v2-1-upload-links-token) |
 | `PUT /api/v2.1/upload-links/{token}/` | [docs](/reference/api/sharing#put-api-v2-1-upload-links-token) |
@@ -723,18 +707,13 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api/v2.1/repos/{repo_id}/related-users/` | [docs](/reference/api/metadata#get-api-v2-1-repos-repo-id-related-users) |
 | `GET /api/v2.1/repos/{repo_id}/metadata/tags-status/` | [docs](/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-tags-status) |
 | `GET /api2/starredfiles/` | [docs](/reference/api/sharing#get-api2-starredfiles) |
-| `POST /api2/reindex/` | [docs](/reference/api/metadata#post-api2-reindex) |
-| `GET /api2/reindex-progress/` | [docs](/reference/api/metadata#get-api2-reindex-progress) |
-| `POST /api2/index-file-text/` | [docs](/reference/api/metadata#post-api2-index-file-text) |
 | `GET /api2/repos/{repo_id}/download-info/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-download-info) |
-| `GET /api2/api-keys/catalog/` \* | [docs](/reference/api/api-keys#get-api2-api-keys-catalog) |
-| `POST /api2/api-keys/` \* | [docs](/reference/api/api-keys#post-api2-api-keys) |
-| `GET /api2/api-keys/{id}/` \* | [docs](/reference/api/api-keys#get-api2-api-keys-id) |
 
 ## Behaviour differences {#behaviour}
 
 Route-level rows cannot capture everything. These differences apply across the surface; the endpoint pages and [Seafile compatibility](/dev/protocol#deliberate-deviations) give the protocol-level detail.
 
+- **Breaking change.** 0.1.x: Nanofile's own endpoints moved from `/api2/`/`/api/v2.1/` to `/api/`; the old paths answer 404. Seafile-compatible routes are unchanged.
 - **Credentials.** Besides the account token, Nanofile accepts API keys (capability-scoped, library-scoped) and, on `/seafhttp/`, repository sync tokens. Repo-Token callers use a library-scoped API key; the `/via-repo-token/` mirror is not routed.
 - **Authorization header.** Both `Bearer` and the legacy `Token` prefix are accepted on every API route, so clients written for pre-11 and post-11 Seafile both work.
 - **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`. A lock conflict is `403` with the plain-text body `File <path> is locked` on sync commits and on the lock endpoint; REST/WebDAV deletes of a file locked by another user answer `423` with a JSON `error_msg`. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.

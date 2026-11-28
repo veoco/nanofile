@@ -23,12 +23,10 @@ pub struct UpdateAccountInfo {
 }
 
 pub fn account_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/info/",
-            axum::routing::get(get_account_info).put(update_account_info),
-        )
-        .route("/", axum::routing::post(register_user))
+    Router::new().route(
+        "/info/",
+        axum::routing::get(get_account_info).put(update_account_info),
+    )
 }
 
 pub async fn get_account_info(
@@ -65,6 +63,10 @@ pub async fn update_account_info(
     Ok(Json(info))
 }
 
+/// `POST /api/accounts/` — admin-only account creation (URL-encoded form).
+///
+/// Nanofile-only route: Seafile's `/api2/accounts/` is a GET list, and its
+/// account-creation API is `/api/v2.1/admin/users/` (a different shape).
 pub async fn register_user(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

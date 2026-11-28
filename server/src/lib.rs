@@ -158,7 +158,7 @@ pub struct AppState {
     pub restart: Arc<crate::restart::RestartSignal>,
 }
 
-/// Progress of a background reindex task (`POST /api2/reindex/`).
+/// Progress of a background reindex task (`POST /api/reindex/`).
 #[derive(Clone, Default, serde::Serialize)]
 pub struct ReindexProgress {
     /// `"running"` | `"completed"` | `"failed"`.

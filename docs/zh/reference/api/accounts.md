@@ -44,9 +44,9 @@
 
 ## 创建账号 {#post-api2-account}
 
-`POST /api2/account/`
+`POST /api/accounts/`
 
-仅管理员。用 `email` 与 `password` 表单字段创建账号，密码策略照常生效。同一 handler 也挂在 `POST /api2/accounts/` 上，供使用 seahub 另一种拼写的客户端。
+仅管理员。用 `email` 与 `password` 表单字段创建账号，密码策略照常生效。Nanofile 只提供这个复数拼写：seahub 另有一个单数路由，这里没有挂载，用过它的客户端需要改发到本接口。
 
 **请求体** —— URL 编码表单：
 
@@ -57,13 +57,9 @@
 
 **响应 `200`** —— 空正文。非管理员返回 `403`。
 
-### 创建账号（另一种拼写） {#post-api2-accounts}
-
-`POST /api2/accounts/`
-
-与 `POST /api2/account/` 是同一个 handler，供使用 seahub 另一种拼写的客户端。字段、响应与权限相同。
-
 自助注册是网页流程（`/accounts/register/`），不走这个接口：它要处理注册模式、邀请码、邮箱验证与限流。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 获取头像 {#get-api2-avatars-user-email-resized-size}
 
@@ -97,7 +93,7 @@
 
 ## 列出用户 {#get-api2-admin-users}
 
-`GET /api2/admin/users/`
+`GET /api/admin/users/`
 
 仅管理员。返回全部账号。
 
@@ -120,9 +116,11 @@
 
 需要 `admin.user.read`。这是 Nanofile 自己的管理接口，不是 seahub 的 `/api/v2.1/admin/users/`，字段名与选项都不同。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 创建用户 {#post-api2-admin-users}
 
-`POST /api2/admin/users/`
+`POST /api/admin/users/`
 
 仅管理员。
 
@@ -138,9 +136,11 @@
 
 **响应 `200`** —— 创建的用户，形状同列表项。需要 `admin.user.write`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 更新用户 {#put-api2-admin-users-user-id}
 
-`PUT /api2/admin/users/{user_id}/`
+`PUT /api/admin/users/{user_id}/`
 
 仅管理员。整体替换管理标记。
 
@@ -148,11 +148,15 @@
 
 **响应 `200`** —— 更新后的用户。需要 `admin.user.write`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 删除用户 {#delete-api2-admin-users-user-id}
 
-`DELETE /api2/admin/users/{user_id}/`
+`DELETE /api/admin/users/{user_id}/`
 
 仅管理员。删除账号及其数据。**响应 `200`** —— `{"success": true}`。需要 `admin.user.write`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 未读消息 {#get-api2-unseen-messages}
 

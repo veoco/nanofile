@@ -124,7 +124,7 @@ pub struct DocMeta {
     /// caller that only has content), which the backfill reads as stale.
     pub fs_id: String,
     /// [`extract::EXTRACTOR_VERSION`] that produced the content. `u32::MAX` is
-    /// the sentinel for text injected by hand (`/api2/index-file-text/`):
+    /// the sentinel for text injected by hand (`/api/index-file-text/`):
     /// never overwritten by the automatic pipeline.
     pub extractor_version: u32,
     pub status: DocStatus,

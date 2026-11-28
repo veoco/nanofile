@@ -37,7 +37,7 @@ domain:
 
 A write capability implies the matching read capability; `sync.token` also
 implies `sync.write` and `sync.read`. Unknown ids are rejected. The live list is
-[`GET /api2/api-keys/catalog/`](#get-api2-api-keys-catalog), which also returns
+[`GET /api/keys/catalog/`](#get-api2-api-keys-catalog), which also returns
 each capability's `enforced_by` routes.
 
 ## Presets
@@ -55,7 +55,7 @@ edited before saving.
 
 ## Get the capability catalog {#get-api2-api-keys-catalog}
 
-`GET /api2/api-keys/catalog/`
+`GET /api/keys/catalog/`
 
 Returns the capabilities, presets and lifetime options, so a client can render
 the same picker as the settings page.
@@ -77,9 +77,11 @@ The set of capabilities returned depends on whether the caller is an
 administrator: the `admin.*` capabilities are only offered to admins.
 `max_ttl_days` is `0` when the server sets no upper bound.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## List API keys {#get-api2-api-keys}
 
-`GET /api2/api-keys/`
+`GET /api/keys/`
 
 **Response `200`**
 
@@ -104,9 +106,11 @@ administrator: the `admin.*` capabilities are only offered to admins.
 Secrets are never returned here; only the first 8 characters are kept for
 display.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Create an API key {#post-api2-api-keys}
 
-`POST /api2/api-keys/`
+`POST /api/keys/`
 
 **Body** (JSON)
 
@@ -134,16 +138,20 @@ is returned **once**; only a hash is stored.
 
 Saving sends a best-effort notification email to the owner.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Get one API key {#get-api2-api-keys-id}
 
-`GET /api2/api-keys/{id}/`
+`GET /api/keys/{id}/`
 
 Returns one key's view (same shape as a list item). Unknown ids and other users'
 keys answer `404`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Update an API key {#put-api2-api-keys-id}
 
-`PUT /api2/api-keys/{id}/`
+`PUT /api/keys/{id}/`
 
 Accepts any subset of `name`, `capabilities`, `all_repos`,
 `repo_permissions`, `expires_in_days`, `expires_at`, `never`, but the subset is
@@ -157,17 +165,21 @@ must be the only one.
 
 **Response `200`** — the updated view.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Delete an API key {#delete-api2-api-keys-id}
 
-`DELETE /api2/api-keys/{id}/`
+`DELETE /api/keys/{id}/`
 
 Revokes the key immediately.
 
 **Response `200`** — `{"success": true}`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## List credentials {#get-api2-credentials}
 
-`GET /api2/credentials/`
+`GET /api/credentials/`
 
 Every long-lived credential the account holds: client sessions, browser
 sessions, sync tokens, trusted devices, and the number of API keys (whose
@@ -189,9 +201,11 @@ contents are only readable through the session-only key endpoints).
 
 Token values are never included. Requires `device.read`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Revoke one credential {#delete-api2-credentials-kind-id}
 
-`DELETE /api2/credentials/{kind}/{id}/`
+`DELETE /api/credentials/{kind}/{id}/`
 
 `kind` is `browser_session`, `sync_token` or `device_trust`; `id` is the row id
 from the inventory. Client devices are revoked as a whole through
@@ -199,6 +213,8 @@ from the inventory. Client devices are revoked as a whole through
 credentials. Requires `device.write`.
 
 **Response `200`** — `{"revoked": "sync_token", "id": 1}`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List devices {#get-api2-devices}
 

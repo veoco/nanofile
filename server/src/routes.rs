@@ -1,5 +1,11 @@
-//! Consolidated route definitions for all API versions: legacy v1 (`/api2/`)
-//! and v2.1 (`/api/v2.1/`).
+//! Consolidated route definitions for all API versions: legacy v1 (`/api2/`),
+//! v2.1 (`/api/v2.1/`), and the Nanofile-only surface (`/api/`).
+//!
+//! `v1_routes()` and `v2_routes()` keep only paths that exist in Seafile's own
+//! route tables (the official reference or the seahub server): a client written
+//! for Seafile must never find a Nanofile invention on those prefixes.
+//! [`nanofile_routes()`] is the home of everything this server adds itself
+//! (API keys, reindex controls, rename/move helpers, library visibility, …).
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
@@ -36,15 +42,7 @@ fn v1_routes() -> Router<Arc<AppState>> {
                 .layer(crate::body_limit::upload_default_body_limit()),
         )
         .nest("/api2/shared-links", crate::handler::share::share_routes())
-        .nest(
-            "/api2/upload-links",
-            crate::handler::upload_link::upload_link_routes(),
-        )
         .nest("/api2/account", crate::handler::account::account_routes())
-        .route(
-            "/api2/accounts/",
-            post(crate::handler::account::register_user),
-        )
         .route(
             "/api2/server-info/",
             get(crate::handler::server_info::server_info),
@@ -63,21 +61,6 @@ fn v1_routes() -> Router<Arc<AppState>> {
             "/api2/default-repo/",
             get(crate::handler::repos::get_default_repo)
                 .post(crate::handler::repos::create_default_repo),
-        )
-        .route(
-            "/api2/api-keys/",
-            get(crate::handler::api_key::list_api_keys)
-                .post(crate::handler::api_key::create_api_key),
-        )
-        .route(
-            "/api2/api-keys/catalog/",
-            get(crate::handler::api_key::api_key_catalog),
-        )
-        .route(
-            "/api2/api-keys/{key_id}/",
-            get(crate::handler::api_key::get_api_key)
-                .put(crate::handler::api_key::update_api_key)
-                .delete(crate::handler::api_key::delete_api_key),
         )
         .route(
             "/api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/",
@@ -103,19 +86,8 @@ fn v1_routes() -> Router<Arc<AppState>> {
             post(crate::handler::device_wipe::device_wiped),
         )
         .route("/api2/search/", get(crate::handler::search::search))
-        .route("/api2/reindex/", post(crate::handler::reindex::reindex))
-        .route(
-            "/api2/reindex-progress/",
-            get(crate::handler::reindex::reindex_progress),
-        )
-        .nest("/api2/admin", crate::handler::users::admin_user_routes())
-        .route(
-            "/api2/index-file-text/",
-            post(crate::handler::reindex::index_file_text),
-        )
         .nest("/api2", crate::handler::history::repo_history_routes())
         .nest("/api2", crate::handler::devices::devices_routes())
-        .nest("/api2", crate::handler::credential::credential_routes())
 }
 
 fn v2_routes() -> Router<Arc<AppState>> {
@@ -266,10 +238,6 @@ fn v2_routes() -> Router<Arc<AppState>> {
             "/api/v2.1/repos/{repo_id}/related-users/",
             get(crate::handler::metadata::related_users),
         )
-        .nest(
-            "/api/v2.1/repos",
-            crate::handler::library_share::visibility_routes(),
-        )
         // Search file (v2.1). iOS sends the trailing slash; seadroid's Retrofit
         // annotation omits it, so both forms are registered.
         .route(
@@ -337,7 +305,85 @@ fn v2_routes() -> Router<Arc<AppState>> {
         )
 }
 
-/// All HTTP API routes: legacy v1 (`/api2/`) and v2.1 (`/api/v2.1/`).
+/// All Seafile-compatible HTTP API routes: legacy v1 (`/api2/`) and v2.1
+/// (`/api/v2.1/`).
 pub fn api_routes() -> Router<Arc<AppState>> {
     v1_routes().merge(v2_routes())
+}
+
+/// Every Nanofile-specific route, under its own `/api/` namespace.
+///
+/// Nothing here exists in Seafile's official reference or in the seahub server:
+/// these are this project's own API (API keys and credentials, search/index
+/// controls, rename/move helpers, library visibility, the legacy v1 link
+/// collections, and the account-administration helpers). Keeping them on a
+/// prefix of their own is what lets `/api2/` and `/api/v2.1/` be read as "the
+/// Seafile API" without a Nanofile invention mixed in.
+///
+/// `/api/` deliberately has no version segment: it did not exist upstream, so
+/// there is nothing to stay compatible with, and a future breaking change can
+/// add `/api/v2/` without touching the Seafile prefixes.
+pub fn nanofile_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // API keys (session-only) and the credential inventory.
+        .route(
+            "/api/keys/",
+            get(crate::handler::api_key::list_api_keys)
+                .post(crate::handler::api_key::create_api_key),
+        )
+        .route(
+            "/api/keys/catalog/",
+            get(crate::handler::api_key::api_key_catalog),
+        )
+        .route(
+            "/api/keys/{key_id}/",
+            get(crate::handler::api_key::get_api_key)
+                .put(crate::handler::api_key::update_api_key)
+                .delete(crate::handler::api_key::delete_api_key),
+        )
+        .route(
+            "/api/credentials/",
+            get(crate::handler::credential::list_credentials),
+        )
+        .route(
+            "/api/credentials/{kind}/{id}/",
+            delete(crate::handler::credential::revoke_credential),
+        )
+        // Full-text index controls.
+        .route("/api/reindex/", post(crate::handler::reindex::reindex))
+        .route(
+            "/api/reindex-progress/",
+            get(crate::handler::reindex::reindex_progress),
+        )
+        .route(
+            "/api/index-file-text/",
+            post(crate::handler::reindex::index_file_text),
+        )
+        // Admin-only account creation (the form flavour; `/api/admin/users/`
+        // below is the JSON flavour).
+        .route(
+            "/api/accounts/",
+            post(crate::handler::account::register_user),
+        )
+        // Per-library helpers: file/directory extras, revisions, visibility.
+        .nest("/api/repos", crate::handler::file::nanofile_file_routes())
+        .nest("/api/repos", crate::handler::dir::nanofile_dir_routes())
+        .nest(
+            "/api/repos",
+            crate::handler::history::nanofile_history_routes(),
+        )
+        .nest(
+            "/api/repos",
+            crate::handler::library_share::nanofile_repo_routes(),
+        )
+        // Legacy v1 link collections and the account-administration surface.
+        .nest(
+            "/api/shared-links",
+            crate::handler::share::nanofile_share_routes(),
+        )
+        .nest(
+            "/api/upload-links",
+            crate::handler::upload_link::upload_link_routes(),
+        )
+        .nest("/api/admin", crate::handler::users::admin_user_routes())
 }

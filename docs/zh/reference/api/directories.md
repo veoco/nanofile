@@ -139,19 +139,23 @@
 
 ## 重命名目录 {#post-api2-repos-repo-id-dir-rename}
 
-`POST /api2/repos/{repo_id}/dir/rename/`
+`POST /api/repos/{repo_id}/dir/rename/`
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`。资料库 id 在请求体里，与其他目录接口不同。
 
 **响应 `200`** —— 空正文。同目录里已存在该名字时返回 `409`，不做任何修改。需要写权限与 `file.write`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 移动目录 {#post-api2-repos-repo-id-dir-move}
 
-`POST /api2/repos/{repo_id}/dir/move/`
+`POST /api/repos/{repo_id}/dir/move/`
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/old/name", "new_parent_dir": "/target"}`。同库内移动是一个提交。需要 `file.write`。
 
 **响应 `200`** —— 空正文。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 从目录创建资料库 {#get-api2-repos-repo-id-dir-sub-repo}
 

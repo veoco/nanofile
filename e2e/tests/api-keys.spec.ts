@@ -103,7 +103,7 @@ test("the picker says what a capability grants and how broad a preset is", async
   // buy?" is answered in the page rather than by documentation.
   const label = (id: string) =>
     page.locator(`#create-key-form label:has(input[name="cap__${id}"])`);
-  await expect(label("search.write")).toHaveAttribute("title", "POST /api2/index-file-text/");
+  await expect(label("search.write")).toHaveAttribute("title", "POST /api/index-file-text/");
   await expect(label("search.read")).toHaveAttribute("title", /GET \/api2\/search\//);
   await expect(label("webdav.write")).toHaveAttribute("title", /\/dav\/\{repo_id\}/);
 

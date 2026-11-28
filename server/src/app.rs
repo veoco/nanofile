@@ -46,6 +46,9 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/health", get(health_check))
         .merge(crate::routes::api_routes().layer(cors_layer(&state.config().server)))
+        // The Nanofile-only API (`/api/`) is not Seafile's, but browsers call it
+        // from the same web interface, so it needs the same CORS treatment.
+        .merge(crate::routes::nanofile_routes().layer(cors_layer(&state.config().server)))
         .merge(crate::handler::sync::sync_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
         .merge(
             crate::handler::web::web_api_routes()
@@ -296,16 +299,16 @@ mod tests {
             "/api/v2.1/share-links/{token}/"
         );
         assert_eq!(
-            redact_request_path("/api2/shared-links/abc123"),
-            "/api2/shared-links/{token}"
+            redact_request_path("/api/shared-links/abc123"),
+            "/api/shared-links/{token}"
         );
         assert_eq!(
             redact_request_path("/api/v2.1/upload-links/abc123/upload/"),
             "/api/v2.1/upload-links/{token}/upload/"
         );
         assert_eq!(
-            redact_request_path("/api2/upload-links/abc123"),
-            "/api2/upload-links/{token}"
+            redact_request_path("/api/upload-links/abc123"),
+            "/api/upload-links/{token}"
         );
         assert_eq!(
             redact_request_path("/accounts/password/reset/abc123/"),

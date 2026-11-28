@@ -310,7 +310,7 @@ async fn file_revision_restore_adjusts_size_by_the_difference() {
         .client
         .post_json(
             &format!(
-                "/api/v2.1/repos/{}/file/revision/restore/?p=/a.txt&commit_id={}",
+                "/api/repos/{}/file/revision/restore/?p=/a.txt&commit_id={}",
                 f.repo_id, c1
             ),
             Some(&f.api_token),

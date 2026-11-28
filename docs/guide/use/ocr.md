@@ -66,7 +66,7 @@ The index directory is **not encrypted**, and the text can contain names,
 addresses or document numbers. It is searchable by anyone who can already read
 the repository; repository permissions are unchanged. Disabling `[ocr]` stops
 new OCR but leaves the text already in the index until it is rebuilt (re-index
-the repository, or use `POST /api2/reindex/`).
+the repository, or use `POST /api/reindex/`).
 
 ## Formats and limits
 

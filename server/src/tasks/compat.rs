@@ -52,7 +52,7 @@ pub fn copy_move_progress(run: &JobRun) -> Value {
     })
 }
 
-/// `GET /api2/reindex-progress/`.
+/// `GET /api/reindex-progress/`.
 ///
 /// `creator_id` leaked the submitter's id and is kept because clients may read it.
 pub fn reindex_progress(run: &JobRun) -> Value {

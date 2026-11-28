@@ -73,7 +73,7 @@ pub struct RevisionQuery {
     pub commit_id: Option<String>,
 }
 
-/// `GET /api/v2.1/repos/{repo_id}/file/revision/?p=&commit_id=` — the file content
+/// `GET /api/repos/{repo_id}/file/revision/?p=&commit_id=` — the file content
 /// at the given commit, for download or preview (seahub's `FileRevision`).
 pub async fn get_file_revision_v21(
     path: RepoPathRead,
@@ -161,17 +161,25 @@ pub async fn restore_file_revision_v21(
 }
 
 pub fn file_history_routes() -> Router<Arc<AppState>> {
+    Router::new().route(
+        "/repos/{repo_id}/file/history/",
+        axum::routing::get(get_file_history_v21),
+    )
+}
+
+/// The Nanofile-only revision routes under `/api/repos/{repo_id}/file/`.
+///
+/// Seafile serves a revision under `/api2/repos/{repo_id}/file/revision/` (a
+/// path this server does not route); the restore endpoint has no upstream
+/// counterpart at all. Both live on the Nanofile prefix.
+pub fn nanofile_history_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route(
-            "/repos/{repo_id}/file/history/",
-            axum::routing::get(get_file_history_v21),
-        )
-        .route(
-            "/repos/{repo_id}/file/revision/",
+            "/{repo_id}/file/revision/",
             axum::routing::get(get_file_revision_v21),
         )
         .route(
-            "/repos/{repo_id}/file/revision/restore/",
+            "/{repo_id}/file/revision/restore/",
             axum::routing::post(restore_file_revision_v21),
         )
 }

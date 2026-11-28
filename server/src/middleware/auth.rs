@@ -906,10 +906,12 @@ mod tests {
             (Method::DELETE, "/api2/repos/{repo_id}/"),
             (Method::GET, "/api2/repos/{repo_id}/dir/"),
             (Method::POST, "/api/v2.1/repos/{repo_id}/file/"),
-            (Method::GET, "/api2/admin/users/"),
+            (Method::GET, "/api/admin/users/"),
             // Session-only routes are exactly where a session is required.
-            (Method::GET, "/api2/api-keys/"),
-            (Method::POST, "/api2/api-keys/"),
+            (Method::GET, "/api/keys/"),
+            (Method::POST, "/api/keys/"),
+            // The Nanofile namespace (`/api/`) is classified like the Seafile ones.
+            (Method::GET, "/api/repos/{repo_id}/file/exif/"),
         ] {
             assert_eq!(
                 route_decision(
@@ -932,16 +934,16 @@ mod tests {
         let key = key(&[Capability::FileRead], &[(REPO, RepoCeiling::Write)]);
 
         // Inside a classified namespace but absent from the table.
-        for credential in [&session, &key] {
-            assert_eq!(
-                route_decision(
-                    credential,
-                    &Method::GET,
-                    "/api2/not-a-route/",
-                    "/api2/not-a-route/"
-                ),
-                Err(StatusCode::FORBIDDEN)
-            );
+        for (method, route) in [
+            (Method::GET, "/api2/not-a-route/"),
+            (Method::GET, "/api/not-a-route/"),
+        ] {
+            for credential in [&session, &key] {
+                assert_eq!(
+                    route_decision(credential, &method, route, route),
+                    Err(StatusCode::FORBIDDEN)
+                );
+            }
         }
         // Outside every classified namespace: the fallback uses the raw URI,
         // which is what a request to an unknown path looks like.
@@ -1024,12 +1026,7 @@ mod tests {
 
         // Key management stays closed to keys however wide they are.
         assert_eq!(
-            route_decision(
-                &read_only_here,
-                &Method::GET,
-                "/api2/api-keys/",
-                "/api2/api-keys/"
-            ),
+            route_decision(&read_only_here, &Method::GET, "/api/keys/", "/api/keys/"),
             Err(StatusCode::FORBIDDEN)
         );
     }

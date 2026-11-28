@@ -90,7 +90,7 @@ async fn gen_webdav_key(
     // WebDAV keys are unified API keys carrying `webdav.*` and bound to one
     // library.
     let resp = client
-        .post(format!("{base}/api2/api-keys/"))
+        .post(format!("{base}/api/keys/"))
         .bearer_auth(token)
         .json(&serde_json::json!({
             "name": "test-key",
@@ -303,7 +303,7 @@ async fn test_activity_after_dir_rename() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/rename/", f.repo_id),
+            &format!("/api/repos/{}/dir/rename/", f.repo_id),
             Some(&f.api_token),
             &serde_json::json!({
                 "repo_id": f.repo_id,
@@ -337,7 +337,7 @@ async fn test_activity_after_dir_move() {
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/dir/move/", f.repo_id),
+            &format!("/api/repos/{}/dir/move/", f.repo_id),
             Some(&f.api_token),
             &serde_json::json!({
                 "repo_id": f.repo_id,

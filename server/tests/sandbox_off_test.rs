@@ -35,7 +35,7 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            &format!("/api/repos/{}/file/reindex/", f.repo_id),
             Some(token),
             &serde_json::json!({ "p": path }),
         )
@@ -73,7 +73,7 @@ async fn a_document_skipped_while_the_sandbox_is_off_is_reindexed_when_it_return
     let resp = f
         .client
         .post_json(
-            &format!("/api2/repos/{}/file/reindex/", f.repo_id),
+            &format!("/api/repos/{}/file/reindex/", f.repo_id),
             Some(token),
             &serde_json::json!({ "p": path }),
         )

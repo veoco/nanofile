@@ -29,7 +29,7 @@ pub struct UserAdminView {
     pub last_login_at: Option<i64>,
 }
 
-/// GET /api2/admin/users/ — list all users.
+/// GET /api/admin/users/ — list all users.
 async fn list_users(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -71,7 +71,7 @@ fn default_true() -> bool {
     true
 }
 
-/// POST /api2/admin/users/ — create a new user.
+/// POST /api/admin/users/ — create a new user.
 async fn create_user(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -80,7 +80,7 @@ async fn create_user(
     auth.require_admin(&state).await?;
 
     // The admin console is not an exception to the configured password policy:
-    // `/api2/accounts/` and the web forms enforce it, and an operator who set a
+    // `/api/accounts/` and the web forms enforce it, and an operator who set a
     // policy expects every creation path to follow it.
     crate::service::auth::password::validate_password(
         &payload.password,
@@ -132,7 +132,7 @@ pub struct UpdateUserPayload {
     pub storage_quota: Option<i64>,
 }
 
-/// PUT /api2/admin/users/{user_id}/ — update a user.
+/// PUT /api/admin/users/{user_id}/ — update a user.
 async fn update_user(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,
@@ -171,7 +171,7 @@ async fn update_user(
     }))
 }
 
-/// DELETE /api2/admin/users/{user_id}/ — delete a user.
+/// DELETE /api/admin/users/{user_id}/ — delete a user.
 async fn delete_user(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

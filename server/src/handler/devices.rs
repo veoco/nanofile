@@ -44,7 +44,7 @@ pub fn devices_routes() -> axum::Router<Arc<AppState>> {
 /// never included — a `sync_token` row holds a ciphertext this server can decrypt, so
 /// only metadata is returned. `client` entries keep their field names and `kind` is an
 /// addition, so a client that ignores it sees extra entries rather than a changed shape —
-/// hence `/api2/credentials/` is the right endpoint for a *device* screen.
+/// hence `/api/credentials/` is the right endpoint for a *device* screen.
 pub async fn list_devices(
     auth: AuthUser,
     State(state): State<Arc<AppState>>,

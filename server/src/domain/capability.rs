@@ -1,11 +1,13 @@
 //! Functional capability catalog for the unified API-key system.
 //!
 //! A key is a set of independently grantable capabilities. `ROUTES` maps every
-//! `/api2` and `/api/v2.1` route to the capability it needs, so enforcement lives
-//! at one point ([`crate::middleware::auth::AuthUser`]) instead of in every
-//! handler. Every credential is classified, not only keys: a session satisfies
-//! every capability because it *is* the account, so the table records what a route
-//! needs of a key plus the routes closed to keys ([`RouteAccess::SessionOnly`]).
+//! `/api2`, `/api/v2.1` and `/api` route to the capability it needs, so
+//! enforcement lives at one point ([`crate::middleware::auth::AuthUser`]) instead
+//! of in every handler. Both kinds of route go through one table because an API
+//! key may call either; `/api` is Nanofile's own namespace, not Seafile's. Every
+//! credential is classified, not only keys: a session satisfies every capability
+//! because it *is* the account, so the table records what a route needs of a key
+//! plus the routes closed to keys ([`RouteAccess::SessionOnly`]).
 //!
 //! The table classifies the route and, when one is present, the library id in
 //! the URI. A handler whose library id arrives in a JSON body, query string or
@@ -504,9 +506,9 @@ pub enum RouteAccess {
 
 /// Route classification table.
 ///
-/// `{name}` matches exactly one non-empty segment; the table covers every `/api2`
-/// and `/api/v2.1` route (see `server/tests/capability_coverage_test.rs`). A
-/// route missing here is denied to every credential, the intended failure.
+/// `{name}` matches exactly one non-empty segment; the table covers every `/api2`,
+/// `/api/v2.1` and `/api` route (see `server/tests/capability_coverage_test.rs`).
+/// A route missing here is denied to every credential, the intended failure.
 type RouteEntry = (&'static str, &'static str, RouteAccess);
 
 const ROUTES: &[RouteEntry] = &[
@@ -533,12 +535,7 @@ const ROUTES: &[RouteEntry] = &[
     // Account creation over the API is admin-only (the handler enforces it).
     (
         "POST",
-        "/api2/account/",
-        RouteAccess::Capability(Capability::AdminUserWrite),
-    ),
-    (
-        "POST",
-        "/api2/accounts/",
+        "/api/accounts/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
@@ -565,12 +562,12 @@ const ROUTES: &[RouteEntry] = &[
     // are not devices) but the same management surface, so the same capability.
     (
         "GET",
-        "/api2/credentials/",
+        "/api/credentials/",
         RouteAccess::Capability(Capability::DeviceRead),
     ),
     (
         "DELETE",
-        "/api2/credentials/{kind}/{id}/",
+        "/api/credentials/{kind}/{id}/",
         RouteAccess::Capability(Capability::DeviceWrite),
     ),
     (
@@ -700,12 +697,12 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "POST",
-        "/api2/repos/{repo_id}/dir/move/",
+        "/api/repos/{repo_id}/dir/move/",
         RouteAccess::Capability(Capability::FileWrite),
     ),
     (
         "POST",
-        "/api2/repos/{repo_id}/dir/rename/",
+        "/api/repos/{repo_id}/dir/rename/",
         RouteAccess::Capability(Capability::FileWrite),
     ),
     (
@@ -740,7 +737,7 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "PUT",
-        "/api/v2.1/repos/{repo_id}/visibility/",
+        "/api/repos/{repo_id}/visibility/",
         RouteAccess::Capability(Capability::LibraryUpdate),
     ),
     (
@@ -775,12 +772,12 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "POST",
-        "/api2/repos/{repo_id}/file/rename/",
+        "/api/repos/{repo_id}/file/rename/",
         RouteAccess::Capability(Capability::FileWrite),
     ),
     (
         "POST",
-        "/api2/repos/{repo_id}/file/move/",
+        "/api/repos/{repo_id}/file/move/",
         RouteAccess::Capability(Capability::FileWrite),
     ),
     (
@@ -790,17 +787,17 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api2/repos/{repo_id}/file/exif/",
+        "/api/repos/{repo_id}/file/exif/",
         RouteAccess::Capability(Capability::FileRead),
     ),
     (
         "GET",
-        "/api2/repos/{repo_id}/file/index-text/",
+        "/api/repos/{repo_id}/file/index-text/",
         RouteAccess::Capability(Capability::FileRead),
     ),
     (
         "POST",
-        "/api2/repos/{repo_id}/file/reindex/",
+        "/api/repos/{repo_id}/file/reindex/",
         RouteAccess::Capability(Capability::SearchReindex),
     ),
     (
@@ -953,12 +950,12 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api/v2.1/repos/{repo_id}/file/revision/",
+        "/api/repos/{repo_id}/file/revision/",
         RouteAccess::Capability(Capability::HistoryRead),
     ),
     (
         "POST",
-        "/api/v2.1/repos/{repo_id}/file/revision/restore/",
+        "/api/repos/{repo_id}/file/revision/restore/",
         RouteAccess::Capability(Capability::HistoryWrite),
     ),
     (
@@ -973,7 +970,7 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "DELETE",
-        "/api2/shared-links/{token}",
+        "/api/shared-links/{token}",
         RouteAccess::Capability(Capability::ShareLinkWrite),
     ),
     (
@@ -1008,17 +1005,17 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api2/upload-links/",
+        "/api/upload-links/",
         RouteAccess::Capability(Capability::UploadLinkRead),
     ),
     (
         "POST",
-        "/api2/upload-links/",
+        "/api/upload-links/",
         RouteAccess::Capability(Capability::UploadLinkWrite),
     ),
     (
         "DELETE",
-        "/api2/upload-links/{token}",
+        "/api/upload-links/{token}",
         RouteAccess::Capability(Capability::UploadLinkWrite),
     ),
     (
@@ -1183,17 +1180,17 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "POST",
-        "/api2/reindex/",
+        "/api/reindex/",
         RouteAccess::Capability(Capability::SearchReindex),
     ),
     (
         "GET",
-        "/api2/reindex-progress/",
+        "/api/reindex-progress/",
         RouteAccess::Capability(Capability::SearchReindex),
     ),
     (
         "POST",
-        "/api2/index-file-text/",
+        "/api/index-file-text/",
         RouteAccess::Capability(Capability::SearchWrite),
     ),
     // The minted sync token is a full read/write library credential, so issuance
@@ -1215,32 +1212,32 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api2/admin/users/",
+        "/api/admin/users/",
         RouteAccess::Capability(Capability::AdminUserRead),
     ),
     (
         "POST",
-        "/api2/admin/users/",
+        "/api/admin/users/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
         "PUT",
-        "/api2/admin/users/{user_id}/",
+        "/api/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
         "DELETE",
-        "/api2/admin/users/{user_id}/",
+        "/api/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     // Session-only, catalog included: a key that can mint keys could grant itself
     // more than it holds, so no part of this surface accepts key authentication.
-    ("GET", "/api2/api-keys/catalog/", RouteAccess::SessionOnly),
-    ("GET", "/api2/api-keys/", RouteAccess::SessionOnly),
-    ("POST", "/api2/api-keys/", RouteAccess::SessionOnly),
-    ("GET", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
-    ("PUT", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
-    ("DELETE", "/api2/api-keys/{id}/", RouteAccess::SessionOnly),
+    ("GET", "/api/keys/catalog/", RouteAccess::SessionOnly),
+    ("GET", "/api/keys/", RouteAccess::SessionOnly),
+    ("POST", "/api/keys/", RouteAccess::SessionOnly),
+    ("GET", "/api/keys/{id}/", RouteAccess::SessionOnly),
+    ("PUT", "/api/keys/{id}/", RouteAccess::SessionOnly),
+    ("DELETE", "/api/keys/{id}/", RouteAccess::SessionOnly),
 ];
 
 /// Every classified route as a `(method, path pattern)` pair.
@@ -1281,7 +1278,7 @@ pub fn required_access(method: &str, path: &str) -> Option<RouteAccess> {
 
 /// Human-readable list of the enforcement points that consult `capability`.
 ///
-/// The management UI renders it as a tooltip and `/api2/api-keys/catalog/` returns
+/// The management UI renders it as a tooltip and `/api/keys/catalog/` returns
 /// it, so "what does granting this buy?" is answered by the route table itself.
 /// Every capability in [`Capability::ALL`] has at least one entry.
 pub fn enforced_by(capability: Capability) -> Vec<String> {
@@ -1310,6 +1307,11 @@ fn is_classified_prefix(path: &str) -> bool {
         || path.starts_with("/api2/")
         || path == "/api/v2.1"
         || path.starts_with("/api/v2.1/")
+        // Nanofile's own namespace: same fail-closed contract as the Seafile
+        // prefixes. `/api2` is not caught by this arm (`/api/` requires the
+        // slash), so the two checks stay independent.
+        || path == "/api"
+        || path.starts_with("/api/")
         // The web file-content endpoint is outside the API namespaces but accepts
         // an API key, so it must be classified rather than fall through to "deny".
         || path.starts_with("/repos/")
@@ -1621,16 +1623,16 @@ mod tests {
     #[test]
     fn manual_index_writes_need_search_write() {
         assert_eq!(
-            required_access("POST", "/api2/index-file-text/"),
+            required_access("POST", "/api/index-file-text/"),
             Some(RouteAccess::Capability(Capability::SearchWrite))
         );
         // A whole-repository rebuild (and its progress) stays on reindex.
         assert_eq!(
-            required_access("POST", "/api2/reindex/"),
+            required_access("POST", "/api/reindex/"),
             Some(RouteAccess::Capability(Capability::SearchReindex))
         );
         assert_eq!(
-            required_access("GET", "/api2/reindex-progress/"),
+            required_access("GET", "/api/reindex-progress/"),
             Some(RouteAccess::Capability(Capability::SearchReindex))
         );
     }
@@ -1909,12 +1911,12 @@ mod tests {
     #[test]
     fn key_management_is_session_only() {
         for (method, path) in [
-            ("GET", "/api2/api-keys/"),
-            ("POST", "/api2/api-keys/"),
-            ("GET", "/api2/api-keys/catalog/"),
-            ("GET", "/api2/api-keys/7/"),
-            ("PUT", "/api2/api-keys/7/"),
-            ("DELETE", "/api2/api-keys/7/"),
+            ("GET", "/api/keys/"),
+            ("POST", "/api/keys/"),
+            ("GET", "/api/keys/catalog/"),
+            ("GET", "/api/keys/7/"),
+            ("PUT", "/api/keys/7/"),
+            ("DELETE", "/api/keys/7/"),
         ] {
             assert_eq!(
                 required_access(method, path),

@@ -36,7 +36,7 @@
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [Generate repo api token](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-repo-api-tokens)<br>`POST /api/v2.1/repos/{repo_id}/repo-api-tokens/` | 有差异 | [本地接口](/zh/reference/api/libraries#get-api2-repo-tokens) | 旧版 `/api2/repo-tokens/` 签发同步令牌，没有 HTTP repo-token 接口。需要受限访问请用 `/api2/api-keys/`。 |
+| [Generate repo api token](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-repo-api-tokens)<br>`POST /api/v2.1/repos/{repo_id}/repo-api-tokens/` | 有差异 | [本地接口](/zh/reference/api/libraries#get-api2-repo-tokens) | 旧版 `/api2/repo-tokens/` 签发同步令牌，没有 HTTP repo-token 接口。需要受限访问请用 `/api/keys/`。 |
 
 ## Via Repo-Token
 
@@ -47,7 +47,7 @@
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
 | [List repo api tokens](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-repo-api-tokens)<br>`GET /api/v2.1/repos/{repo_id}/repo-api-tokens/` | 有差异 | [本地接口](/zh/reference/api/api-keys#get-api2-api-keys) | 没有对应的路由；API 密钥是等效的受限凭据。 |
-| [Update repo api token](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`PUT /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | 有差异 | [本地接口](/zh/reference/api/api-keys#put-api2-api-keys-id) | 未实现。可通过 `/api2/api-keys/{id}/` 重命名或调整 API 密钥。 |
+| [Update repo api token](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`PUT /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | 有差异 | [本地接口](/zh/reference/api/api-keys#put-api2-api-keys-id) | 未实现。可通过 `/api/keys/{id}/` 重命名或调整 API 密钥。 |
 | [Delete repo api token](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-repo-id-repo-api-tokens-app-name)<br>`DELETE /api/v2.1/repos/{repo_id}/repo-api-tokens/{app_name}/` | 有差异 | [本地接口](/zh/reference/api/api-keys#delete-api2-api-keys-id) | 未实现。请吊销等效的 API 密钥。 |
 
 ### Dir / Files
@@ -190,7 +190,7 @@ Nanofile 没有评论功能。
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
 | [Get file history](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-file-history)<br>`GET /api/v2.1/repos/{repo_id}/file/history/` | 有差异 | [本地接口](/zh/reference/api/history#get-api-v2-1-repos-repo-id-file-history) | 外层结构是 `{data, page, page_next}`；没有 `next_start_commit`，且只返回一页。 |
-| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | 有差异 | [本地接口](/zh/reference/api/history#get-api-v2-1-repos-repo-id-file-revision) | 由 `/api/v2.1/repos/{repo_id}/file/revision/` 提供。 |
+| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | 有差异 | [本地接口](/zh/reference/api/history#get-api-v2-1-repos-repo-id-file-revision) | 由 `/api/repos/{repo_id}/file/revision/` 提供。 |
 
 ### Files
 
@@ -449,12 +449,12 @@ Nanofile 没有 Wiki。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#get-api2-admin-users) | Nanofile 自己的管理接口（`/api2/admin/users/`）返回不同的结构。 |
-| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#post-api2-admin-users) | 使用 `/api2/admin/users/`（JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`）。 |
+| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#get-api2-admin-users) | Nanofile 自己的管理接口（`/api/admin/users/`）返回不同的结构。 |
+| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#post-api2-admin-users) | 使用 `/api/admin/users/`（JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`）。 |
 | [Search user](https://seafile-api.readme.io/reference/get_api-v2-1-admin-search-user)<br>`GET /api/v2.1/admin/search-user/` | 未实现 | — |  |
-| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | 未实现 | — | 没有单用户 GET；列出 `/api2/admin/users/` 后过滤。 |
-| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#put-api2-admin-users-user-id) | 使用 `/api2/admin/users/{id}/`；id 是数字。 |
-| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#delete-api2-admin-users-user-id) | 使用 `/api2/admin/users/{id}/`；id 是数字。 |
+| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | 未实现 | — | 没有单用户 GET；列出 `/api/admin/users/` 后过滤。 |
+| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#put-api2-admin-users-user-id) | 使用 `/api/admin/users/{id}/`；id 是数字。 |
+| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#delete-api2-admin-users-user-id) | 使用 `/api/admin/users/{id}/`；id 是数字。 |
 
 ### Departments
 
@@ -648,7 +648,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 ## 这里有、官方参考没有的接口 {#undocumented}
 
-这些路由已经提供，但不在官方参考的操作里。多数是 seahub 有、参考没写的接口（v2.1 变体、旧版传输辅助接口、trash2、related-users）；标 \* 的是 Nanofile 独有。`/seafhttp/`、`/dav/`、`/notification`，以及浏览器传输接口（`/upload-aj/`、`/download-api/`、`/zip/`、进度桩）各有一页，不在这里重复。
+这些路由已经提供，但不在官方参考的操作里。多数是 seahub 有、参考没写的接口（v2.1 变体、旧版传输辅助接口、trash2、related-users）。Nanofile 自有接口（`/api/` 命名空间）单独成页；本表现在只列 Seafile 服务端同样注册的路径。`/seafhttp/`、`/dav/`、`/notification`，以及浏览器传输接口（`/upload-aj/`、`/download-api/`、`/zip/`、进度桩）各有一页，不在这里重复。
 
 | 接口 | 文档位置 |
 | --- | --- |
@@ -659,10 +659,6 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `POST /api2/client-sso-link/` | [docs](/zh/reference/api/authentication#post-api2-client-sso-link) |
 | `GET /api2/client-sso-link/{token}/` | [docs](/zh/reference/api/authentication#get-api2-client-sso-link-token) |
 | `PUT /api2/account/info/` | [docs](/zh/reference/api/accounts#put-api2-account-info) |
-| `POST /api2/account/` | [docs](/zh/reference/api/accounts#post-api2-account) |
-| `POST /api2/accounts/` | [docs](/zh/reference/api/accounts#post-api2-accounts) |
-| `GET /api2/credentials/` \* | [docs](/zh/reference/api/api-keys#get-api2-credentials) |
-| `DELETE /api2/credentials/{kind}/{id}/` \* | [docs](/zh/reference/api/api-keys#delete-api2-credentials-kind-id) |
 | `GET /api2/unseen_messages/` | [docs](/zh/reference/api/accounts#get-api2-unseen-messages) |
 | `GET /api/v2.1/repos/` | [docs](/zh/reference/api/libraries#get-api-v2-1-repos) |
 | `GET /api/v2.1/repos/{repo_id}/` | [docs](/zh/reference/api/libraries#get-api-v2-1-repos-repo-id) |
@@ -677,15 +673,8 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api/v2.1/repos/{repo_id}/dir/` | [docs](/zh/reference/api/directories#get-api-v2-1-repos-repo-id-dir) |
 | `POST /api/v2.1/repos/{repo_id}/dir/` | [docs](/zh/reference/api/directories#post-api-v2-1-repos-repo-id-dir) |
 | `DELETE /api/v2.1/repos/{repo_id}/dir/` | [docs](/zh/reference/api/directories#delete-api-v2-1-repos-repo-id-dir) |
-| `POST /api2/repos/{repo_id}/dir/move/` \* | [docs](/zh/reference/api/directories#post-api2-repos-repo-id-dir-move) |
-| `POST /api2/repos/{repo_id}/dir/rename/` \* | [docs](/zh/reference/api/directories#post-api2-repos-repo-id-dir-rename) |
 | `POST /api2/repos/{repo_id}/file/` | [docs](/zh/reference/api/files#post-api2-repos-repo-id-file) |
 | `DELETE /api2/repos/{repo_id}/file/` | [docs](/zh/reference/api/files#delete-api2-repos-repo-id-file) |
-| `POST /api2/repos/{repo_id}/file/rename/` \* | [docs](/zh/reference/api/files#post-api2-repos-repo-id-file-rename) |
-| `POST /api2/repos/{repo_id}/file/move/` \* | [docs](/zh/reference/api/files#post-api2-repos-repo-id-file-move) |
-| `GET /api2/repos/{repo_id}/file/exif/` \* | [docs](/zh/reference/api/files#get-api2-repos-repo-id-file-exif) |
-| `GET /api2/repos/{repo_id}/file/index-text/` | [docs](/zh/reference/api/metadata#get-api2-repos-repo-id-file-index-text) |
-| `POST /api2/repos/{repo_id}/file/reindex/` | [docs](/zh/reference/api/metadata#post-api2-repos-repo-id-file-reindex) |
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/zh/reference/api/files#get-api2-repos-repo-id-thumbnail) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/zh/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/zh/reference/api/transfers#get-repos-repo-id-files-path) |
@@ -702,15 +691,10 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api/v2.1/repos/{repo_id}/trash2/search/` | [docs](/zh/reference/api/history#get-api-v2-1-repos-repo-id-trash2-search) |
 | `POST /api/v2.1/repos/{repo_id}/trash2/revert/` | [docs](/zh/reference/api/history#post-api-v2-1-repos-repo-id-trash2-revert) |
 | `GET /api2/repo_history_changes/{repo_id}/` | [docs](/zh/reference/api/history#get-api2-repo-history-changes-repo-id) |
-| `POST /api/v2.1/repos/{repo_id}/file/revision/restore/` \* | [docs](/zh/reference/api/history#post-api-v2-1-repos-repo-id-file-revision-restore) |
 | `GET /api2/shared-links/` | [docs](/zh/reference/api/sharing#get-api2-shared-links) |
 | `POST /api2/shared-links/` | [docs](/zh/reference/api/sharing#post-api2-shared-links) |
-| `DELETE /api2/shared-links/{token}` | [docs](/zh/reference/api/sharing#delete-api2-shared-links-token) |
 | `GET /api/v2.1/share-links/{token}/` | [docs](/zh/reference/api/sharing#get-api-v2-1-share-links-token) |
 | `PUT /api/v2.1/share-links/{token}/` | [docs](/zh/reference/api/sharing#put-api-v2-1-share-links-token) |
-| `GET /api2/upload-links/` | [docs](/zh/reference/api/sharing#get-api2-upload-links) |
-| `POST /api2/upload-links/` | [docs](/zh/reference/api/sharing#post-api2-upload-links) |
-| `DELETE /api2/upload-links/{token}` | [docs](/zh/reference/api/sharing#delete-api2-upload-links-token) |
 | `DELETE /api/v2.1/upload-links/clean-invalid/` | [docs](/zh/reference/api/sharing#delete-api-v2-1-upload-links-clean-invalid) |
 | `GET /api/v2.1/upload-links/{token}/` | [docs](/zh/reference/api/sharing#get-api-v2-1-upload-links-token) |
 | `PUT /api/v2.1/upload-links/{token}/` | [docs](/zh/reference/api/sharing#put-api-v2-1-upload-links-token) |
@@ -719,18 +703,13 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api/v2.1/repos/{repo_id}/related-users/` | [docs](/zh/reference/api/metadata#get-api-v2-1-repos-repo-id-related-users) |
 | `GET /api/v2.1/repos/{repo_id}/metadata/tags-status/` | [docs](/zh/reference/api/metadata#get-api-v2-1-repos-repo-id-metadata-tags-status) |
 | `GET /api2/starredfiles/` | [docs](/zh/reference/api/sharing#get-api2-starredfiles) |
-| `POST /api2/reindex/` | [docs](/zh/reference/api/metadata#post-api2-reindex) |
-| `GET /api2/reindex-progress/` | [docs](/zh/reference/api/metadata#get-api2-reindex-progress) |
-| `POST /api2/index-file-text/` | [docs](/zh/reference/api/metadata#post-api2-index-file-text) |
 | `GET /api2/repos/{repo_id}/download-info/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-download-info) |
-| `GET /api2/api-keys/catalog/` \* | [docs](/zh/reference/api/api-keys#get-api2-api-keys-catalog) |
-| `POST /api2/api-keys/` \* | [docs](/zh/reference/api/api-keys#post-api2-api-keys) |
-| `GET /api2/api-keys/{id}/` \* | [docs](/zh/reference/api/api-keys#get-api2-api-keys-id) |
 
 ## 行为差异 {#behaviour}
 
 路由级的表格无法覆盖全部差异。以下差异适用于整个接口面；协议层细节见各接口页与 [Seafile 兼容性](/zh/dev/protocol#刻意保留的偏差)。
 
+- **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Seafile 兼容路由不变。
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
 - **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交与加锁接口上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。

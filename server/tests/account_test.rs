@@ -218,7 +218,7 @@ async fn test_account_info_quota_fallback_default() {
 
 // Account registration requires admin authentication
 
-/// Security: anonymous registration via POST /api2/accounts/ must be rejected
+/// Security: anonymous registration via POST /api/accounts/ must be rejected
 /// (it previously bypassed the invitation system and rate limits entirely).
 #[tokio::test]
 async fn test_register_anonymous_rejected() {
@@ -227,7 +227,7 @@ async fn test_register_anonymous_rejected() {
 
     let resp = client
         .post_form(
-            "/api2/accounts/",
+            "/api/accounts/",
             None,
             &[("email", "anon@example.com"), ("password", "secret123")],
         )
@@ -248,7 +248,7 @@ async fn test_register_non_admin_rejected() {
 
     let resp = client
         .post_form(
-            "/api2/accounts/",
+            "/api/accounts/",
             Some(&token),
             &[("email", "new@example.com"), ("password", "secret123")],
         )
@@ -280,7 +280,7 @@ async fn test_register_admin_allowed() {
 
     let resp = client
         .post_form(
-            "/api2/accounts/",
+            "/api/accounts/",
             Some(&token),
             &[("email", "created@example.com"), ("password", "secret123")],
         )

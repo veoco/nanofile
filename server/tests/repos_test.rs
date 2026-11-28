@@ -577,7 +577,7 @@ async fn test_metadata_thumbnail_exif_history_require_membership() {
     let resp = f
         .client
         .get(
-            &format!("/api2/repos/{rid}/file/exif/?p=/test.txt"),
+            &format!("/api/repos/{rid}/file/exif/?p=/test.txt"),
             Some(&b_token),
         )
         .await;

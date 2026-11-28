@@ -10,6 +10,7 @@ mod api_key_auth_test;
 mod api_key_repository_test;
 mod api_key_test;
 mod api_key_ui_test;
+mod api_namespace_test;
 mod api_v1_test;
 mod api_v21_test;
 mod business_logic_test;

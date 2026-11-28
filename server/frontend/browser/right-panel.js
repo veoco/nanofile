@@ -467,7 +467,7 @@ export function openRightPanel(d) {
       reindexBtn.disabled = false;
       reindexBtn.textContent = __t('ui.reindex');
     }
-    fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
+    fetch("/api/repos/" + encodeURIComponent(d.repoId) + "/file/index-text/?p=" + encodeURIComponent(d.path))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (reqId !== rpReqId) return;
@@ -490,7 +490,7 @@ export function openRightPanel(d) {
   var noExif = ct.querySelector(".js-rp-no-exif");
 
   if (exifSection && d.type !== "dir" && !d.isVideo && !d.isAudio && d.thumbnailUrl && d.repoId && d.path) {
-    fetch("/api2/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
+    fetch("/api/repos/" + encodeURIComponent(d.repoId) + "/file/exif/?p=" + encodeURIComponent(d.path))
       .then(function (r) { return r.json(); })
       .then(function (data) {
         if (reqId !== rpReqId) return;
@@ -759,7 +759,7 @@ document.addEventListener("click", async function (e) {
   try {
     btn.disabled = true;
     btn.textContent = __t('ui.indexing');
-    var resp = await apiFetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
+    var resp = await apiFetch("/api/repos/" + encodeURIComponent(repoId) + "/file/reindex/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ p: path }),
@@ -774,7 +774,7 @@ document.addEventListener("click", async function (e) {
     if (ct) {
       var indexContent = ct.querySelector(".js-rp-index-content");
       var indexEmpty = ct.querySelector(".js-rp-index-empty");
-      var fetchResp = await fetch("/api2/repos/" + encodeURIComponent(repoId) + "/file/index-text/?p=" + encodeURIComponent(path));
+      var fetchResp = await fetch("/api/repos/" + encodeURIComponent(repoId) + "/file/index-text/?p=" + encodeURIComponent(path));
       var fetchData = await fetchResp.json();
       if (fetchData.content) {
         indexContent.textContent = fetchData.content;

@@ -65,10 +65,12 @@ are disabled (`server.share_download_enabled`) or when the library is encrypted.
 
 ## Delete a share link {#delete-api2-shared-links-token}
 
-`DELETE /api2/shared-links/{token}`
+`DELETE /api/shared-links/{token}`
 
 Deletes one of the caller's links. **Response `200`** — `{"success": true}`.
 Requires `share_link.write`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List share links (v2.1) {#get-api-v2-1-share-links}
 
@@ -157,7 +159,7 @@ delete is idempotent); a link outside the API key's library scope is hidden as
 
 ## List upload links {#get-api2-upload-links}
 
-`GET /api2/upload-links/`
+`GET /api/upload-links/`
 
 The caller's upload links. **Response `200`**
 
@@ -175,9 +177,11 @@ The caller's upload links. **Response `200`**
 
 Requires `upload_link.read`.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Create an upload link {#post-api2-upload-links}
 
-`POST /api2/upload-links/`
+`POST /api/upload-links/`
 
 **Body** (JSON) — `repo_id`, `path`, optional `password` and `expires_at` (Unix
 seconds).
@@ -187,11 +191,15 @@ seconds).
 an encrypted library, and creation is refused when `server.share_upload_enabled`
 is off.
 
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+
 ## Delete an upload link {#delete-api2-upload-links-token}
 
-`DELETE /api2/upload-links/{token}`
+`DELETE /api/upload-links/{token}`
 
 **Response `200`** — `{"success": true}`. Requires `upload_link.write`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List upload links (v2.1) {#get-api-v2-1-upload-links}
 
@@ -486,7 +494,7 @@ An empty query returns an empty list instead of the account directory. Requires
 
 ### Set a library's visibility {#put-api-v2-1-repos-repo-id-visibility}
 
-`PUT /api/v2.1/repos/{repo_id}/visibility/`
+`PUT /api/repos/{repo_id}/visibility/`
 
 Body (JSON or form): `{"visibility": "private" | "shared" | "public"}`.
 
@@ -496,6 +504,8 @@ keeps them (and an empty list is allowed). Encrypted libraries can only be
 Nanofile extension; the official clients have no endpoint for it.
 
 **Response `200`** — `{"success": true}`.
+
+**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List groups {#get-api2-groups}
 

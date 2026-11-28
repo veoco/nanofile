@@ -76,7 +76,7 @@ async fn gen_key_with_permission_and_id(
         serde_json::json!(["webdav.read", "webdav.write"])
     };
     let resp = client
-        .post(format!("{base}/api2/api-keys/"))
+        .post(format!("{base}/api/keys/"))
         .bearer_auth(token)
         .json(&serde_json::json!({
             "name": name,
@@ -1339,7 +1339,7 @@ async fn test_delete_key_revokes_access() {
     );
 
     let resp = client
-        .delete(format!("{base}/api2/api-keys/{key_id}/"))
+        .delete(format!("{base}/api/keys/{key_id}/"))
         .bearer_auth(&f.api_token)
         .send()
         .await
@@ -1370,10 +1370,7 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
     let base = &f.server.base_url;
     let client = http();
 
-    let resp = f
-        .client
-        .get("/api2/api-keys/catalog/", Some(&f.api_token))
-        .await;
+    let resp = f.client.get("/api/keys/catalog/", Some(&f.api_token)).await;
     assert_eq!(resp.status(), 200);
     let catalog: serde_json::Value = resp.json().await.unwrap();
     let capabilities = catalog["presets"]
@@ -1394,7 +1391,7 @@ async fn a_key_minted_from_the_webdav_preset_is_a_webdav_key() {
     let resp = f
         .client
         .post_json(
-            "/api2/api-keys/",
+            "/api/keys/",
             Some(&f.api_token),
             &serde_json::json!({
                 "name": "preset-webdav",

@@ -42,9 +42,16 @@ pub fn file_routes() -> Router<Arc<AppState>> {
                 .put(lock_file_via_api_handler)
                 .delete(delete_file),
         )
-        .route("/{repo_id}/file/rename/", axum::routing::post(rename_file))
-        .route("/{repo_id}/file/move/", axum::routing::post(move_file))
         .route("/{repo_id}/file/detail/", axum::routing::get(file_detail))
+}
+
+/// The Nanofile-only file routes under `/api/repos/{repo_id}/file/`.
+///
+/// Seafile does not have these paths: rename/move go through `op=` on the file
+/// endpoint, and exif/index-text/reindex are this server's own additions.
+/// [`file_routes`] is the Seafile-compatible half.
+pub fn nanofile_file_routes() -> Router<Arc<AppState>> {
+    Router::new()
         .route(
             "/{repo_id}/file/index-text/",
             axum::routing::get(file_index_text),
@@ -54,6 +61,8 @@ pub fn file_routes() -> Router<Arc<AppState>> {
             axum::routing::post(reindex_file_handler),
         )
         .route("/{repo_id}/file/exif/", axum::routing::get(get_exif))
+        .route("/{repo_id}/file/rename/", axum::routing::post(rename_file))
+        .route("/{repo_id}/file/move/", axum::routing::post(move_file))
 }
 
 pub async fn download_file(
@@ -496,7 +505,7 @@ pub struct FileIndexTextQuery {
     pub p: Option<String>,
 }
 
-/// GET /api2/repos/{repo_id}/file/index-text/?p=/path — the stored full-text index
+/// GET /api/repos/{repo_id}/file/index-text/?p=/path — the stored full-text index
 /// content, or null when the file is not indexed.
 pub async fn file_index_text(
     access: RepoPathRead,
@@ -524,7 +533,7 @@ pub struct ReindexFileRequest {
     pub p: Option<String>,
 }
 
-/// POST /api2/repos/{repo_id}/file/reindex/ — re-index one file from block storage;
+/// POST /api/repos/{repo_id}/file/reindex/ — re-index one file from block storage;
 /// body `{"p": "/dir/file.txt"}`.
 pub async fn reindex_file_handler(
     access: RepoPathWrite,

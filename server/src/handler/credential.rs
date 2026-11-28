@@ -90,7 +90,7 @@ pub async fn list_credentials(
                 "expires_at": trust.expires_at,
             }))
             .collect::<Vec<_>>(),
-        // API keys live under `/api2/api-keys/`, which is session-only; a count tells an
+        // API keys live under `/api/keys/`, which is session-only; a count tells an
         // inventory whether any exist without a weaker second path.
         "api_key_count": inventory.api_key_count,
     })))

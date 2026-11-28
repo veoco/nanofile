@@ -153,7 +153,11 @@ fn documented_api_routes_exist() {
             continue;
         }
         for route in markers(text) {
-            let is_api = route.1.starts_with("/api2/") || route.1.starts_with("/api/v2.1/");
+            // `/api/` (the Nanofile namespace) and `/api/v2.1/` both start with
+            // `/api/`, so one check covers all three API prefixes.
+            let is_api = route.1.starts_with("/api2/")
+                || route.1.starts_with("/api/v2.1/")
+                || route.1.starts_with("/api/");
             if is_api && !routes.contains(&route) {
                 invented.insert(route);
             }

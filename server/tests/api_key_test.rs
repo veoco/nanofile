@@ -8,7 +8,7 @@ use crate::common;
 use common::{TestFixture, TestServer, create_test_repo, create_test_user};
 use serde_json::{Value, json};
 
-const KEYS: &str = "/api2/api-keys/";
+const KEYS: &str = "/api/keys/";
 
 fn bound_body(f: &TestFixture) -> Value {
     json!({
@@ -358,7 +358,7 @@ async fn the_catalog_is_rendered_without_secrets() {
         .expect("search.write");
     assert_eq!(
         index_text["enforced_by"],
-        json!(["POST /api2/index-file-text/"])
+        json!(["POST /api/index-file-text/"])
     );
 
     let presets: Vec<&str> = catalog["presets"]

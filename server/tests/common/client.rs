@@ -1353,7 +1353,7 @@ impl TestClient {
         new_name: &str,
     ) -> reqwest::Response {
         self.post_json(
-            &format!("/api2/repos/{}/file/rename/", repo_id),
+            &format!("/api/repos/{}/file/rename/", repo_id),
             Some(token),
             &serde_json::json!({"repo_id": repo_id, "p": path, "new_name": new_name}),
         )
@@ -1369,7 +1369,7 @@ impl TestClient {
         dst_dir: &str,
     ) -> reqwest::Response {
         self.post_json(
-            &format!("/api2/repos/{}/file/move/", src_repo),
+            &format!("/api/repos/{}/file/move/", src_repo),
             Some(token),
             &serde_json::json!({"repo_id": src_repo, "p": path, "new_parent_dir": dst_dir}),
         )

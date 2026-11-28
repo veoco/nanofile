@@ -127,27 +127,33 @@ Seafile 重载的文件接口。请求体形状决定操作：
 
 ## 重命名文件 {#post-api2-repos-repo-id-file-rename}
 
-`POST /api2/repos/{repo_id}/file/rename/`
+`POST /api/repos/{repo_id}/file/rename/`
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/old.txt", "new_name": "new.txt"}`。
 
 **响应 `200`** —— 空正文。同目录里已存在该名字时返回 `409`，不做任何修改。需要写权限与 `file.write`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## 移动文件 {#post-api2-repos-repo-id-file-move}
 
-`POST /api2/repos/{repo_id}/file/move/`
+`POST /api/repos/{repo_id}/file/move/`
 
 **请求体**（JSON）—— `{"repo_id": "…", "p": "/a.txt", "new_parent_dir": "/target"}`。同库内移动是一个提交；不支持跨库移动。
 
 **响应 `200`** —— 空正文。目标目录里已有同名条目时返回 `409`，不做任何修改。需要 `file.write`。
 
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+
 ## EXIF 元数据 {#get-api2-repos-repo-id-file-exif}
 
-`GET /api2/repos/{repo_id}/file/exif/?p=<path>`
+`GET /api/repos/{repo_id}/file/exif/?p=<path>`
 
 返回图片的 EXIF 标签对象，没有时返回 `null`（非图片，或沙盒无法解析）。
 
 需要 `file.read`。
+
+**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 缩略图 {#get-api2-repos-repo-id-thumbnail}
 

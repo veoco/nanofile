@@ -10,6 +10,7 @@
 | --- | --- |
 | `/api2/` | 旧版 Seafile REST API。官方桌面端与移动端客户端仍大量使用。 |
 | `/api/v2.1/` | 较新的 REST API，网页界面与移动端使用。 |
+| `/api/` | Nanofile 自有 API —— API 密钥、搜索/索引控制、重命名/移动辅助接口与资料库可见性。不属于 Seafile 的 API。 |
 | `/seafhttp/` | 客户端守护进程与服务器之间的同步协议，见 [同步协议](/zh/reference/api/sync)。 |
 | `/dav/{repo_id}/` | WebDAV，见 [WebDAV](/zh/reference/api/webdav)。 |
 | `/notification` | 客户端订阅资料库更新的 WebSocket，见 [通知 WebSocket](/zh/reference/api/notification)。 |
@@ -32,14 +33,14 @@
 
 | 凭据 | 发送方式 | 适用范围 |
 | --- | --- | --- |
-| 账号令牌 | `Authorization: Bearer <token>`；也接受旧式 `Authorization: Token <token>` | 全部 `/api2/` 与 `/api/v2.1/` 接口 |
+| 账号令牌 | `Authorization: Bearer <token>`；也接受旧式 `Authorization: Token <token>` | 全部 `/api2/`、`/api/v2.1/` 与 `/api/` 接口 |
 | 会话 Cookie | 在 `/accounts/login/` 登录后设置的 `seahub-session`；改变状态的请求还需 `X-CSRFToken`，值来自 `sfcsrftoken` Cookie | 同样的 API 接口；密钥管理路由只接受账号会话（该 Cookie 或 `POST /api2/auth-token/` 换来的账号令牌），API 密钥与同步令牌都会被拒 |
-| API 密钥 | `Authorization: Bearer <key>` | API 接口，受密钥的能力与资料库范围限制；带 `sync.read`/`sync.write` 时也用于 `/seafhttp/`，同样受库范围限制 |
+| API 密钥 | `Authorization: Bearer <key>` | API 接口，包括 Nanofile 的 `/api/`，受密钥的能力与资料库范围限制；带 `sync.read`/`sync.write` 时也用于 `/seafhttp/`，同样受库范围限制 |
 | 同步令牌 | `Seafile-Repo-Token: <token>`（或 `Authorization: Token <token>`） | 仅 `/seafhttp/`，构造上绑定一个资料库 |
 
 `/seafhttp/` 接受库同步令牌（官方客户端用这种）、带 `sync.read`/`sync.write` 的 API 密钥，或账号令牌；URL 中的资料库必须在凭据的范围内。
 
-账号令牌由 [`POST /api2/auth-token/`](/zh/reference/api/authentication#post-api2-auth-token) 用账号密码换取。API 密钥是 Nanofile 自己的凭据，见 [API 密钥与凭据](/zh/reference/api/api-keys)。
+账号令牌由 [`POST /api2/auth-token/`](/zh/reference/api/authentication#post-api2-auth-token) 用账号密码换取。API 密钥是 Nanofile 自己的凭据，见 [API 密钥与凭据](/zh/reference/api/api-keys)。账号令牌与 API 密钥同样可用于 Nanofile 的 `/api/` 命名空间；密钥的能力与资料库范围在那里同样生效。
 
 公开接口是 `POST /api2/auth-token/`、`GET /api2/ping/`、`GET /api2/server-info/`、两个 `/api2/client-sso-link/` 接口与 `POST /api2/device-wiped/`。其余接口没有凭据一律 `401`。
 

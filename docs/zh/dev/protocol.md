@@ -40,7 +40,7 @@ NUL 终止符是哈希的一部分：每个字符串都按 C 字符串（`strlen
 - **API 密钥** —— 只携带被授予的能力，外加一个按资料库的上限，可以进一步收窄路由要求。授予 `file.write` 隐含 `file.read`；未分类的路由一律拒绝。
 - **同步令牌** —— 构造上绑定一个资料库，API 界面从不接受；它会被拒绝，而不是当作账号凭据处理。
 
-路由到能力的映射表在 `server/src/domain/capability.rs`；新增路由若未分类会直接失败。`server/tests/capability_coverage_test.rs` 检查映射表覆盖每个路由。
+路由到能力的映射表在 `server/src/domain/capability.rs`；新增路由若未分类会直接失败。`server/tests/capability_coverage_test.rs` 检查映射表覆盖每个 `/api2`、`/api/v2.1` 与 `/api` 路由。
 
 ## 与上游的核对
 

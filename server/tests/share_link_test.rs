@@ -503,7 +503,7 @@ async fn test_share_link_delete_v21_other() {
     assert_eq!(dl.status(), 200, "link should still be valid");
 }
 
-/// H.6 — v1 API (api2/shared-links) DELETE by creator should succeed
+/// H.6 — v1 API (api/shared-links) DELETE by creator should succeed
 #[tokio::test]
 async fn test_share_link_delete_v1_own() {
     let f = TestFixture::new().await;
@@ -532,7 +532,7 @@ async fn test_share_link_delete_v1_own() {
 
     let del = f
         .client
-        .delete(&format!("/api2/shared-links/{}", token), Some(&f.api_token))
+        .delete(&format!("/api/shared-links/{}", token), Some(&f.api_token))
         .await;
     assert_eq!(del.status(), 200, "v1 delete should succeed for creator");
 }
