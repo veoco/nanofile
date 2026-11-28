@@ -89,6 +89,16 @@ enum Command {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
+    /// Convert pre-encryption plaintext blocks to versioned at-rest ciphertext.
+    /// The server does this in the background in `lazy` mode; run it with the
+    /// server stopped to finish the conversion, or to record the completion
+    /// marker for a store that has always run in `on` mode.
+    ConvertBlocks {
+        /// Report whether the conversion has completed and change nothing.
+        /// Exits non-zero when it has not.
+        #[arg(long, default_value_t = false)]
+        status: bool,
+    },
     /// Remove block storage that no library references any more: unreachable
     /// blocks, and the whole prefix of a library that no longer exists.
     /// `--dry-run` reports what it would remove.
@@ -767,6 +777,42 @@ fn main() -> anyhow::Result<()> {
                 anyhow::Ok(())
             })
         }
+        Command::ConvertBlocks { status } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            rt.block_on(async move {
+                if config.storage.block_encryption_mode()
+                    == infra::storage::encrypting_block_store::BlockEncryptionMode::Off
+                {
+                    anyhow::bail!(
+                        "storage.block_encryption_mode is \"off\": set it to \"lazy\" (or \"on\") \
+                         and provide the encryption key before converting"
+                    );
+                }
+                infra::common::util::ensure_private_dir(&config.storage.block_dir)?;
+                let store = server::fs::core::block_verify::open_block_store(&config)?;
+                if status {
+                    let status = server::fs::core::block_encryption_convert::BlockEncryptionConverter::status(
+                        &store,
+                        &config.storage.block_dir,
+                    )
+                    .await?;
+                    println!("{}", status.summary());
+                    if !status.converted {
+                        // Non-zero so a script can gate the switch to "on" without parsing.
+                        std::process::exit(1);
+                    }
+                    return anyhow::Ok(());
+                }
+                let report = server::fs::core::block_encryption_convert::BlockEncryptionConverter::convert_legacy_blocks(
+                    &store,
+                    &config.storage.block_dir,
+                    None,
+                )
+                .await?;
+                println!("{}", report.summary());
+                anyhow::Ok(())
+            })
+        }
         Command::Gc { dry_run, mode } => {
             let rt = tokio::runtime::Runtime::new()?;
             rt.block_on(async move {
@@ -1098,6 +1144,19 @@ async fn run_server(
                  their files will report missing blocks until restored from a backup"
             );
         }
+    }
+
+    // `on` mode reads ciphertext only: a store that still holds pre-encryption
+    // plaintext would serve unreadable files. The completion marker is the cheap
+    // proof that every block was seen; an empty store is marked converted here, so
+    // a fresh install never trips this on its next start.
+    if let Err(message) =
+        server::fs::core::block_encryption_convert::BlockEncryptionConverter::prepare_at_rest_mode(
+            &config,
+        )
+        .await
+    {
+        return Err(anyhow::anyhow!(message));
     }
 
     // A writer killed mid-block leaves a `{block_id}.{uuid}.tmp` beside the block:
