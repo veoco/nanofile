@@ -67,7 +67,7 @@ description: 日志、垃圾回收、搜索索引与块校验。
 | `nanofile verify-blocks` | 怀疑块损坏（磁盘错误、复制中断、恢复后想核对）。逐块校验 SHA-1，并核对每个文件的块字节和是否等于声明大小。 |
 | `nanofile verify-dir-order` | 只在同一台服务器与官方客户端混合使用、且客户端报告目录结构异常时才需要：检查目录对象是否按 Seafile 规范的顺序存储。 |
 | `nanofile migrate-blocks` | 从旧版"所有库共用一个块目录"迁移到"每库独立目录"。启动时会自动做，这个命令用来预先估算复制量或在停机时手工执行。 |
-| `nanofile convert-blocks` | 补完或检查静态加密转换：`lazy` 模式的后台作业会慢慢转换，这个命令在停机时一次做完（`--status` 只报告）。完成标记出现之前，`on` 模式会拒绝启动。 |
+| `nanofile convert-blocks` | 补完或检查静态加密转换：`lazy` 模式的后台作业会慢慢转换，这个命令在停机时一次做完（`--status` 只报告）。完成标记出现之前，`on` 会先进入迁移读窗口。 |
 
 `verify-blocks --repair` 不会删除坏块，而是把它隔离到 `{block_dir}/.quarantine/`——字节还在，持有正确副本的客户端会重新上传。完整参数见[命令行](/zh/reference/cli)。
 

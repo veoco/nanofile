@@ -148,12 +148,14 @@ conversion has finished:
    is `{block_dir}/.encryption_converted`.
 4. **Set `storage.block_encryption_mode = "on"` and restart.**
 
-`on` cannot read pre-conversion plaintext, so switching early makes existing files
-unreadable. The server therefore refuses to start in `on` when the block store holds
-libraries but the completion marker is missing; an empty store is marked converted
-automatically. `nanofile convert-blocks`, run with the server stopped, completes or
-verifies the conversion and writes the marker — a deployment that has always run in
-`on` mode needs that command once.
+`on` cannot read pre-conversion plaintext, so existing files need the conversion
+before they are switched over. A store without the completion marker — an upgrade
+from a version that always ran in `on` mode, or one whose conversion was interrupted
+— does not need a manual step: the first start serves the migration read window
+(plaintext blocks still read, exactly as in `lazy`) and converts them in the
+background, recording the marker; the next start is strict `on`. An empty store is
+marked converted immediately. `nanofile convert-blocks` is the offline equivalent,
+and `--status` reports the marker without touching a block.
 
 Do not go back to `off` after the conversion: the stored bytes are ciphertext, and
 `off` would serve them as file content. A restore that brings plaintext blocks back

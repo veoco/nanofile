@@ -63,8 +63,9 @@ Converts pre-encryption blocks to the versioned at-rest format
 (`NFE1 || key id || ciphertext || tag`) under their existing content-addressed ids,
 records every finished library, and writes the completion marker
 `{block_dir}/.encryption_converted`. It is the same pass the server runs in the
-background in `lazy` mode; run it with the server stopped to finish the conversion
-or to record the marker for a store that has always run in `on` mode.
+background in `lazy` mode, and the one it starts by itself when an `on` store has no
+completion marker; run it with the server stopped to finish the conversion without
+waiting for that pass.
 
 - Stop the server first: two writers on one block directory are not supported.
 - The pass is resumable: an interrupted run continues with the library it had not
@@ -74,8 +75,9 @@ or to record the marker for a store that has always run in `on` mode.
   unfinished, so a script can gate the switch to `on` on it.
 - `storage.block_encryption_mode` must be `lazy` or `on` with the key available;
   `off` is refused because there is no cipher to convert with.
-- A store that has always run in `on` mode needs one run: every block is already
-  ciphertext, so it only verifies them and writes the marker.
+- A store that has always run in `on` mode does not need this command to start: the
+  next start runs the same pass in the background and records the marker. Use the
+  command to finish that pass with the server stopped, or to check the result.
 
 ```
 nanofile verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]

@@ -30,7 +30,7 @@ data/
 └── index/             # 全文搜索索引
 ```
 
-`blocks/` 里还有迁移写下的几个 dotfile：`.block_layout`（块布局已是当前版本）；启用静态加密时还有 `.encryption_converted`（块转换已完成），转换进行中还有 `.encryption_convert.log`（进度）。它们随目录一起备份；丢了完成标记的代价是跑一次 `nanofile convert-blocks`，不是丢数据。
+`blocks/` 里还有迁移写下的几个 dotfile：`.block_layout`（块布局已是当前版本）；启用静态加密时还有 `.encryption_converted`（块转换已完成），转换进行中还有 `.encryption_convert.log`（进度）。它们随目录一起备份；丢了完成标记的代价是下次启动在后台补一遍转换，不是丢数据。
 
 各部分的性质不一样，备份与清理时区别对待：
 

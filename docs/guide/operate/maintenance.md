@@ -116,7 +116,7 @@ only `--dry-run` makes it report without writing:
 | `nanofile verify-blocks` | when you suspect block damage (disk errors, an interrupted copy, or after a restore). It checks each block against its SHA-1 and that a file's block sizes sum to its declared size. |
 | `nanofile verify-dir-order` | only when the same server is used with the official clients and a client reports a directory structure problem: it checks that directory objects are stored in the order Seafile's spec requires. |
 | `nanofile migrate-blocks` | to move from the old "one block directory for every library" layout to per-library directories. Startup does this by itself; the command estimates the copy volume up front or runs it while stopped. |
-| `nanofile convert-blocks` | to finish or check the at-rest block encryption conversion. The `lazy` mode job converts in the background; this command completes it with the service stopped, or only reports with `--status`. `on` mode is refused until the completion marker exists. |
+| `nanofile convert-blocks` | to finish or check the at-rest block encryption conversion. The `lazy` mode job converts in the background; this command completes it with the service stopped, or only reports with `--status`. `on` runs in the conversion window until the completion marker exists. |
 
 `verify-blocks --repair` does not delete a bad block, it quarantines it under
 `{block_dir}/.quarantine/` — the bytes are kept, and clients holding a good copy
