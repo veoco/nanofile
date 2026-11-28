@@ -298,7 +298,7 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
             .await;
         assert_eq!(resp.status(), 403, "{path} created a link for B");
     }
-    for path in ["/api/v2.1/upload-links/", "/api/upload-links"] {
+    for path in ["/api/v2.1/upload-links/"] {
         let resp = f
             .client
             .post_json(path, Some(&key), &json!({"repo_id": other, "path": "/"}))
@@ -529,18 +529,6 @@ async fn link_tokens_are_scoped_to_the_key_library() {
         200,
         "failed delete must not remove the upload link"
     );
-
-    // The v1 delete routes carry the same tokens and need the same guard.
-    let resp = f
-        .client
-        .delete(&format!("/api/shared-links/{share_token}"), Some(&key))
-        .await;
-    assert_eq!(resp.status(), 404, "v1 delete B share link");
-    let resp = f
-        .client
-        .delete(&format!("/api/upload-links/{upload_token}"), Some(&key))
-        .await;
-    assert_eq!(resp.status(), 404, "v1 delete B upload link");
 }
 
 /// Sync-token inventory is account-wide by default; a bound key must see only
@@ -884,7 +872,7 @@ async fn a_read_ceiling_cannot_mint_upload_links() {
     )
     .await;
 
-    for path in ["/api/v2.1/upload-links/", "/api/upload-links"] {
+    for path in ["/api/v2.1/upload-links/"] {
         let resp = f
             .client
             .post_json(

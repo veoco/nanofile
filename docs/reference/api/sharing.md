@@ -63,15 +63,6 @@ The legacy creation endpoint. **Body** (JSON): `repo_id`, `path`, optional
 `share_link.write` and read access to the library; an encrypted library is refused. Refused when share downloads
 are disabled (`server.share_download_enabled`) or when the library is encrypted.
 
-## Delete a share link {#delete-api2-shared-links-token}
-
-`DELETE /api/shared-links/{token}`
-
-Deletes one of the caller's links. **Response `200`** — `{"success": true}`.
-Requires `share_link.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
 ## List share links (v2.1) {#get-api-v2-1-share-links}
 
 `GET /api/v2.1/share-links/?repo_id=<id>&path=<path>`
@@ -156,50 +147,6 @@ Requires `share_link.write`.
 user's link is a `403`; a token that does not exist still answers `200` (the
 delete is idempotent); a link outside the API key's library scope is hidden as
 `404`.
-
-## List upload links {#get-api2-upload-links}
-
-`GET /api/upload-links/`
-
-The caller's upload links. **Response `200`**
-
-```json
-[
-  {
-    "token": "…",
-    "link": "https://files.example.com/u/…/",
-    "repo_id": "…",
-    "path": "/incoming",
-    "created_at": 1760000000
-  }
-]
-```
-
-Requires `upload_link.read`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
-## Create an upload link {#post-api2-upload-links}
-
-`POST /api/upload-links/`
-
-**Body** (JSON) — `repo_id`, `path`, optional `password` and `expires_at` (Unix
-seconds).
-
-**Response `200`** — one item in the legacy list shape. Requires
-`upload_link.write` and write access to the library. Upload links cannot target
-an encrypted library, and creation is refused when `server.share_upload_enabled`
-is off.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
-## Delete an upload link {#delete-api2-upload-links-token}
-
-`DELETE /api/upload-links/{token}`
-
-**Response `200`** — `{"success": true}`. Requires `upload_link.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## List upload links (v2.1) {#get-api-v2-1-upload-links}
 

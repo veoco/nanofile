@@ -944,11 +944,6 @@ const ROUTES: &[RouteEntry] = &[
         RouteAccess::Capability(Capability::ShareLinkWrite),
     ),
     (
-        "DELETE",
-        "/api/shared-links/{token}",
-        RouteAccess::Capability(Capability::ShareLinkWrite),
-    ),
-    (
         "GET",
         "/api/v2.1/share-links/",
         RouteAccess::Capability(Capability::ShareLinkRead),
@@ -977,21 +972,6 @@ const ROUTES: &[RouteEntry] = &[
         "DELETE",
         "/api/v2.1/share-links/{token}/",
         RouteAccess::Capability(Capability::ShareLinkWrite),
-    ),
-    (
-        "GET",
-        "/api/upload-links/",
-        RouteAccess::Capability(Capability::UploadLinkRead),
-    ),
-    (
-        "POST",
-        "/api/upload-links/",
-        RouteAccess::Capability(Capability::UploadLinkWrite),
-    ),
-    (
-        "DELETE",
-        "/api/upload-links/{token}",
-        RouteAccess::Capability(Capability::UploadLinkWrite),
     ),
     (
         "GET",

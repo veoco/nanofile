@@ -51,14 +51,6 @@
 
 **响应 `200`** —— 列表形状的一项。需要 `share_link.write` 与资料库读权限；加密资料库会被拒绝。关闭分享下载（`server.share_download_enabled`）或资料库加密时拒绝。
 
-## 删除分享链接 {#delete-api2-shared-links-token}
-
-`DELETE /api/shared-links/{token}`
-
-删除调用者的一条链接。**响应 `200`** —— `{"success": true}`。需要 `share_link.write`。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
 ## 列出分享链接（v2.1） {#get-api-v2-1-share-links}
 
 `GET /api/v2.1/share-links/?repo_id=<id>&path=<path>`
@@ -133,46 +125,6 @@
 `DELETE /api/v2.1/share-links/{token}/`
 
 **响应 `200`** —— `{"success": true}`。需要 `share_link.write`。别人的链接返回 `403`；令牌不存在仍返回 `200`（删除是幂等的）；链接超出 API 密钥的库范围时隐藏为 `404`。
-
-## 列出上传链接 {#get-api2-upload-links}
-
-`GET /api/upload-links/`
-
-调用者的上传链接。**响应 `200`**
-
-```json
-[
-  {
-    "token": "…",
-    "link": "https://files.example.com/u/…/",
-    "repo_id": "…",
-    "path": "/incoming",
-    "created_at": 1760000000
-  }
-]
-```
-
-需要 `upload_link.read`。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
-## 创建上传链接 {#post-api2-upload-links}
-
-`POST /api/upload-links/`
-
-**请求体**（JSON）—— `repo_id`、`path`、可选 `password` 与 `expires_at`（Unix 秒）。
-
-**响应 `200`** —— 旧版列表形状的一项。需要 `upload_link.write` 与资料库写权限。上传链接不能指向加密资料库；`server.share_upload_enabled` 关闭时拒绝创建。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
-## 删除上传链接 {#delete-api2-upload-links-token}
-
-`DELETE /api/upload-links/{token}`
-
-**响应 `200`** —— `{"success": true}`。需要 `upload_link.write`。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 列出上传链接（v2.1） {#get-api-v2-1-upload-links}
 

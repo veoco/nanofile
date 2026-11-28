@@ -84,10 +84,6 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/repos/{repo_id}/file/index-text/"),
     ("POST", "/api/repos/{repo_id}/file/reindex/"),
     ("GET", "/api/repos/{repo_id}/file/exif/"),
-    ("DELETE", "/api/shared-links/{token}"),
-    ("GET", "/api/upload-links"),
-    ("POST", "/api/upload-links"),
-    ("DELETE", "/api/upload-links/{token}"),
     ("POST", "/api/accounts/"),
     ("GET", "/api/admin/users/"),
     ("POST", "/api/admin/users/"),
@@ -105,6 +101,10 @@ const REPLACED_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/repos/{repo_id}/dir/move/"),
     ("GET", "/api/repos/{repo_id}/file/revision/"),
     ("POST", "/api/repos/{repo_id}/file/revision/restore/"),
+    ("DELETE", "/api/shared-links/{token}"),
+    ("GET", "/api/upload-links"),
+    ("POST", "/api/upload-links"),
+    ("DELETE", "/api/upload-links/{token}"),
 ];
 
 /// The Seafile-compatible routes those paths were replaced by. Each is added as

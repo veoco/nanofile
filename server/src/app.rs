@@ -306,16 +306,8 @@ mod tests {
             "/api/v2.1/share-links/{token}/"
         );
         assert_eq!(
-            redact_request_path("/api/shared-links/abc123"),
-            "/api/shared-links/{token}"
-        );
-        assert_eq!(
             redact_request_path("/api/v2.1/upload-links/abc123/upload/"),
             "/api/v2.1/upload-links/{token}/upload/"
-        );
-        assert_eq!(
-            redact_request_path("/api/upload-links/abc123"),
-            "/api/upload-links/{token}"
         );
         assert_eq!(
             redact_request_path("/accounts/password/reset/abc123/"),

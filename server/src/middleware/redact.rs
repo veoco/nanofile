@@ -28,7 +28,6 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "client-sso-link",
     // Capability URLs the API itself mints and returns.
     "share-links",
-    "shared-links",
     "upload-links",
     // One-shot account credentials carried in a browser path.
     "reset",

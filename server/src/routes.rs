@@ -374,14 +374,6 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
             crate::handler::library_share::nanofile_repo_routes(),
         )
         // Legacy v1 link collections and the account-administration surface.
-        .nest(
-            "/api/shared-links",
-            crate::handler::share::nanofile_share_routes(),
-        )
-        .nest(
-            "/api/upload-links",
-            crate::handler::upload_link::upload_link_routes(),
-        )
         .nest("/api/admin", crate::handler::users::admin_user_routes())
         // The avatar image bytes: seahub serves them from `/media/avatars/…`, so
         // the image path is this server's own and lives on the `/api/` namespace.

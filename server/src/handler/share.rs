@@ -1,12 +1,8 @@
-use axum::{
-    Json, Router,
-    extract::{Path, State},
-};
+use axum::{Json, Router, extract::State};
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
 use crate::middleware::auth::AuthUser;
 use crate::service::sharing::share;
 use base::error::AppError;
@@ -24,14 +20,6 @@ pub fn share_routes() -> Router<Arc<AppState>> {
         "/",
         axum::routing::get(list_share_links).post(create_share_link),
     )
-}
-
-/// The legacy v1 delete route (`DELETE /api/shared-links/{token}`).
-///
-/// seahub only registered the collection path; deleting by token in the path is
-/// this server's own legacy shape, so it lives on the Nanofile prefix.
-pub fn nanofile_share_routes() -> Router<Arc<AppState>> {
-    Router::new().route("/{token}", axum::routing::delete(delete_share_link))
 }
 
 pub async fn list_share_links(
@@ -69,13 +57,4 @@ pub async fn create_share_link(
     )
     .await?;
     Ok(Json(info))
-}
-
-pub async fn delete_share_link(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    share::delete_share_link(&state.repos, &token, auth.user_id, &auth.repo_scope()).await?;
-    Ok(ok_json())
 }

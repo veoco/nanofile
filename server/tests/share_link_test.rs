@@ -532,7 +532,10 @@ async fn test_share_link_delete_v1_own() {
 
     let del = f
         .client
-        .delete(&format!("/api/shared-links/{}", token), Some(&f.api_token))
+        .delete(
+            &format!("/api/v2.1/share-links/{}/", token),
+            Some(&f.api_token),
+        )
         .await;
     assert_eq!(del.status(), 200, "v1 delete should succeed for creator");
 }

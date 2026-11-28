@@ -172,7 +172,6 @@ pub mod starred;
 pub mod sync;
 pub mod thumbnail;
 pub mod trash;
-pub mod upload_link;
 pub mod user_avatar;
 pub mod users;
 pub mod web;
