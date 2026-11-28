@@ -309,7 +309,13 @@ impl AppState {
                  acknowledged, and concurrent sync clients can stall behind those flushes."
             );
         }
-        let enc_mode = config.storage.block_encryption_mode();
+        // The configured mode is not always what this generation may run: `on` without
+        // the conversion marker has to serve the migration window first, so this is
+        // resolved once here for the block store, the job set and the startup pass.
+        let enc_mode =
+            crate::fs::core::block_encryption_convert::BlockEncryptionConverter::startup_mode(
+                &config,
+            );
         if enc_mode != infra::storage::encrypting_block_store::BlockEncryptionMode::Off {
             let master_key = config.storage.encryption_key.as_deref().unwrap_or_else(|| {
                 panic!(

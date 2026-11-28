@@ -15,13 +15,17 @@
 //! the last one. A restart, a cancel or a crash therefore redoes at most the
 //! repository that was in flight, while a converted store short-circuits on the
 //! marker without touching a block.
+//!
+//! The marker also decides what an `on` start may assume: without it the
+//! generation serves the `lazy` window while the startup pass records it, so an
+//! upgrade from a deployment that always ran in `on` needs no manual step.
 
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
 use base::error::AppError;
-use infra::storage::{BlockStorageBackend, DynBlockStorage};
+use infra::storage::DynBlockStorage;
 
 use crate::tasks::context::JobContext;
 use crate::tasks::run::JobFailure;
@@ -168,58 +172,101 @@ impl BlockEncryptionConverter {
         Ok(report)
     }
 
-    /// Refuse to serve `on` mode from an unconverted store, and mark a store that
-    /// has nothing to convert.
+    /// The at-rest mode this server generation may actually run.
     ///
-    /// `on` reads ciphertext only, so a leftover plaintext block is an unreadable
-    /// file rather than a slow one. The marker is the only cheap record that every
-    /// block was seen; without it the operator's remedy is the offline command.
-    pub async fn prepare_at_rest_mode(config: &infra::config::Config) -> Result<(), String> {
-        use infra::storage::encrypting_block_store::BlockEncryptionMode;
+    /// `on` needs the completion marker to be safe: without it the store may still
+    /// hold pre-conversion blocks, which `on` cannot read. A store that has always run
+    /// in `on` looks exactly like that after an upgrade, and so does one whose
+    /// conversion was interrupted, so instead of refusing to serve, the generation
+    /// runs in the `lazy` window — plaintext reads still work — while the startup
+    /// conversion records the marker. The next start is strict `on`. A store with
+    /// nothing in it has nothing to convert and is marked immediately.
+    pub fn startup_mode(
+        config: &infra::config::Config,
+    ) -> infra::storage::encrypting_block_store::BlockEncryptionMode {
+        use infra::storage::encrypting_block_store::BlockEncryptionMode as Mode;
 
         let block_dir = &config.storage.block_dir;
         match config.storage.block_encryption_mode() {
-            BlockEncryptionMode::Off => {
-                if Self::is_converted(block_dir).await {
+            Mode::Off => {
+                if Self::is_converted_sync(block_dir) {
                     tracing::warn!(
                         "storage.block_encryption_mode = off but the block store was converted \
                          to at-rest ciphertext: off mode would serve the stored bytes as file \
                          content. Set the mode back to lazy or on."
                     );
                 }
-                Ok(())
+                Mode::Off
             }
-            BlockEncryptionMode::Lazy => Ok(()),
-            BlockEncryptionMode::On => {
-                if Self::is_converted(block_dir).await {
-                    return Ok(());
+            Mode::Lazy => Mode::Lazy,
+            Mode::On => {
+                if Self::is_converted_sync(block_dir) {
+                    return Mode::On;
                 }
-                let store = infra::storage::block_store::BlockStorage::new(block_dir.clone());
-                let repos = store.repo_ids().await.map_err(|e| {
-                    format!(
-                        "cannot list the block store at {}: {e}",
-                        block_dir.display()
-                    )
-                })?;
-                if repos.is_empty() {
-                    Self::write_marker(block_dir)
-                        .await
-                        .map_err(|e| e.to_string())?;
-                    tracing::info!("empty block store marked converted for at-rest encryption");
-                    return Ok(());
+                match Self::store_has_repositories(block_dir) {
+                    Ok(false) => {
+                        if let Err(e) = Self::write_marker_sync(block_dir) {
+                            tracing::warn!(
+                                "could not record the at-rest conversion marker for the empty \
+                                 block store: {e}"
+                            );
+                        } else {
+                            tracing::info!(
+                                "empty block store marked converted for at-rest encryption"
+                            );
+                        }
+                        Mode::On
+                    }
+                    // A store that cannot be listed is not proven converted; keep the
+                    // migration reads and let the background pass report the failure.
+                    Err(e) => {
+                        tracing::warn!(
+                            store = %block_dir.display(),
+                            "cannot read the block store: {e}; starting in the at-rest \
+                             migration window"
+                        );
+                        Mode::Lazy
+                    }
+                    Ok(true) => {
+                        tracing::warn!(
+                            store = %block_dir.display(),
+                            "storage.block_encryption_mode = on but the block store has no \
+                             conversion marker: starting in the at-rest migration window \
+                             (reads accept pre-encryption blocks) and converting in the \
+                             background. The next start is strict on."
+                        );
+                        Mode::Lazy
+                    }
                 }
-                Err(format!(
-                    "storage.block_encryption_mode = \"on\" but the block store at {} has not \
-                     been converted, so pre-encryption blocks would be served unreadable. Run \
-                     `nanofile convert-blocks` with the server stopped: it converts the blocks \
-                     and writes {}. A store that has always run in \"on\" mode needs that \
-                     command once; it verifies the blocks and writes the marker without \
-                     rewriting any ciphertext.",
-                    block_dir.display(),
-                    block_dir.join(Self::MARKER_FILE).display()
-                ))
             }
         }
+    }
+
+    /// The marker check for the synchronous startup path, where no runtime is needed.
+    fn is_converted_sync(block_dir: &Path) -> bool {
+        block_dir.join(Self::MARKER_FILE).exists()
+    }
+
+    /// Whether the store holds any repository directory. A directory without its
+    /// per-repository marker still counts: it may hold blocks, so the emptiness check
+    /// must not wave `on` through on a half-created or unreadable store.
+    fn store_has_repositories(block_dir: &Path) -> std::io::Result<bool> {
+        let mut entries =
+            match std::fs::read_dir(block_dir.join(infra::storage::block_store::REPOS_DIR)) {
+                Ok(entries) => entries,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+                Err(e) => return Err(e),
+            };
+        Ok(entries.any(|entry| entry.map(|entry| entry.path().is_dir()).unwrap_or(false)))
+    }
+
+    /// The marker write for the synchronous startup path. Same atomic publish as the
+    /// pass: a crash must not leave a marker that claims a conversion that never ran.
+    fn write_marker_sync(block_dir: &Path) -> std::io::Result<()> {
+        let path = block_dir.join(Self::MARKER_FILE);
+        let temp = block_dir.join(format!("{}.tmp", Self::MARKER_FILE));
+        std::fs::write(&temp, b"done")?;
+        std::fs::rename(&temp, &path)
     }
 
     /// Every repository with a block directory, in a stable order so a resumed
@@ -615,14 +662,19 @@ mod tests {
         let block_dir = dir.path().join("blocks");
         std::fs::create_dir_all(&block_dir).unwrap();
 
-        BlockEncryptionConverter::prepare_at_rest_mode(&config_with(&block_dir, "on"))
-            .await
-            .unwrap();
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "on")),
+            BlockEncryptionMode::On
+        );
         assert!(BlockEncryptionConverter::is_converted(&block_dir).await);
     }
 
+    /// A store that already holds blocks and lost its marker — an upgrade from a
+    /// deployment that always ran in `on`, or an interrupted conversion — starts in
+    /// the migration window instead of being refused, so the startup pass can record
+    /// the marker.
     #[tokio::test]
-    async fn on_mode_refuses_an_unconverted_store_with_libraries() {
+    async fn on_mode_opens_the_migration_window_for_an_unmarked_store() {
         let dir = tempfile::tempdir().unwrap();
         let block_dir = dir.path().join("blocks");
         std::fs::create_dir_all(&block_dir).unwrap();
@@ -631,15 +683,15 @@ mod tests {
             .await
             .unwrap();
 
-        let error = BlockEncryptionConverter::prepare_at_rest_mode(&config_with(&block_dir, "on"))
-            .await
-            .unwrap_err();
-        assert!(error.contains("convert-blocks"), "{error}");
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "on")),
+            BlockEncryptionMode::Lazy
+        );
         assert!(!BlockEncryptionConverter::is_converted(&block_dir).await);
     }
 
     #[tokio::test]
-    async fn on_mode_accepts_a_marked_store() {
+    async fn on_mode_is_strict_once_the_marker_exists() {
         let dir = tempfile::tempdir().unwrap();
         let block_dir = dir.path().join("blocks");
         std::fs::create_dir_all(&block_dir).unwrap();
@@ -651,13 +703,28 @@ mod tests {
             .await
             .unwrap();
 
-        BlockEncryptionConverter::prepare_at_rest_mode(&config_with(&block_dir, "on"))
-            .await
-            .unwrap();
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "on")),
+            BlockEncryptionMode::On
+        );
+    }
+
+    /// A directory under `repos/` counts even without its `.repo_id` marker: it may
+    /// hold blocks, and `on` must not be waved through a half-created store.
+    #[tokio::test]
+    async fn on_mode_keeps_the_migration_window_for_a_repository_without_its_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let block_dir = dir.path().join("blocks");
+        std::fs::create_dir_all(block_dir.join("repos").join("orphan")).unwrap();
+
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "on")),
+            BlockEncryptionMode::Lazy
+        );
     }
 
     #[tokio::test]
-    async fn lazy_and_off_modes_are_never_refused() {
+    async fn lazy_and_off_modes_run_as_configured() {
         let dir = tempfile::tempdir().unwrap();
         let block_dir = dir.path().join("blocks");
         std::fs::create_dir_all(&block_dir).unwrap();
@@ -666,10 +733,13 @@ mod tests {
             .await
             .unwrap();
 
-        for mode in ["lazy", "off"] {
-            BlockEncryptionConverter::prepare_at_rest_mode(&config_with(&block_dir, mode))
-                .await
-                .unwrap_or_else(|e| panic!("{mode} must not be refused: {e}"));
-        }
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "lazy")),
+            BlockEncryptionMode::Lazy
+        );
+        assert_eq!(
+            BlockEncryptionConverter::startup_mode(&config_with(&block_dir, "off")),
+            BlockEncryptionMode::Off
+        );
     }
 }

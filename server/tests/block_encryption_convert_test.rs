@@ -128,3 +128,57 @@ async fn a_converted_store_does_not_submit_the_startup_pass_again() {
     );
     assert!(!server.block_dir.join(".encryption_convert.log").exists());
 }
+
+/// A store that ran `on` from the start has ciphertext blocks but no completion
+/// marker. An upgrade must not require the operator to stop the server: the next
+/// generation serves the migration window and the startup pass records the marker.
+#[tokio::test]
+async fn an_on_configuration_without_the_marker_heals_itself() {
+    let server = lazy_server().await;
+    let marker = wait_for_conversion(&server).await;
+
+    // Pretend the store predates the marker: a plaintext block (as a half-finished
+    // conversion leaves) and no marker at all.
+    let data = b"block from before the conversion".to_vec();
+    let raw = BlockStorage::new(server.block_dir.clone());
+    let block_id = raw.write_block(REPO, &data).await.unwrap();
+    raw.invalidate_exists_cache();
+    std::fs::remove_file(&marker).unwrap();
+
+    // The next generation is configured for `on`; it must start, not refuse.
+    let mut config = (*server.state.config()).clone();
+    config.storage.block_encryption_mode = "on".to_string();
+    let temp = TempFileManager::new(
+        config.storage.temp_dir.clone(),
+        config.storage.max_temp_uploads,
+        config.storage.max_temp_upload_bytes,
+    )
+    .await;
+    let second = AppState::new((*server.db).clone(), config, temp);
+
+    for _ in 0..400 {
+        if server.block_dir.join(".encryption_converted").exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        server.block_dir.join(".encryption_converted").exists(),
+        "the startup pass must record the marker instead of refusing to start"
+    );
+    assert!(
+        !second.tasks.store().list(&conversion_runs()).is_empty(),
+        "the startup pass must have been submitted for the unmarked store"
+    );
+    let stored = raw.read_block(REPO, &block_id).await.unwrap();
+    assert_eq!(&stored[..4], b"NFE1");
+    assert_eq!(
+        server
+            .state
+            .block_store
+            .read_block(REPO, &block_id)
+            .await
+            .unwrap(),
+        data
+    );
+}

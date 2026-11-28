@@ -1146,19 +1146,6 @@ async fn run_server(
         }
     }
 
-    // `on` mode reads ciphertext only: a store that still holds pre-encryption
-    // plaintext would serve unreadable files. The completion marker is the cheap
-    // proof that every block was seen; an empty store is marked converted here, so
-    // a fresh install never trips this on its next start.
-    if let Err(message) =
-        server::fs::core::block_encryption_convert::BlockEncryptionConverter::prepare_at_rest_mode(
-            &config,
-        )
-        .await
-    {
-        return Err(anyhow::anyhow!(message));
-    }
-
     // A writer killed mid-block leaves a `{block_id}.{uuid}.tmp` beside the block:
     // writes publish atomically, so it is never the block itself, but it would linger
     // forever. The layout migration above already swept them on both of its paths.
