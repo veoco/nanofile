@@ -279,6 +279,10 @@ pub fn policy(key: JobKey) -> JobSpec {
                 max_deferral_hours: 0,
                 on_spike: SpikePolicy::Throttle,
             }),
+            // The pass checkpoints between batches and records each finished
+            // repository, so a cancel stops it at a safe point and a restart
+            // resumes from the progress log instead of repeating the walk.
+            cancellable: true,
             ..housekeeping(key, "block encryption convert", Trigger::Manual)
         },
     }

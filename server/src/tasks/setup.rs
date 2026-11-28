@@ -498,11 +498,10 @@ pub fn install_default_jobs(
     }
 
     // Registered as a manual job (it also runs once at startup) and only in
-    // `Lazy` mode, where pre-existing plaintext blocks can exist. A marker file
-    // records completion, so a later run skips with no I/O.
+    // `Lazy` mode, where pre-existing plaintext blocks can exist. The pass
+    // records each finished repository and skips a completed store on its
+    // marker, so a restart continues instead of walking the store again.
     if enc_mode == BlockEncryptionMode::Lazy {
-        const CONVERT_BATCH: usize = 100;
-        const CONVERT_BATCH_SLEEP_MS: u64 = 100;
         let block_dir = block_dir.to_path_buf();
         jobs.push(job_with_trigger(
             JobKey::BlockEncryptionConvert,
@@ -513,36 +512,31 @@ pub fn install_default_jobs(
                     let block_store = block_store.clone();
                     let block_dir = block_dir.clone();
                     async move {
-                        if BlockEncryptionConverter::is_converted(&block_dir).await {
-                            return Ok(Outcome::success("already converted, skipped", None));
-                        }
-                        // The batch size is scaled by the running budget, so a
-                        // busy server converts more slowly rather than stopping.
-                        let batch = ((CONVERT_BATCH as f32 * ctx.budget()) as usize).max(1);
-                        let sleep = Duration::from_millis(
-                            (CONVERT_BATCH_SLEEP_MS as f32 / ctx.budget().max(0.05)) as u64,
-                        );
-                        let converted = ctx
-                            .run_blocking(move || {
-                                tokio::runtime::Handle::current().block_on(
-                                    BlockEncryptionConverter::convert_legacy_blocks(
-                                        &block_store,
-                                        batch,
-                                        sleep,
-                                    ),
-                                )
-                            })
-                            .await?
-                            .map_err(JobFailure::App)?;
-                        let _ = tokio::fs::write(block_dir.join(".encryption_converted"), b"done")
-                            .await;
-                        Ok(if converted > 0 {
-                            Outcome::success(
-                                format!("Converted {converted} legacy blocks"),
-                                Some(converted),
-                            )
-                        } else {
+                        let report = BlockEncryptionConverter::convert_legacy_blocks(
+                            &block_store,
+                            &block_dir,
+                            Some(&ctx),
+                        )
+                        .await
+                        .map_err(|e| {
+                            if ctx.is_cancelled() {
+                                JobFailure::Cancelled
+                            } else {
+                                JobFailure::App(e)
+                            }
+                        })?;
+                        Ok(if report.already_converted {
+                            Outcome::success("already converted, skipped", None)
+                        } else if report.blocks_converted == 0 {
                             Outcome::success("no legacy blocks to convert", None)
+                        } else {
+                            Outcome::success(
+                                format!(
+                                    "Converted {} legacy blocks ({} checked)",
+                                    report.blocks_converted, report.blocks_checked
+                                ),
+                                Some(report.blocks_converted),
+                            )
                         })
                     }
                 }
