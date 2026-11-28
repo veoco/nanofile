@@ -73,7 +73,10 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
             get(download::repo_file_download),
         )
         .route(
-            "/blks/{token}/{file_id}/{block_id}",
+            // Seafile's own block URL: the token is bound to the file, so the
+            // path names only the token and the block (the file id used to be a
+            // third segment; that spelling lives under `/api/transfers/blks/`).
+            "/blks/{token}/{block_id}",
             get(download::block_download),
         )
         .route("/upload-blks-api/{token}", post(upload::upload_blks_api))
@@ -121,4 +124,12 @@ pub fn nanofile_transfer_routes() -> Router<Arc<AppState>> {
         // are synchronous per request, so both always answer 100%.
         .route("/upload-progress/", get(progress::upload_progress))
         .route("/index-progress/", get(progress::idx_progress))
+        // The self-contained block URL this server used to mint (file id in the
+        // path). Seafile's shape is `/blks/{token}/{block_id}`, so the extra
+        // segment lives here; links handed out before the move keep working for
+        // their one-hour lifetime.
+        .route(
+            "/blks/{token}/{file_id}/{block_id}",
+            get(download::block_download_self_contained),
+        )
 }

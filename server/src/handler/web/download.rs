@@ -336,36 +336,62 @@ pub async fn download_api(
     ))
 }
 
-/// `GET /blks/{token}/{file_id}/{block_id}`
+/// `GET /blks/{token}/{block_id}`
 ///
-/// Step B of the block download flow.  Validates the token, looks up the file
-/// by `file_id`, verifies the block belongs to that file, and returns the raw
-/// block bytes (matching seafile-server's `access_blks_cb`).
+/// Step B of the block download flow. Validates the token, reads the file id the
+/// token is bound to, verifies the block belongs to that file, and returns the
+/// raw block bytes (matching seafile-server's `accessBlksCB`, whose URL carries
+/// only the token and the block id).
 pub async fn block_download(
+    State(state): State<Arc<AppState>>,
+    Path((token, block_id)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::Blocks).await?;
+    let file_id = auth
+        .token
+        .file_fs_id
+        .as_deref()
+        .ok_or_else(|| AppError::NotFound("file not found".into()))?;
+    serve_block(&state, &auth.repo_id, file_id, &block_id).await
+}
+
+/// `GET /api/transfers/blks/{token}/{file_id}/{block_id}`
+///
+/// The self-contained spelling this server minted before it adopted Seafile's
+/// block URL. It is kept, under the Nanofile namespace, for links handed out
+/// before the move (a capability URL lives an hour).
+pub async fn block_download_self_contained(
     State(state): State<Arc<AppState>>,
     Path((token, file_id, block_id)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
     let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::Blocks).await?;
+    serve_block(&state, &auth.repo_id, &file_id, &block_id).await
+}
 
-    let repo_id = &auth.repo_id;
-
+/// Serve one block once the token and the file's block list both accept it.
+async fn serve_block(
+    state: &AppState,
+    repo_id: &str,
+    file_id: &str,
+    block_id: &str,
+) -> Result<Response, AppError> {
     let file_obj = state
         .repos
         .fs_object
-        .find_by_repo_and_fs_id(repo_id, &file_id)
+        .find_by_repo_and_fs_id(repo_id, file_id)
         .await?
         .ok_or_else(|| AppError::NotFound("file not found".into()))?;
 
     let file_data: FsFileData = serde_json::from_str(&file_obj.data)
         .map_err(|e| AppError::Internal(format!("invalid file data: {e}")))?;
 
-    if !file_data.block_ids.contains(&block_id) {
+    if !file_data.block_ids.iter().any(|id| id == block_id) {
         return Err(AppError::NotFound("block not found".into()));
     }
 
     let block_data = state
         .block_store
-        .read_block(repo_id, &block_id)
+        .read_block(repo_id, block_id)
         .await
         .map_err(|_| AppError::NotFound("block data not found".into()))?;
 

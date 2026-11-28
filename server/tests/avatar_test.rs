@@ -32,7 +32,10 @@ async fn upload_avatar(f: &TestFixture, name: &str, bytes: Vec<u8>) -> reqwest::
 
 async fn get_avatar_image(f: &TestFixture, size: u32) -> reqwest::Response {
     f.client
-        .get(&format!("/avatars/user/{}/resized/{size}/", f.email), None)
+        .get(
+            &format!("/api/avatars/user/{}/resized/{size}/", f.email),
+            None,
+        )
         .await
 }
 
@@ -88,9 +91,36 @@ async fn test_avatar_image_oversized_size_rejected() {
 
     let resp = f
         .client
-        .get(&format!("/avatars/user/{}/resized/100000/", f.email), None)
+        .get(
+            &format!("/api/avatars/user/{}/resized/100000/", f.email),
+            None,
+        )
         .await;
     assert_eq!(resp.status(), 400);
+}
+
+/// The image route's pre-move root spelling answers a permanent redirect into the
+/// `/api/` namespace: avatar URLs are embedded in responses and pages, so a
+/// browser holding one must keep rendering the image.
+#[tokio::test]
+async fn test_avatar_image_legacy_path_redirects() {
+    let f = TestFixture::new().await;
+
+    // The shared test client follows redirects; use the no-redirect flavour so
+    // the permanent redirect and its `Location` stay visible.
+    let ui = common::client::TestClient::new_ui_session(&f.server.base_url);
+    let resp = ui
+        .get(&format!("/avatars/user/{}/resized/80/", f.email), None)
+        .await;
+    assert_eq!(resp.status(), 308, "the old image path must redirect");
+    let expected = format!("/api/avatars/user/{}/resized/80/", f.email);
+    assert_eq!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(expected.as_str()),
+        "the redirect must land on the /api/ avatar route"
+    );
 }
 
 #[tokio::test]

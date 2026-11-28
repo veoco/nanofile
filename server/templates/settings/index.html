@@ -11,7 +11,7 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token.as_deref().unwrap_or("") }}">
 
 <div class="flex items-center gap-3">
-    <img src="/avatars/user/{{ user_email }}/resized/96/" alt=""
+    <img src="/api/avatars/user/{{ user_email }}/resized/96/" alt=""
          class="h-11 w-11 flex-shrink-0 rounded-full object-cover bg-raised">
     <div class="min-w-0">
         <p class="truncate text-[14px] font-medium text-ink">{{ t.tr("settings.greeting") }} {{ user_display_name }}</p>

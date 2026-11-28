@@ -682,6 +682,7 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/reference/api/files#get-api2-repos-repo-id-thumbnail) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/reference/api/transfers#get-repos-repo-id-files-path) |
+| `GET /blks/{token}/{block_id}` | [docs](/reference/api/transfers#get-blks-token-block-id) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |
 | `POST /api2/repos/{repo_id}/upload-blks-link/` | [docs](/reference/api/libraries#post-api2-repos-repo-id-upload-blks-link) |
 | `GET /api2/repos/{repo_id}/update-blks-link/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-update-blks-link) |
@@ -713,7 +714,7 @@ These routes are served but are not an operation in the official reference. Most
 
 Route-level rows cannot capture everything. These differences apply across the surface; the endpoint pages and [Seafile compatibility](/dev/protocol#deliberate-deviations) give the protocol-level detail.
 
-- **Breaking change.** 0.1.x: Nanofile's own endpoints moved from `/api2/`/`/api/v2.1/` to `/api/`; the old paths answer 404. The Nanofile-only transfer endpoints got the same treatment: the session upload/update forms, `/download-api/{token}` and the progress shims moved under `/api/transfers/`; the old root paths answer 404. Seafile-compatible routes are unchanged.
+- **Breaking change.** 0.1.x: Nanofile's own endpoints moved from `/api2/`/`/api/v2.1/` to `/api/`; the old paths answer 404. The Nanofile-only transfer endpoints got the same treatment: the session upload/update forms, `/download-api/{token}` and the progress shims moved under `/api/transfers/`; the old root paths answer 404. The avatar image moved from `/avatars/user/{email}/resized/{size}/` to `/api/avatars/…` (the old path answers a permanent redirect), and the block URL took Seafile's two-segment `/blks/{token}/{block_id}` shape: the old three-segment spelling moved to `/api/transfers/blks/{token}/{file_id}/{block_id}` and the root path answers 404. The Seafile-compatible routes themselves are unchanged.
 - **Credentials.** Besides the account token, Nanofile accepts API keys (capability-scoped, library-scoped) and, on `/seafhttp/`, repository sync tokens. Repo-Token callers use a library-scoped API key; the `/via-repo-token/` mirror is not routed.
 - **Authorization header.** Both `Bearer` and the legacy `Token` prefix are accepted on every API route, so clients written for pre-11 and post-11 Seafile both work.
 - **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`. A lock conflict is `403` with the plain-text body `File <path> is locked` on sync commits and on the lock endpoint; REST/WebDAV deletes of a file locked by another user answer `423` with a JSON `error_msg`. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.
@@ -722,6 +723,9 @@ Route-level rows cannot capture everything. These differences apply across the s
 - **Listings.** The legacy directory listing hides `_Internal`, sorts directories first by lowercased name, and reports the real `dir_perm`/`permission`; `?oid=` revalidation is not implemented.
 - **Search.** `/api/v2.1/search-file/` caps results at 200; `/api2/search/` ignores the Pro-only filters.
 - **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. The Nanofile-only session forms, the token download and the progress shims live under `/api/transfers/`. `zip-task` mints with `POST`.
+- **Block downloads.** `GET /blks/{token}/{block_id}` keeps the fileserver's two-segment shape: the token names the file, the path only the block. The earlier self-contained `/blks/{token}/{file_id}/{block_id}` moved to `/api/transfers/blks/{token}/{file_id}/{block_id}`; the old root spelling answers 404.
+- **Avatars.** The image bytes are served from `/api/avatars/user/{email}/resized/{size}/`; seahub serves them from `/media/avatars/…`, which this server does not implement. The old root `/avatars/…` spelling answers a permanent redirect.
+- **Share and upload pages.** The pages behind a link are `/f/{token}`, `/d/{token}`, `/d/{token}/files/{path}` and `/u/{token}`, where seahub uses `/u/d/{token}/` and `/d/{token}/files/?p=`. Links minted here use these shapes; a link copied from a Seafile deployment is not translated.
 - **WebDAV.** It lives at `/dav/{repo_id}/` (not `/seafdav`), takes an email plus a WebDAV API key as Basic credentials, refuses encrypted libraries with `403`, and does not store properties or enforce locks.
 - **Notification.** `/notification` speaks the Seafile notification protocol with per-subscription JWTs; it is not part of the Web API reference.
 - **Administrator-managed sharing.** A library can be private, shared with listed users, or public to all accounts; group sharing, per-folder permissions, comments, wikis, invitations, snapshot labels, OCR and face recognition are not implemented. Those official groups are `Missing` above.

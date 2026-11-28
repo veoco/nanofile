@@ -678,6 +678,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api2/repos/{repo_id}/thumbnail/` | [docs](/zh/reference/api/files#get-api2-repos-repo-id-thumbnail) |
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/zh/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/zh/reference/api/transfers#get-repos-repo-id-files-path) |
+| `GET /blks/{token}/{block_id}` | [docs](/zh/reference/api/transfers#get-blks-token-block-id) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |
 | `POST /api2/repos/{repo_id}/upload-blks-link/` | [docs](/zh/reference/api/libraries#post-api2-repos-repo-id-upload-blks-link) |
 | `GET /api2/repos/{repo_id}/update-blks-link/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-update-blks-link) |
@@ -709,7 +710,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 路由级的表格无法覆盖全部差异。以下差异适用于整个接口面；协议层细节见各接口页与 [Seafile 兼容性](/zh/dev/protocol#刻意保留的偏差)。
 
-- **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Nanofile 自有的传输接口同样迁移：会话上传/更新表单、`/download-api/{token}` 与进度桩移到 `/api/transfers/`，旧的根路径返回 404。Seafile 兼容路由不变。
+- **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Nanofile 自有的传输接口同样迁移：会话上传/更新表单、`/download-api/{token}` 与进度桩移到 `/api/transfers/`，旧的根路径返回 404。头像图片从 `/avatars/user/{email}/resized/{size}/` 迁到 `/api/avatars/…`（旧路径永久重定向）；块下载 URL 改为 Seafile 的两段形状 `/blks/{token}/{block_id}`，旧的三段拼写移到 `/api/transfers/blks/{token}/{file_id}/{block_id}`，旧根路径返回 404。Seafile 兼容路由本身不变。
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
 - **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交与加锁接口上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
@@ -718,6 +719,9 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 - **列表。** 旧版目录列表隐藏 `_Internal`，目录在前并按小写名称排序，报告真实的 `dir_perm`/`permission`；未实现 `?oid=` 校验。
 - **搜索。** `/api/v2.1/search-file/` 最多 200 条；`/api2/search/` 忽略 Pro 专属过滤参数。
 - **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。Nanofile 自有的会话表单、令牌下载与进度桩位于 `/api/transfers/`。`zip-task` 用 `POST`。
+- **块下载。** `GET /blks/{token}/{block_id}` 保持 fileserver 的两段形状：令牌记录文件，路径只带块 id。此前的自包含拼写 `/blks/{token}/{file_id}/{block_id}` 移到 `/api/transfers/blks/{token}/{file_id}/{block_id}`；旧的根路径返回 404。
+- **头像。** 图片字节由 `/api/avatars/user/{email}/resized/{size}/` 提供；seahub 用的是 `/media/avatars/…`，本服务未实现那个前缀。旧的根路径 `/avatars/…` 永久重定向。
+- **分享与上传页面。** 链接打开的页面是 `/f/{token}`、`/d/{token}`、`/d/{token}/files/{path}` 与 `/u/{token}`；seahub 用的是 `/u/d/{token}/` 与 `/d/{token}/files/?p=`。本服务签发的链接用前一组形状；从 Seafile 部署复制过来的链接不会自动转换。
 - **WebDAV。** 位于 `/dav/{repo_id}/`（不是 `/seafdav`），Basic 凭据是邮箱加 WebDAV API 密钥，加密资料库返回 `403`，不保存属性也不强制执行锁。
 - **通知。** `/notification` 使用 Seafile 通知协议与按订阅签发的 JWT；它不属于 Web API 参考。
 - **管理员共享。** 资料库可以是私有、共享给指定用户或公开给所有账号；群组共享、目录级权限、评论、Wiki、邀请、快照标签、OCR 与人脸识别均未实现，这些官方分组在上表中为 `未实现`。

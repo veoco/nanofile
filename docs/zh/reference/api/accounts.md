@@ -20,7 +20,7 @@
   "id": 2,
   "usage": 22020651,
   "total": 30000000,
-  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/80/",
+  "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/80/",
   "contact_email": "user@example.com",
   "space_usage": "73.40217%"
 }
@@ -70,12 +70,18 @@
 **响应 `200`**
 
 ```json
-{ "url": "https://files.example.com/avatars/user/user@example.com/resized/256/", "is_default": false, "mtime": 1760000000 }
+{ "url": "https://files.example.com/api/avatars/user/user@example.com/resized/256/", "is_default": false, "mtime": 1760000000 }
 ```
 
 接口从不泄露邮箱是否存在：未知用户或没有头像时返回默认头像 URL，`is_default: true`、`mtime: 0`。需要 `account.read`。
 
-图片本身在 `GET /avatars/user/{email}/resized/{size}/` 匿名提供（没有头像时返回 SVG 默认图），因为头像 URL 会嵌在页面与客户端里。
+## 获取头像图片 {#get-avatar-image}
+
+`GET /api/avatars/user/{email}/resized/{size}/`
+
+上面 `url` 指向的图片字节。匿名提供，因为头像 URL 会嵌在页面与客户端里；未知用户或没有头像的账号得到 SVG 默认图。缩略图首次访问时生成并缓存（`Cache-Control: private, max-age=86400`）。
+
+该路径是 Nanofile 自有的：seahub 把图片字节放在 `/media/avatars/…`，本服务未实现那个前缀。旧的根路径拼写 `/avatars/user/{email}/resized/{size}/` 会永久重定向到这里。
 
 ## 上传头像 {#post-api-v2-1-user-avatar}
 
@@ -88,7 +94,7 @@
 **响应 `200`**
 
 ```json
-{ "avatar_url": "/avatars/user/user@example.com/resized/256/" }
+{ "avatar_url": "/api/avatars/user/user@example.com/resized/256/" }
 ```
 
 ## 列出用户 {#get-api2-admin-users}

@@ -30,11 +30,17 @@
 
 令牌 URL 每次签发都不同，可缓存一小时（`Cache-Control: max-age=3600`）。
 
-## 下载单个块 {#get-blks-token-file-id-block-id}
+## 下载单个块 {#get-blks-token-block-id}
 
-`GET /blks/{token}/{file_id}/{block_id}`
+`GET /blks/{token}/{block_id}`
 
-返回文件的一个块，供逐块解密的客户端使用。块按内容寻址且不可变，因此带 `Cache-Control: max-age=3600`。令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，绑定的是资料库与调用者而不是单个块：在有效期内，调用者能读取该库中任意文件的任意块；接口仍会校验所请求的块属于路径里给出的 `file_id`。
+返回文件的一个块，供逐块解密的客户端使用。块按内容寻址且不可变，因此带 `Cache-Control: max-age=3600`。
+
+URL 保持 fileserver 的两段形状；令牌由 [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/zh/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link) 签发，绑定资料库与调用者，并记下它可服务的文件；接口仍会校验所请求的块属于该文件。
+
+带文件 id 的自包含旧拼写仍然可用（位于 Nanofile 命名空间），供变更前签发出去的链接使用：
+
+`GET /api/transfers/blks/{token}/{file_id}/{block_id}`
 
 ## 上传文件 {#post-upload-api-token}
 

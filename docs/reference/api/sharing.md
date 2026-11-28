@@ -362,7 +362,7 @@ File and library events visible to the caller. `page` defaults to 1 and
       "author_name": "User",
       "author_contact_email": "user@example.com",
       "login_id": "",
-      "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/256/",
+      "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/256/",
       "user_name": "User",
       "user_email": "user@example.com",
       "details": [{ "repo_name": "Docs" }],
@@ -427,7 +427,7 @@ download-link listings; those links are now listed by
       "name": "reader@example.com",
       "nickname": "Reader",
       "contact_email": "reader@example.com",
-      "avatar_url": "https://files.example.com/avatars/reader@example.com/resized/72/"
+      "avatar_url": "https://files.example.com/api/avatars/reader@example.com/resized/72/"
     },
     "permission": "r",
     "is_admin": false

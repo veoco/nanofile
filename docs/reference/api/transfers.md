@@ -56,17 +56,22 @@ request; an invalid or expired token is a `400`.
 The token URL is unique per issuance, so it is cacheable for an hour
 (`Cache-Control: max-age=3600`).
 
-## Download one block {#get-blks-token-file-id-block-id}
+## Download one block {#get-blks-token-block-id}
 
-`GET /blks/{token}/{file_id}/{block_id}`
+`GET /blks/{token}/{block_id}`
 
 Serves one block of a file, for clients that decrypt block by block. Blocks are
 content-addressed and immutable, so they carry `Cache-Control: max-age=3600`.
-The token is minted by [`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link)
-and is bound to the library and caller, not to a single block: while it is valid
-it can serve any block of any file the caller may read in that library. The
-endpoint still checks that the requested block belongs to the file named in the
-path.
+
+The URL keeps the fileserver's two-segment shape; the token is minted by
+[`GET /api2/repos/{repo_id}/files/{file_id}/blks/{block_id}/download-link/`](/reference/api/libraries#get-api2-repos-repo-id-files-file-id-blks-block-id-download-link),
+is bound to the library and caller, and names the file whose blocks it may
+serve. The endpoint still checks that the requested block belongs to that file.
+
+The earlier self-contained spelling, with the file id in the path, is still
+served from the Nanofile namespace for links handed out before the change:
+
+`GET /api/transfers/blks/{token}/{file_id}/{block_id}`
 
 ## Upload a file {#post-upload-api-token}
 

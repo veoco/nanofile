@@ -8,10 +8,16 @@
 //!
 //! The transfer surface got the same treatment: the session upload/update forms,
 //! the token download and the progress shims used to sit at the root beside the
-//! fileserver's own paths; they live under `/api/transfers/` now.
+//! fileserver's own paths; they live under `/api/transfers/` now. Two shape
+//! fixes followed the same rule: the avatar image moved to `/api/avatars/` (it
+//! is not a Seafile path), and the block URL took the fileserver's two-segment
+//! shape, with the earlier self-contained spelling moved to
+//! `/api/transfers/blks/`.
 //!
 //! These tests pin both splits:
-//! * every moved method+path answers `404` (no alias, no redirect),
+//! * every moved method+path answers `404` (no alias, no redirect); the avatar
+//!   image is the exception, answering a permanent redirect because its URLs are
+//!   embedded in pages and clients,
 //! * none of them is still listed in the capability route table,
 //! * every new method+path exists and still demands its credential,
 //! * the Seafile paths that merely shared a prefix (`/api2/account/info/`,
@@ -331,6 +337,54 @@ async fn seafile_transfer_paths_stay_at_the_root() {
     assert!(
         download_url.contains("/api/transfers/download/"),
         "the download URL is minted in the Nanofile namespace, got: {download_url}"
+    );
+}
+
+/// The avatar image bytes are this server's own (seahub serves them from
+/// `/media/avatars/…`), so the image route moved under `/api/avatars/`: the JSON
+/// endpoint mints the new path, and the old root spelling answers a permanent
+/// redirect rather than the 404 the other moves answer — the URLs are embedded
+/// in pages and clients, and a browser holding one must keep rendering it.
+#[tokio::test]
+async fn the_avatar_image_lives_on_the_api_namespace() {
+    let f = TestFixture::new().await;
+
+    let inventory: Vec<(&str, &str)> = route_inventory().collect();
+    let classified = inventory.iter().any(|(method, path)| {
+        *method == "GET" && template(path) == template("/api/avatars/user/{email}/resized/{size}/")
+    });
+    assert!(
+        classified,
+        "the avatar image route must be classified, or the fail-closed guard denies it"
+    );
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/avatars/user/{}/resized/80/", f.email),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let url = body["url"].as_str().expect("the response carries the url");
+    assert!(
+        url.contains("/api/avatars/user/"),
+        "the avatar URL must live in the API namespace, got: {url}"
+    );
+
+    let ui = common::client::TestClient::new_ui_session(&f.server.base_url);
+    let resp = ui
+        .get(&format!("/avatars/user/{}/resized/80/", f.email), None)
+        .await;
+    assert_eq!(resp.status(), 308, "the old image path must redirect");
+    assert!(
+        resp.headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with("/api/avatars/user/")),
+        "the redirect must land on the /api/ avatar route, got: {:?}",
+        resp.headers().get("location")
     );
 }
 

@@ -1,8 +1,8 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{OriginalUri, Path, State},
     http::{StatusCode, header},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use serde::Serialize;
 use std::sync::Arc;
@@ -67,8 +67,11 @@ pub async fn get_avatar(
     }
 }
 
-/// `GET /avatars/user/{email}/resized/{size}/` — the image binary or the default-avatar
-/// SVG; thumbnails are generated and cached on first access.
+/// `GET /api/avatars/user/{email}/resized/{size}/` — the image binary or the
+/// default-avatar SVG; thumbnails are generated and cached on first access.
+///
+/// Seafile has no root path for the image bytes (seahub serves them from
+/// `/media/avatars/…`), so this one lives under the Nanofile `/api/` namespace.
 pub async fn serve_avatar_image(
     State(state): State<Arc<AppState>>,
     Path((email, size_str)): Path<(String, String)>,
@@ -118,10 +121,34 @@ pub fn api_routes() -> Router<Arc<AppState>> {
     )
 }
 
-/// Image-binary route, mounted at the root so `primary_avatar_url()` paths resolve.
+/// Image-binary route, nested under `/api` by the caller, so
+/// `primary_avatar_url()` paths resolve.
 pub fn image_routes() -> Router<Arc<AppState>> {
     Router::new().route(
-        "/avatars/user/{email}/resized/{size}/",
+        "/user/{email}/resized/{size}/",
         axum::routing::get(serve_avatar_image),
     )
+}
+
+/// `/avatars/user/{email}/resized/{size}/` — the image route's pre-0.1.x home.
+///
+/// It answers a permanent redirect, not a 404: the URLs are embedded in
+/// responses and pages, so a browser holding one keeps rendering the image.
+pub fn legacy_image_routes() -> Router<Arc<AppState>> {
+    Router::new().route(
+        "/avatars/user/{email}/resized/{size}/",
+        axum::routing::get(redirect_legacy_image),
+    )
+}
+
+/// Move the old image path under `/api/`, query string and all.
+///
+/// Built from the request URI rather than the decoded path parameters so the
+/// redirect target keeps the caller's own percent-encoding.
+async fn redirect_legacy_image(OriginalUri(uri): OriginalUri) -> Redirect {
+    let target = match uri.query() {
+        Some(query) => format!("/api{path}?{query}", path = uri.path()),
+        None => format!("/api{}", uri.path()),
+    };
+    Redirect::permanent(&target)
 }

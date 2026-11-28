@@ -145,7 +145,7 @@ Metadata for one file, including its last modifier and star state.
   "last_modifier_name": "user@example.com",
   "last_modifier_email": "user@example.com",
   "last_modifier_contact_email": "user@example.com",
-  "last_modifier_avatar": "https://files.example.com/avatars/user/user@example.com/resized/72/",
+  "last_modifier_avatar": "https://files.example.com/api/avatars/user/user@example.com/resized/72/",
   "starred": false,
   "comment_total": 0,
   "can_edit": true

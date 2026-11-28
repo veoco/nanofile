@@ -166,6 +166,11 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/transfers/update/"),
     ("GET",    "/api/transfers/upload-progress/"),
     ("GET",    "/api/transfers/index-progress/"),
+    // The two extra surfaces that moved onto the Nanofile namespace: the avatar
+    // image bytes (seahub's are under `/media/avatars/…`) and the pre-move
+    // self-contained block URL (upstream's is `/blks/{token}/{block_id}`).
+    ("GET",    "/api/avatars/user/a@b.c/resized/96/"),
+    ("GET",    "/api/transfers/blks/{token}/{file_id}/{block_id}"),
     ("GET",    "/api/keys/"),
     ("POST",   "/api/keys/"),
     ("GET",    "/api/keys/catalog/"),
@@ -308,6 +313,17 @@ fn sensitive_routes_have_the_expected_access() {
     assert_eq!(
         required_access("POST", "/api/transfers/upload/"),
         Some(RouteAccess::SessionOnly)
+    );
+    // The avatar image bytes and the pre-move block URL are bearer surfaces: the
+    // image is unauthenticated by design (seahub's is too) and the block URL
+    // validates its own capability token, so neither can require a credential.
+    assert_eq!(
+        required_access("GET", "/api/avatars/user/a@b.c/resized/96/"),
+        Some(RouteAccess::Public)
+    );
+    assert_eq!(
+        required_access("GET", "/api/transfers/blks/t/file/block"),
+        Some(RouteAccess::Public)
     );
     // A WebDAV preset grants only `webdav.*`, so no `/api2` route may be
     // satisfiable by a WebDAV capability.

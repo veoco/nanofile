@@ -581,12 +581,13 @@ impl FileService {
         let token =
             self.token_manager
                 .generate(repo_id, user_id, email, "downloadblks", parent_dir);
+        // Seafile's block URL is `/blks/{token}/{block_id}`; the file id lives in
+        // the token (the fileserver's own access-token shape), so the served URL
+        // matches the one upstream mints.
+        self.token_manager.set_block_file(&token, file_id);
         let base = self.config.get().server.download_url_base(host_header);
         Ok(crate::service::urls::capability_rest(
-            &base,
-            "blks",
-            &token,
-            &format!("{file_id}/{block_id}"),
+            &base, "blks", &token, block_id,
         ))
     }
 

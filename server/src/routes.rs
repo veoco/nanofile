@@ -388,6 +388,9 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
             crate::handler::upload_link::upload_link_routes(),
         )
         .nest("/api/admin", crate::handler::users::admin_user_routes())
+        // The avatar image bytes: seahub serves them from `/media/avatars/…`, so
+        // the image path is this server's own and lives on the `/api/` namespace.
+        .nest("/api/avatars", crate::handler::avatar::image_routes())
         // Byte-moving endpoints with no Seafile counterpart (the session upload
         // and update forms, the token download, the progress shims). They accept
         // upload-sized bodies, like the fileserver paths they sit beside.

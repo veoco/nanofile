@@ -177,6 +177,17 @@ async fn test_block_download_link_serves_block() {
         url.contains(&block_id),
         "URL must name the block, got {url}"
     );
+    // Seafile's block URL is `/blks/{token}/{block_id}`: two segments, with the
+    // file id carried by the token rather than spelled in the path.
+    let rest = url
+        .split("/blks/")
+        .nth(1)
+        .expect("the URL names the /blks/ surface");
+    assert_eq!(
+        rest.trim_end_matches('/').split('/').count(),
+        2,
+        "the block URL must keep the fileserver's two-segment shape, got {url}"
+    );
 
     let resp = f.client.get(path_of(&url, "/blks/"), None).await;
     assert_eq!(resp.status(), 200);
@@ -206,6 +217,50 @@ async fn test_block_download_link_serves_block() {
             .unwrap()
             .contains("not valid for download")
     );
+}
+
+/// The self-contained block URL this server minted before adopting Seafile's
+/// shape still serves, from its `/api/transfers/blks/` home: the file id travels
+/// in the path there, and links handed out under it stay valid for their hour.
+#[tokio::test]
+async fn test_block_download_self_contained_legacy_path() {
+    let f = TestFixture::new().await;
+    let data = b"legacy self-contained block";
+    upload(&f, "/", "legacy-block.bin", data).await;
+    let file_id = file_detail_id(&f, "/legacy-block.bin").await;
+    let block_id = sha1_hex(data);
+
+    let resp = f
+        .client
+        .get(
+            &format!(
+                "/api2/repos/{}/files/{}/blks/{}/download-link/",
+                f.repo_id, file_id, block_id
+            ),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200);
+    let url: String = resp.json().await.unwrap();
+    let token = url
+        .split("/blks/")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .expect("block token");
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/transfers/blks/{token}/{file_id}/{block_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "the pre-move block URL must keep serving its block"
+    );
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), data);
 }
 
 /// The token URL supports resumable ranges and reports an unsatisfiable range.

@@ -10,7 +10,7 @@
 | --- | --- |
 | `/api2/` | 旧版 Seafile REST API。官方桌面端与移动端客户端仍大量使用。 |
 | `/api/v2.1/` | 较新的 REST API，网页界面与移动端使用。 |
-| `/api/` | Nanofile 自有 API —— API 密钥、搜索/索引控制、重命名/移动辅助接口、资料库可见性，以及 Nanofile 自有的传输接口（会话上传/更新表单、令牌下载、进度桩）。不属于 Seafile 的 API。 |
+| `/api/` | Nanofile 自有 API —— API 密钥、搜索/索引控制、重命名/移动辅助接口、资料库可见性、头像图片字节，以及 Nanofile 自有的传输接口（会话上传/更新表单、令牌下载、进度桩）。不属于 Seafile 的 API。 |
 | `/seafhttp/` | 客户端守护进程与服务器之间的同步协议，见 [同步协议](/zh/reference/api/sync)。 |
 | `/dav/{repo_id}/` | WebDAV，见 [WebDAV](/zh/reference/api/webdav)。 |
 | `/notification` | 客户端订阅资料库更新的 WebSocket，见 [通知 WebSocket](/zh/reference/api/notification)。 |

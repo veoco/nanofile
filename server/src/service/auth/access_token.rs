@@ -216,6 +216,19 @@ impl AccessTokenManager {
         self.set_upload_link(token, link_id, None);
     }
 
+    /// Bind a block-download token to the file whose blocks it may serve.
+    ///
+    /// Seafile's block URL names only the token and the block id, so the file id
+    /// cannot travel in the path: the fileserver keeps it in the access token
+    /// instead and checks the block belongs to that file.
+    pub fn set_block_file(&self, token: &str, file_fs_id: &str) {
+        if let Ok(mut guard) = self.tokens.write()
+            && let Some(entry) = guard.get_mut(token)
+        {
+            entry.file_fs_id = Some(file_fs_id.to_owned());
+        }
+    }
+
     /// Bind an upload token to the link it was minted from and carry the link's
     /// own expiry. `None` keeps the token's one-hour lifetime.
     pub fn set_upload_link(&self, token: &str, link_id: i32, expires_at: Option<i64>) {

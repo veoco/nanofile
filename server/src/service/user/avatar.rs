@@ -24,8 +24,13 @@ pub fn default_avatar_bytes() -> &'static [u8] {
 }
 
 /// The avatar URL path used across activities, groups and share links.
+///
+/// The image bytes are a Nanofile addition (seahub serves them from
+/// `/media/avatars/…`, a prefix this server does not implement), so the path
+/// lives under the `/api/` namespace; the old root spelling answers a permanent
+/// redirect.
 pub fn primary_avatar_url(email: &str, size: u32) -> String {
-    format!("/avatars/user/{}/resized/{}/", email, size)
+    format!("/api/avatars/user/{}/resized/{}/", email, size)
 }
 
 pub struct AvatarService {

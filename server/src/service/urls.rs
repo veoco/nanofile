@@ -1,9 +1,9 @@
 //! Absolute URL construction for every capability and share link.
 //!
 //! The pieces used to be spelled out at each mint point (`/upload-api/{token}`,
-//! `/blks/{token}/{file_id}/{block_id}`, `/f/{token}/`, `/u/{token}/`, …). They
-//! live here so a shape change is one edit, and so the "always trim the base"
-//! rule cannot be forgotten.
+//! `/blks/{token}/{block_id}`, `/f/{token}/`, `/u/{token}/`, …). They live here
+//! so a shape change is one edit, and so the "always trim the base" rule cannot
+//! be forgotten.
 
 /// `{base}/{op}/{token}` — the shape of the upload, update and block capability
 /// URLs.
@@ -11,7 +11,7 @@ pub fn capability(base: &str, op: &str, token: &str) -> String {
     format!("{}/{op}/{token}", base.trim_end_matches('/'))
 }
 
-/// `{base}/{op}/{token}/{rest}` — the block URL adds the file and block ids.
+/// `{base}/{op}/{token}/{rest}` — the block URL adds the block id.
 pub fn capability_rest(base: &str, op: &str, token: &str, rest: &str) -> String {
     format!(
         "{}/{op}/{token}/{}",
@@ -75,12 +75,12 @@ mod tests {
     #[test]
     fn capability_rest_joins_the_extra_path() {
         assert_eq!(
-            capability_rest("http://h/", "blks", "t", "file-id/block-id"),
-            "http://h/blks/t/file-id/block-id"
+            capability_rest("http://h/", "blks", "t", "block-id"),
+            "http://h/blks/t/block-id"
         );
         assert_eq!(
-            capability_rest("http://h", "blks", "t", "/file-id/block-id"),
-            "http://h/blks/t/file-id/block-id"
+            capability_rest("http://h", "blks", "t", "/block-id"),
+            "http://h/blks/t/block-id"
         );
     }
 

@@ -199,7 +199,7 @@ Nanofile 实现的 Seafile 元数据服务、标签接口，以及两套搜索 A
 ```json
 {
   "user_list": [
-    { "email": "user@example.com", "name": "User", "contact_email": "user@example.com", "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/72/" }
+    { "email": "user@example.com", "name": "User", "contact_email": "user@example.com", "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/72/" }
   ]
 }
 ```

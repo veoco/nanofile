@@ -73,7 +73,10 @@ pub fn app_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         )))
         .merge(crate::notification::notification_routes())
         .merge(crate::webdav::webdav_routes().layer(DefaultBodyLimit::max(upload_body_limit)))
-        .merge(crate::handler::avatar::image_routes())
+        // The avatar image moved to `/api/avatars/…` (it was never a Seafile
+        // path); the old root spelling answers a permanent redirect so URLs
+        // already embedded in pages and clients keep working.
+        .merge(crate::handler::avatar::legacy_image_routes())
         // Count work in flight, for the load gauge. Applied here rather than in
         // `build_app` so the static-asset route stays outside it: a page load
         // fetching a dozen assets is not a busy server.

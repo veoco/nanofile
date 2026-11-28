@@ -17,7 +17,7 @@ endpoint's page and collected on the compatibility page.
 | --- | --- |
 | `/api2/` | The legacy Seafile REST API. The official desktop and mobile clients still use much of it. |
 | `/api/v2.1/` | The newer REST API used by the web interface and the mobile clients. |
-| `/api/` | Nanofile-specific API — API keys, search/index controls, rename/move helpers, library visibility, and the Nanofile-only transfer endpoints (session upload/update forms, token download, progress shims). Not part of Seafile's API. |
+| `/api/` | Nanofile-specific API — API keys, search/index controls, rename/move helpers, library visibility, the avatar image bytes, and the Nanofile-only transfer endpoints (session upload/update forms, token download, progress shims). Not part of Seafile's API. |
 | `/seafhttp/` | The sync protocol between a client daemon and the server. See [Sync protocol](/reference/api/sync). |
 | `/dav/{repo_id}/` | WebDAV. See [WebDAV](/reference/api/webdav). |
 | `/notification` | The WebSocket the clients subscribe to for library updates. See [Notification WebSocket](/reference/api/notification). |

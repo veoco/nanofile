@@ -220,7 +220,7 @@ fn transfer_endpoints_are_documented() {
     // `every_classified_route_is_documented` covers them.)
     let expected: &[(&str, &str)] = &[
         ("GET", "/repos/{repo_id}/files/{path}"),
-        ("GET", "/blks/{token}/{file_id}/{block_id}"),
+        ("GET", "/blks/{token}/{block_id}"),
         ("POST", "/upload-api/{token}"),
         ("POST", "/upload-aj/{token}"),
         ("POST", "/update-api/{token}"),

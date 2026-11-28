@@ -24,7 +24,7 @@ Returns the authenticated account and its quota usage.
   "id": 2,
   "usage": 22020651,
   "total": 30000000,
-  "avatar_url": "https://files.example.com/avatars/user/user@example.com/resized/80/",
+  "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/80/",
   "contact_email": "user@example.com",
   "space_usage": "73.40217%"
 }
@@ -87,16 +87,25 @@ image-binary route; `size` snaps to one of 32, 48, 64, 72, 80, 96, 128 or 256
 **Response `200`**
 
 ```json
-{ "url": "https://files.example.com/avatars/user/user@example.com/resized/256/", "is_default": false, "mtime": 1760000000 }
+{ "url": "https://files.example.com/api/avatars/user/user@example.com/resized/256/", "is_default": false, "mtime": 1760000000 }
 ```
 
 The endpoint never reveals whether an email exists: an unknown user or a user
 without an avatar returns the default-avatar URL with `is_default: true` and
 `mtime: 0`. Requires `account.read`.
 
-The image itself is served without authentication at
-`GET /avatars/user/{email}/resized/{size}/` (SVG default when absent), because
-avatar URLs are embedded in pages and clients.
+## Get an avatar image {#get-avatar-image}
+
+`GET /api/avatars/user/{email}/resized/{size}/`
+
+The image bytes behind `url` above. Served without authentication, because
+avatar URLs are embedded in pages and clients; an unknown user or an account
+without an avatar gets the default-avatar SVG. Thumbnails are generated and
+cached on first access (`Cache-Control: private, max-age=86400`).
+
+The path is Nanofile's own: seahub serves the image bytes from `/media/avatars/…`,
+which this server does not implement. The old root spelling
+`/avatars/user/{email}/resized/{size}/` answers a permanent redirect.
 
 ## Upload an avatar {#post-api-v2-1-user-avatar}
 
@@ -112,7 +121,7 @@ Uploads a new primary avatar for the authenticated account.
 **Response `200`**
 
 ```json
-{ "avatar_url": "/avatars/user/user@example.com/resized/256/" }
+{ "avatar_url": "/api/avatars/user/user@example.com/resized/256/" }
 ```
 
 ## List users {#get-api2-admin-users}

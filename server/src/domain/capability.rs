@@ -1247,6 +1247,21 @@ const ROUTES: &[RouteEntry] = &[
         RouteAccess::Public,
     ),
     ("GET", "/api/transfers/index-progress/", RouteAccess::Public),
+    // The avatar image bytes: unauthenticated like seahub's `/media/avatars/…`
+    // (the URL is guessable from an email address and the response is marked
+    // `private`), so the table only has to admit it.
+    (
+        "GET",
+        "/api/avatars/user/{email}/resized/{size}/",
+        RouteAccess::Public,
+    ),
+    // The pre-move block URL (file id in the path), kept for the links minted
+    // under it: the token validates itself, like the block endpoint's.
+    (
+        "GET",
+        "/api/transfers/blks/{token}/{file_id}/{block_id}",
+        RouteAccess::Public,
+    ),
     // Session-only, catalog included: a key that can mint keys could grant itself
     // more than it holds, so no part of this surface accepts key authentication.
     ("GET", "/api/keys/catalog/", RouteAccess::SessionOnly),
