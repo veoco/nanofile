@@ -6,12 +6,16 @@
 //! a client reading the official Seafile API could not tell an upstream route from
 //! a Nanofile invention. The routes now live under `/api/`.
 //!
-//! These tests pin the split:
+//! The transfer surface got the same treatment: the session upload/update forms,
+//! the token download and the progress shims used to sit at the root beside the
+//! fileserver's own paths; they live under `/api/transfers/` now.
+//!
+//! These tests pin both splits:
 //! * every moved method+path answers `404` (no alias, no redirect),
 //! * none of them is still listed in the capability route table,
-//! * every new method+path exists and still demands a credential,
+//! * every new method+path exists and still demands its credential,
 //! * the Seafile paths that merely shared a prefix (`/api2/account/info/`,
-//!   `/api2/repo-tokens/`, …) are untouched.
+//!   `/api2/repo-tokens/`, …) or the root (`/upload-api/{token}`, …) are untouched.
 
 use crate::common;
 
@@ -90,6 +94,30 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/repos/{repo_id}/file/revision/"),
     ("POST", "/api/repos/{repo_id}/file/revision/restore/"),
     ("PUT", "/api/repos/{repo_id}/visibility/"),
+];
+
+/// Every method+path that moved off the root transfer surface.
+///
+/// These were Nanofile inventions staged beside the fileserver's own routes
+/// (`/upload-api/{token}`, `/zip/{token}`, `/repos/.../files/...`); no Seafile
+/// route table registers them.
+const MOVED_TRANSFER_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/download-api/{token}"),
+    ("POST", "/upload-aj/"),
+    ("POST", "/update-aj/"),
+    ("POST", "/update-api/"),
+    ("GET", "/upload_progress"),
+    ("GET", "/idx_progress"),
+];
+
+/// The same endpoints under `/api/transfers/`; the two session update spellings
+/// were merged into one handler.
+const NEW_TRANSFER_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api/transfers/download/{token}"),
+    ("POST", "/api/transfers/upload/"),
+    ("POST", "/api/transfers/update/"),
+    ("GET", "/api/transfers/upload-progress/"),
+    ("GET", "/api/transfers/index-progress/"),
 ];
 
 /// Expand the template placeholders to concrete segments.
@@ -263,4 +291,132 @@ async fn seafile_paths_on_the_old_prefixes_are_untouched() {
         "the visibility handler must live on /api/ now, got {}",
         resp.status()
     );
+}
+
+/// The fileserver's own transfer paths stay at the root: moving the Nanofile-only
+/// endpoints must not have dragged the Seafile ones along.
+#[tokio::test]
+async fn seafile_transfer_paths_stay_at_the_root() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/upload-link/?from=web", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "upload-link is a seahub route");
+    let upload_url: String = resp.json().await.unwrap();
+    assert!(
+        upload_url.contains("/upload-aj/"),
+        "the browser upload link still points at the fileserver path, got: {upload_url}"
+    );
+
+    let resp = f
+        .client
+        .upload_file(&f.api_token, &f.repo_id, "/", "seed.txt", b"seed")
+        .await;
+    assert_eq!(resp.status(), 200, "seeding the file must succeed");
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api2/repos/{}/file/?p=/seed.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "file download link is a seahub route");
+    let download_url: String = resp.json().await.unwrap();
+    assert!(
+        download_url.contains("/api/transfers/download/"),
+        "the download URL is minted in the Nanofile namespace, got: {download_url}"
+    );
+}
+
+/// The moved transfer routes are gone: the root belongs to the fileserver's own
+/// route table again, and no alias or redirect answers for them.
+#[tokio::test]
+async fn moved_transfer_routes_answer_not_found() {
+    let f = TestFixture::new().await;
+    for (method, template) in MOVED_TRANSFER_ROUTES {
+        let path = expand(template, &f.repo_id);
+        let resp = send(&f, method, &path, Some(&f.api_token)).await;
+        assert_eq!(
+            resp.status(),
+            404,
+            "{method} {path} must be gone from the root transfer surface, body: {:?}",
+            resp.text().await
+        );
+    }
+}
+
+/// The new transfer routes are classified; the old spellings must not linger in
+/// the table, or the fail-closed default would deny the new paths.
+#[test]
+fn transfer_routes_are_classified_on_the_new_namespace() {
+    let inventory: Vec<(&str, &str)> = route_inventory().collect();
+    let has = |method: &str, path: &str| {
+        inventory
+            .iter()
+            .any(|(m, p)| *m == method && template(p) == template(path))
+    };
+    for (method, path) in MOVED_TRANSFER_ROUTES {
+        assert!(
+            !has(method, path),
+            "{method} {path} is still classified after the move"
+        );
+    }
+    for (method, path) in NEW_TRANSFER_ROUTES {
+        assert!(
+            has(method, path),
+            "{method} {path} is missing from the capability table"
+        );
+    }
+}
+
+/// Each new transfer route answers on `/api/transfers/` with its own credential
+/// contract: the invalid capability token is a 400 (not the fallback 404), the
+/// session forms redirect to the login page, and the progress shims answer 200.
+#[tokio::test]
+async fn new_transfer_routes_exist_on_the_new_namespace() {
+    let f = TestFixture::new().await;
+
+    let resp = f
+        .client
+        .get("/api/transfers/download/not-a-token", None)
+        .await;
+    assert_eq!(
+        resp.status(),
+        400,
+        "the download endpoint must validate its capability token"
+    );
+
+    // A browser without a cookie is redirected to the login page; the shared test
+    // client follows redirects, so use the no-redirect flavour here.
+    let ui = common::client::TestClient::new_ui_session(&f.server.base_url);
+    for path in ["/api/transfers/upload/", "/api/transfers/update/"] {
+        let resp = ui.post_form(path, None, &[]).await;
+        assert_eq!(
+            resp.status(),
+            303,
+            "{path} must reject a sessionless request with the login redirect"
+        );
+        assert!(
+            resp.headers()
+                .get("location")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|loc| loc.starts_with("/accounts/login/")),
+            "{path} must redirect to the login page, got: {:?}",
+            resp.headers().get("location")
+        );
+    }
+
+    for path in [
+        "/api/transfers/upload-progress/",
+        "/api/transfers/index-progress/",
+    ] {
+        let resp = f.client.get(path, None).await;
+        assert_eq!(resp.status(), 200, "{path} must serve the progress shim");
+    }
 }

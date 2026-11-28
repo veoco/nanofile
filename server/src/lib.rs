@@ -114,7 +114,8 @@ pub struct AppState {
     /// Block storage backend — default is filesystem-based.
     pub block_store: DynBlockStorage,
     pub block_dir: Arc<PathBuf>,
-    /// Web access token manager for `/upload-api/` and `/update-api/`.
+    /// Capability-token manager for the transfer endpoints (`/upload-api/`,
+    /// `/update-api/`, `/api/transfers/download/`, the block endpoints).
     pub token_manager: Arc<AccessTokenManager>,
     /// WebSocket notification manager. `None` if the notification feature is disabled.
     pub notification_manager: Option<NotificationManager>,

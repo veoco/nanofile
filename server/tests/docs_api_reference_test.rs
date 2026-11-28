@@ -213,25 +213,21 @@ fn internal_links_resolve() {
 
 #[test]
 fn transfer_endpoints_are_documented() {
-    // These routes are served by the transfer group rather than by the classified
-    // `/api2/` surface, so `route_inventory()` cannot see them. They are the URLs
-    // the API hands out, so a page must keep documenting them.
+    // These routes are served by the root fileserver surface rather than by the
+    // classified `/api2/`/`/api/` namespaces, so `route_inventory()` cannot see
+    // them. They are the URLs the API hands out, so a page must keep documenting
+    // them. (The Nanofile-only transfer endpoints are classified now, so
+    // `every_classified_route_is_documented` covers them.)
     let expected: &[(&str, &str)] = &[
         ("GET", "/repos/{repo_id}/files/{path}"),
-        ("GET", "/download-api/{token}"),
         ("GET", "/blks/{token}/{file_id}/{block_id}"),
         ("POST", "/upload-api/{token}"),
         ("POST", "/upload-aj/{token}"),
-        ("POST", "/upload-aj/"),
         ("POST", "/update-api/{token}"),
         ("POST", "/update-aj/{token}"),
-        ("POST", "/update-aj/"),
-        ("POST", "/update-api/"),
         ("POST", "/upload-blks-api/{token}"),
         ("POST", "/upload-raw-blks-api/{token}"),
         ("POST", "/update-blks-api/{token}"),
-        ("GET", "/upload_progress"),
-        ("GET", "/idx_progress"),
         ("GET", "/zip/{token}"),
     ];
     let en = pages(&api_dir(&repo_root(), ""));

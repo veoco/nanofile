@@ -821,8 +821,10 @@ async fn try_handle_chunked(
 ///
 /// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
 /// desktop client's uploads.
-/// `POST /upload-aj/` — AJAX file upload from the Seahub web UI (no token),
+/// `POST /api/transfers/upload/` — AJAX file upload from the web UI (no token),
 /// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
+/// Nanofile-only: the Seafile fileserver's `/upload-aj/{token}` always carries a
+/// minted token, so the session form has no upstream path.
 pub async fn upload_aj(
     user: WebUser,
     State(state): State<Arc<AppState>>,
@@ -1707,14 +1709,12 @@ async fn commit_uploads(
     Ok(committed)
 }
 
-/// `POST /update-api/` — update an existing file from the web UI (no token),
-/// taking `file`, `repo_id`, and `p` / `path` (the full target path).
-/// Shared tail of the four update endpoints.
+/// Shared tail of the update endpoints.
 ///
-/// The session/token and `-api`/`-aj` variants differ only in how they extract
-/// `target_file` and frame the reply; target existence, the uncommitted-block
-/// guard and the commit are the same sequence in all four. The guard is created
-/// before target resolution so a malformed target cannot leak streamed blocks.
+/// The token forms and the session form differ only in how they extract the
+/// target and frame the reply; target existence, the uncommitted-block guard and
+/// the commit are the same sequence in all three. The guard is created before
+/// target resolution so a malformed target cannot leak streamed blocks.
 async fn finish_update(
     state: &Arc<AppState>,
     auth: &AuthContext,
@@ -1738,7 +1738,14 @@ async fn finish_update(
     Ok(finished.response)
 }
 
-pub async fn update_api(
+/// `POST /api/transfers/update/` — session-authenticated overwrite of an
+/// existing file (the browser form).
+///
+/// The target is named with `target_file` (the spelling the token forms share)
+/// or with `p` / `path` (the path-style spelling the old session form used);
+/// either way it must resolve to an existing file. `repo_id`, one `file` part
+/// and `csrf_token` are required.
+pub async fn update_session(
     user: WebUser,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1752,57 +1759,25 @@ pub async fn update_api(
     // An update carries exactly one file part.
     let parts = read_update_body(&state, None, body, &headers).await?;
 
-    let repo_id = parts.fields.get("repo_id").cloned().unwrap_or_default();
-    let file_path = parts
-        .fields
-        .get("p")
-        .or_else(|| parts.fields.get("path"))
-        .cloned()
-        .unwrap_or_default();
-    let csrf_token = parts.fields.get("csrf_token").cloned();
-
-    if file_path.is_empty() {
-        return Err(AppError::BadRequest("Path is missing.".into()));
-    }
-    if !file_path.starts_with('/') {
-        return Err(AppError::BadRequest("Path is missing or invalid.".into()));
-    }
-
-    let auth = AuthContext::from_session(&state, &user, &repo_id, csrf_token.as_deref()).await?;
-    finish_update(
-        &state,
-        &auth,
-        parts,
-        &file_path,
-        "",
-        range,
-        ReplyStyle::Array,
-    )
-    .await
-}
-
-/// `POST /update-aj/` — AJAX file update from the Seahub web UI (no token),
-/// taking `file`, `repo_id` and `target_file` (the full target path).
-pub async fn update_aj(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: axum::body::Body,
-) -> Result<axum::response::Response, AppError> {
-    // See `update_api`: an update replaces the file, so only the commit-time
-    // size delta is a correct quota check.
-    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let parts = read_update_body(&state, None, body, &headers).await?;
-
     let repo_id = parts
         .fields
         .get("repo_id")
         .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let target_file = parts
-        .fields
-        .get("target_file")
-        .ok_or_else(|| AppError::BadRequest("target_file required".into()))?
-        .clone();
+    let (target_file, path_style) = match parts.fields.get("target_file").cloned() {
+        Some(target) => (target, false),
+        None => (
+            parts
+                .fields
+                .get("p")
+                .or_else(|| parts.fields.get("path"))
+                .cloned()
+                .ok_or_else(|| AppError::BadRequest("Path is missing.".into()))?,
+            true,
+        ),
+    };
+    if path_style && !target_file.starts_with('/') {
+        return Err(AppError::BadRequest("Path is missing or invalid.".into()));
+    }
 
     let auth = AuthContext::from_session(
         &state,
@@ -1836,8 +1811,8 @@ pub async fn upload_aj_token(
 
     // No Content-Length quota pre-check: a normal (non-link) upload token can
     // replace an existing file, so only the commit-time size delta is correct.
-    // This matches `/upload-aj/` and `/upload-api/`; the commit removes the
-    // blocks it wrote when the delta does not fit.
+    // This matches `/api/transfers/upload/` and `/upload-api/`; the commit
+    // removes the blocks it wrote when the delta does not fit.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;
 
@@ -1942,7 +1917,7 @@ pub async fn update_api_handler(
     let query = query_params(&parts.uri);
     let auth = AuthContext::from_token(&state, &token, TokenKind::Update).await?;
 
-    // See `update_api`: this endpoint only replaces an existing file, so the
+    // See `update_session`: this endpoint only replaces an existing file, so the
     // commit-time delta is the only correct quota check.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let parts = read_update_body(&state, Some(&auth), body, &headers).await?;

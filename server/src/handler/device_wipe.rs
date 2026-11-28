@@ -58,9 +58,9 @@ pub async fn device_wiped(
 
     let svc = state.sso_service();
     svc.device_wiped(token_record.user_id, &device_id).await?;
-    // The device's `/download-api/…` and `/upload-api/…` capability URLs are
-    // credentials too, and they are not addressed by device id, so drop all of the
-    // user's outstanding ones.
+    // The device's `/api/transfers/download/…` and `/upload-api/…` capability
+    // URLs are credentials too, and they are not addressed by device id, so drop
+    // all of the user's outstanding ones.
     state.token_manager.revoke_user(token_record.user_id);
 
     Ok(ok_json())

@@ -388,7 +388,7 @@ async fn upload_requires_a_file_part() {
     let resp = session_post(
         &client,
         &f,
-        "/upload-aj/",
+        "/api/transfers/upload/",
         form(
             &[
                 ("repo_id", f.repo_id.as_str()),
@@ -549,7 +549,7 @@ async fn session_upload_requires_and_accepts_csrf() {
     let resp = session_post(
         &client,
         &f,
-        "/upload-aj/",
+        "/api/transfers/upload/",
         form(
             &[("repo_id", f.repo_id.as_str()), ("parent_dir", "/")],
             &[("session.txt", b"x")],
@@ -563,7 +563,7 @@ async fn session_upload_requires_and_accepts_csrf() {
     let resp = session_post(
         &client,
         &f,
-        "/upload-aj/",
+        "/api/transfers/upload/",
         form(
             &[
                 ("repo_id", f.repo_id.as_str()),
@@ -592,7 +592,7 @@ async fn session_upload_without_cookie_redirects() {
         .unwrap();
 
     let resp = client
-        .post(format!("{}/upload-aj/", f.server.base_url))
+        .post(format!("{}/api/transfers/upload/", f.server.base_url))
         .multipart(form(
             &[("repo_id", f.repo_id.as_str()), ("parent_dir", "/")],
             &[("nope.txt", b"x")],
@@ -641,7 +641,7 @@ async fn update_requires_existing_target() {
     let resp = session_post(
         &client,
         &f,
-        "/update-api/",
+        "/api/transfers/update/",
         form(
             &[
                 ("repo_id", f.repo_id.as_str()),
@@ -684,7 +684,7 @@ async fn update_rejects_a_second_file() {
     let resp = session_post(
         &client,
         &f,
-        "/update-api/",
+        "/api/transfers/update/",
         form(
             &[
                 ("repo_id", f.repo_id.as_str()),
@@ -720,7 +720,7 @@ async fn update_reply_shapes() {
     let resp = session_post(
         &client,
         &f,
-        "/update-api/",
+        "/api/transfers/update/",
         form(
             &[
                 ("repo_id", f.repo_id.as_str()),

@@ -1,5 +1,5 @@
 //! Capability-token validation shared by the `/upload-api`, `/update-api`,
-//! `/download-api` and `/upload-blks-api` token families.
+//! `/api/transfers/download` and `/upload-blks-api` token families.
 //!
 //! Each family used to hand-roll "look up the token, compare `op`, check the
 //! upload-link deadline, check the account is active". The copies had drifted:

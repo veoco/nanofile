@@ -18,7 +18,7 @@
 **响应 `200`**
 
 ```json
-"/download-api/<token>"
+"/api/transfers/download/<token>"
 ```
 
 响应头 `oid` 是文件的 FS 对象 id。`op=downloadblks` 时正文改为：

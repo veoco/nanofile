@@ -652,7 +652,7 @@ Face recognition is not implemented; the feature reports off.
 
 ## Served here, absent from the official reference {#undocumented}
 
-These routes are served but are not an operation in the official reference. Most are seahub endpoints the reference omits (the v2.1 variants, legacy transfer helpers, trash2, related-users). Nanofile-only endpoints (the `/api/` namespace) are documented separately; this table now lists only paths Seafile's own server also registers. The `/seafhttp/`, `/dav/` and `/notification` surfaces, and the browser transfer endpoints (`/upload-aj/`, `/download-api/`, `/zip/`, the progress shims), are documented on their own pages and are not repeated here.
+These routes are served but are not an operation in the official reference. Most are seahub endpoints the reference omits (the v2.1 variants, legacy transfer helpers, trash2, related-users). Nanofile-only endpoints (the `/api/` namespace) are documented separately; this table now lists only paths Seafile's own server also registers. The `/seafhttp/`, `/dav/` and `/notification` surfaces, and the root transfer paths (`/upload-aj/`, `/zip/`, …), are documented on their own pages and are not repeated here. The Nanofile-only transfer forms, the token download and the progress shims live under `/api/transfers/` and are covered by the [transfers page](/reference/api/transfers).
 
 | Endpoint | Documented at |
 | --- | --- |
@@ -713,7 +713,7 @@ These routes are served but are not an operation in the official reference. Most
 
 Route-level rows cannot capture everything. These differences apply across the surface; the endpoint pages and [Seafile compatibility](/dev/protocol#deliberate-deviations) give the protocol-level detail.
 
-- **Breaking change.** 0.1.x: Nanofile's own endpoints moved from `/api2/`/`/api/v2.1/` to `/api/`; the old paths answer 404. Seafile-compatible routes are unchanged.
+- **Breaking change.** 0.1.x: Nanofile's own endpoints moved from `/api2/`/`/api/v2.1/` to `/api/`; the old paths answer 404. The Nanofile-only transfer endpoints got the same treatment: the session upload/update forms, `/download-api/{token}` and the progress shims moved under `/api/transfers/`; the old root paths answer 404. Seafile-compatible routes are unchanged.
 - **Credentials.** Besides the account token, Nanofile accepts API keys (capability-scoped, library-scoped) and, on `/seafhttp/`, repository sync tokens. Repo-Token callers use a library-scoped API key; the `/via-repo-token/` mirror is not routed.
 - **Authorization header.** Both `Bearer` and the legacy `Token` prefix are accepted on every API route, so clients written for pre-11 and post-11 Seafile both work.
 - **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`. A lock conflict is `403` with the plain-text body `File <path> is locked` on sync commits and on the lock endpoint; REST/WebDAV deletes of a file locked by another user answer `423` with a JSON `error_msg`. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.
@@ -721,7 +721,7 @@ Route-level rows cannot capture everything. These differences apply across the s
 - **Timestamps.** Most are Unix seconds. `search-file`'s `mtime` and `file/detail/`'s `last_modified` use RFC 3339, while `file/detail/`'s `mtime` stays Unix seconds; `dir/detail/` returns a number where seahub returns a string.
 - **Listings.** The legacy directory listing hides `_Internal`, sorts directories first by lowercased name, and reports the real `dir_perm`/`permission`; `?oid=` revalidation is not implemented.
 - **Search.** `/api/v2.1/search-file/` caps results at 200; `/api2/search/` ignores the Pro-only filters.
-- **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. `zip-task` mints with `POST`.
+- **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. The Nanofile-only session forms, the token download and the progress shims live under `/api/transfers/`. `zip-task` mints with `POST`.
 - **WebDAV.** It lives at `/dav/{repo_id}/` (not `/seafdav`), takes an email plus a WebDAV API key as Basic credentials, refuses encrypted libraries with `403`, and does not store properties or enforce locks.
 - **Notification.** `/notification` speaks the Seafile notification protocol with per-subscription JWTs; it is not part of the Web API reference.
 - **Administrator-managed sharing.** A library can be private, shared with listed users, or public to all accounts; group sharing, per-folder permissions, comments, wikis, invitations, snapshot labels, OCR and face recognition are not implemented. Those official groups are `Missing` above.

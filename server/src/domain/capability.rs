@@ -1230,6 +1230,23 @@ const ROUTES: &[RouteEntry] = &[
         "/api/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
+    // Nanofile-only transfer endpoints (`handler::web::nanofile_transfer_routes`).
+    // The token download and the progress shims authenticate with their own
+    // in-memory token or serve nobody's data, so they are public to this table;
+    // the session upload/update forms accept only the browser's own session.
+    (
+        "GET",
+        "/api/transfers/download/{token}",
+        RouteAccess::Public,
+    ),
+    ("POST", "/api/transfers/upload/", RouteAccess::SessionOnly),
+    ("POST", "/api/transfers/update/", RouteAccess::SessionOnly),
+    (
+        "GET",
+        "/api/transfers/upload-progress/",
+        RouteAccess::Public,
+    ),
+    ("GET", "/api/transfers/index-progress/", RouteAccess::Public),
     // Session-only, catalog included: a key that can mint keys could grant itself
     // more than it holds, so no part of this surface accepts key authentication.
     ("GET", "/api/keys/catalog/", RouteAccess::SessionOnly),

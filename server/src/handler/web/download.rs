@@ -23,10 +23,10 @@ pub(crate) async fn token_user_active(state: &AppState, user_id: i32) -> Result<
 
 /// Reject a capability token whose owner is no longer an active account.
 ///
-/// The `/download-api/{token}`, `/blks/{token}/…` and `/upload-api/{token}`
-/// endpoints authenticate with an in-memory token rather than `AuthUser`, so they
-/// never saw the `is_active` check every other surface applies — a deactivated
-/// account kept access for the token's remaining TTL.
+/// The `/api/transfers/download/{token}`, `/blks/{token}/…` and
+/// `/upload-api/{token}` endpoints authenticate with an in-memory token rather
+/// than `AuthUser`, so they never saw the `is_active` check every other surface
+/// applies — a deactivated account kept access for the token's remaining TTL.
 pub(crate) async fn ensure_token_user_active(
     state: &AppState,
     user_id: i32,
@@ -288,8 +288,9 @@ pub async fn repo_file_download(
     ))
 }
 
-/// GET /download-api/{token} — token-authenticated file download, step B of the
-/// two-step flow (the client first obtains a download URL, then GETs this).
+/// GET /api/transfers/download/{token} — token-authenticated file download,
+/// step B of the two-step flow (the client first obtains a download URL, then
+/// GETs this).
 pub async fn download_api(
     State(state): State<Arc<AppState>>,
     Path(token): Path<String>,

@@ -316,9 +316,11 @@ pub fn api_routes() -> Router<Arc<AppState>> {
 /// Nothing here exists in Seafile's official reference or in the seahub server:
 /// these are this project's own API (API keys and credentials, search/index
 /// controls, rename/move helpers, library visibility, the legacy v1 link
-/// collections, and the account-administration helpers). Keeping them on a
-/// prefix of their own is what lets `/api2/` and `/api/v2.1/` be read as "the
-/// Seafile API" without a Nanofile invention mixed in.
+/// collections, the account-administration helpers, and the transfer endpoints
+/// the fileserver route table has no path for). Keeping them on a prefix of
+/// their own is what lets `/api2/` and `/api/v2.1/` be read as "the Seafile API"
+/// without a Nanofile invention mixed in, and the same rule now holds for the
+/// fileserver surface at the root.
 ///
 /// `/api/` deliberately has no version segment: it did not exist upstream, so
 /// there is nothing to stay compatible with, and a future breaking change can
@@ -386,4 +388,12 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
             crate::handler::upload_link::upload_link_routes(),
         )
         .nest("/api/admin", crate::handler::users::admin_user_routes())
+        // Byte-moving endpoints with no Seafile counterpart (the session upload
+        // and update forms, the token download, the progress shims). They accept
+        // upload-sized bodies, like the fileserver paths they sit beside.
+        .nest(
+            "/api/transfers",
+            crate::handler::web::nanofile_transfer_routes()
+                .layer(crate::body_limit::upload_default_body_limit()),
+        )
 }

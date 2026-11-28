@@ -733,7 +733,7 @@ async fn test_web_upload_rejects_non_member() {
         .text("relative_path", "")
         .text("csrf_token", csrf);
     let resp = client
-        .post(format!("{}/upload-aj/", server.base_url))
+        .post(format!("{}/api/transfers/upload/", server.base_url))
         .multipart(form)
         .send()
         .await

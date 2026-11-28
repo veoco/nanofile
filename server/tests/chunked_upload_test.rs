@@ -566,7 +566,7 @@ async fn test_upload_blks_commit_rejects_malicious_blockids() {
     assert_eq!(resp.status(), 400);
 }
 
-/// Build a multipart body for the no-token `/upload-aj/` chunk endpoint.
+/// Build a multipart body for the `/upload-aj/{token}` chunk endpoint.
 fn chunked_upload_form(repo_id: &str, bytes: Vec<u8>) -> reqwest::multipart::Form {
     let part = reqwest::multipart::Part::bytes(bytes).file_name("big.txt");
     reqwest::multipart::Form::new()

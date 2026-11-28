@@ -258,7 +258,7 @@ async fn test_upload_aj() {
 
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let resp = client
-        .post(format!("{}/upload-aj/", f.server.base_url))
+        .post(format!("{}/api/transfers/upload/", f.server.base_url))
         .multipart(form)
         .send()
         .await
@@ -269,14 +269,20 @@ async fn test_upload_aj() {
 #[tokio::test]
 async fn test_upload_progress() {
     let f = TestFixture::new().await;
-    let resp = f.client.get("/upload_progress", Some(&f.api_token)).await;
+    let resp = f
+        .client
+        .get("/api/transfers/upload-progress/", Some(&f.api_token))
+        .await;
     assert_eq!(resp.status(), 200);
 }
 
 #[tokio::test]
 async fn test_idx_progress() {
     let f = TestFixture::new().await;
-    let resp = f.client.get("/idx_progress", Some(&f.api_token)).await;
+    let resp = f
+        .client
+        .get("/api/transfers/index-progress/", Some(&f.api_token))
+        .await;
     assert_eq!(resp.status(), 200);
 }
 
@@ -303,7 +309,7 @@ async fn test_update_aj() {
 
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let resp = client
-        .post(format!("{}/update-aj/", f.server.base_url))
+        .post(format!("{}/api/transfers/update/", f.server.base_url))
         .multipart(form)
         .send()
         .await
@@ -691,7 +697,7 @@ async fn test_update_api_updates_file() {
     assert_eq!(
         &body[..],
         b"updated",
-        "file content not updated via update-api"
+        "file content not updated via the session update form"
     );
 }
 

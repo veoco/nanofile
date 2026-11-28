@@ -648,7 +648,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 ## 这里有、官方参考没有的接口 {#undocumented}
 
-这些路由已经提供，但不在官方参考的操作里。多数是 seahub 有、参考没写的接口（v2.1 变体、旧版传输辅助接口、trash2、related-users）。Nanofile 自有接口（`/api/` 命名空间）单独成页；本表现在只列 Seafile 服务端同样注册的路径。`/seafhttp/`、`/dav/`、`/notification`，以及浏览器传输接口（`/upload-aj/`、`/download-api/`、`/zip/`、进度桩）各有一页，不在这里重复。
+这些路由已经提供，但不在官方参考的操作里。多数是 seahub 有、参考没写的接口（v2.1 变体、旧版传输辅助接口、trash2、related-users）。Nanofile 自有接口（`/api/` 命名空间）单独成页；本表现在只列 Seafile 服务端同样注册的路径。`/seafhttp/`、`/dav/`、`/notification`，以及根路径传输接口（`/upload-aj/`、`/zip/` 等）各有一页，不在这里重复；Nanofile 自有的传输表单、令牌下载与进度桩位于 `/api/transfers/`，见[上传与下载](/zh/reference/api/transfers)。
 
 | 接口 | 文档位置 |
 | --- | --- |
@@ -709,7 +709,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 路由级的表格无法覆盖全部差异。以下差异适用于整个接口面；协议层细节见各接口页与 [Seafile 兼容性](/zh/dev/protocol#刻意保留的偏差)。
 
-- **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Seafile 兼容路由不变。
+- **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Nanofile 自有的传输接口同样迁移：会话上传/更新表单、`/download-api/{token}` 与进度桩移到 `/api/transfers/`，旧的根路径返回 404。Seafile 兼容路由不变。
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
 - **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交与加锁接口上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
@@ -717,7 +717,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 - **时间。** 多数是 Unix 秒。`search-file` 的 `mtime` 与 `file/detail/` 的 `last_modified` 用 RFC 3339，而 `file/detail/` 的 `mtime` 仍是 Unix 秒；`dir/detail/` 返回数字，而 seahub 返回字符串。
 - **列表。** 旧版目录列表隐藏 `_Internal`，目录在前并按小写名称排序，报告真实的 `dir_perm`/`permission`；未实现 `?oid=` 校验。
 - **搜索。** `/api/v2.1/search-file/` 最多 200 条；`/api2/search/` 忽略 Pro 专属过滤参数。
-- **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。`zip-task` 用 `POST`。
+- **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。Nanofile 自有的会话表单、令牌下载与进度桩位于 `/api/transfers/`。`zip-task` 用 `POST`。
 - **WebDAV。** 位于 `/dav/{repo_id}/`（不是 `/seafdav`），Basic 凭据是邮箱加 WebDAV API 密钥，加密资料库返回 `403`，不保存属性也不强制执行锁。
 - **通知。** `/notification` 使用 Seafile 通知协议与按订阅签发的 JWT；它不属于 Web API 参考。
 - **管理员共享。** 资料库可以是私有、共享给指定用户或公开给所有账号；群组共享、目录级权限、评论、Wiki、邀请、快照标签、OCR 与人脸识别均未实现，这些官方分组在上表中为 `未实现`。

@@ -17,11 +17,11 @@ endpoint's page and collected on the compatibility page.
 | --- | --- |
 | `/api2/` | The legacy Seafile REST API. The official desktop and mobile clients still use much of it. |
 | `/api/v2.1/` | The newer REST API used by the web interface and the mobile clients. |
-| `/api/` | Nanofile-specific API — API keys, search/index controls, rename/move helpers and library visibility. Not part of Seafile's API. |
+| `/api/` | Nanofile-specific API — API keys, search/index controls, rename/move helpers, library visibility, and the Nanofile-only transfer endpoints (session upload/update forms, token download, progress shims). Not part of Seafile's API. |
 | `/seafhttp/` | The sync protocol between a client daemon and the server. See [Sync protocol](/reference/api/sync). |
 | `/dav/{repo_id}/` | WebDAV. See [WebDAV](/reference/api/webdav). |
 | `/notification` | The WebSocket the clients subscribe to for library updates. See [Notification WebSocket](/reference/api/notification). |
-| `/upload-aj/`, `/upload-api/`, `/upload-blks-api/`, `/upload-raw-blks-api/`, `/update-aj/`, `/update-api/`, `/update-blks-api/`, `/download-api/`, `/blks/`, `/zip/`, `/repos/{repo_id}/files/` | Transfers. These are the URLs the API returns or the web interface calls; see [Uploads and downloads](/reference/api/transfers). |
+| `/upload-aj/`, `/upload-api/`, `/upload-blks-api/`, `/upload-raw-blks-api/`, `/update-aj/`, `/update-api/`, `/update-blks-api/`, `/blks/`, `/zip/`, `/repos/{repo_id}/files/` | Transfers. These are the URLs the API returns or the web interface calls; see [Uploads and downloads](/reference/api/transfers). The Nanofile-only forms live under `/api/transfers/`. |
 | `/health` | Operational health probe; answers `200` with the process generation header. Not part of the API. |
 
 `GET /api2/server-info/` reports the Seafile version this server advertises

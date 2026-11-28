@@ -231,7 +231,7 @@ export function uploadItem(item) {
         return;
     }
 
-    var url = uploadTokenUrl || '/upload-aj/';
+    var url = uploadTokenUrl || '/api/transfers/upload/';
 
     if (item.file.size >= CHUNK_UPLOAD_THRESHOLD) {
         uploadFileInChunks(item, url);

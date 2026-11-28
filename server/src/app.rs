@@ -285,6 +285,10 @@ mod tests {
             redact_request_path("/download-api/abc123"),
             "/download-api/{token}"
         );
+        assert_eq!(
+            redact_request_path("/api/transfers/download/abc123"),
+            "/api/transfers/download/{token}"
+        );
         // ...and the rest of the path still says where the request was going.
         assert_eq!(
             redact_request_path("/blks/abc123/file-id/block-id"),

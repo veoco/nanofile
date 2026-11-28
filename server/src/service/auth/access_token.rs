@@ -64,7 +64,8 @@ pub struct AccessToken {
 }
 
 /// In-memory manager for the `/upload-api/{token}`, `/update-api/{token}` and
-/// `/download-api/{token}` bearer tokens; they expire after `TOKEN_EXPIRE_SECS`.
+/// `/api/transfers/download/{token}` bearer tokens; they expire after
+/// `TOKEN_EXPIRE_SECS`.
 pub struct AccessTokenManager {
     tokens: RwLock<HashMap<String, AccessToken>>,
 }

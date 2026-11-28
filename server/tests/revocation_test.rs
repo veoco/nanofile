@@ -299,8 +299,9 @@ async fn password_change_revokes_reset_tokens_and_access_tokens() {
 }
 
 /// `AuthUser` rejects a deactivated account, and the token-only endpoints
-/// (`/upload-api/…`, `/download-api/…`) now do too — they authenticate with an
-/// in-memory capability instead of a session, so they never saw that check.
+/// (`/upload-api/…`, `/api/transfers/download/…`) now do too — they authenticate
+/// with an in-memory capability instead of a session, so they never saw that
+/// check.
 #[tokio::test]
 async fn deactivating_an_account_stops_its_capability_urls() {
     let f = TestFixture::new().await;
@@ -414,7 +415,8 @@ fn block_form(data: &[u8]) -> reqwest::multipart::Form {
 
 /// Deactivation must stop every capability URL, including the block-level ones:
 /// `/upload-blks-api` and `/blks/` authenticate with an in-memory token rather
-/// than a session, so they need the same `is_active` check as `/download-api`.
+/// than a session, so they need the same `is_active` check as
+/// `/api/transfers/download/`.
 #[tokio::test]
 async fn deactivating_an_account_stops_block_capability_urls() {
     let f = TestFixture::new().await;

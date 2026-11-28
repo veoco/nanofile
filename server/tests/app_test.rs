@@ -114,7 +114,7 @@ async fn a_body_over_the_configured_json_limit_is_refused() {
 /// The same 65 MiB the JSON route just refused, sent to an upload route: that
 /// group raised its own limit, so the global cap must not apply to it. Without
 /// the per-group limit in `app_routes` this is the assertion that fails.
-/// `/upload-aj/` rejects a request with no session cookie before it reads the
+/// `/api/transfers/upload/` rejects a request with no session cookie before it reads the
 /// body, so it can close the connection while 65 MiB is still going out; the
 /// case is about the answer being something other than the 413.
 #[tokio::test]
@@ -126,14 +126,14 @@ async fn an_upload_route_still_takes_a_large_body() {
             .no_proxy()
             .build()
             .unwrap()
-            .post(format!("{}/upload-aj/", f.server.base_url))
+            .post(format!("{}/api/transfers/upload/", f.server.base_url))
             .header("Authorization", format!("Token {}", f.api_token))
             .body(body)
             .send()
             .await,
     );
 
-    // `None` means `/upload-aj/` answered before it read the body, which is not
+    // `None` means `/api/transfers/upload/` answered before it read the body, which is not
     // the 413 this route must never answer with.
     if let Some(resp) = resp {
         assert_ne!(

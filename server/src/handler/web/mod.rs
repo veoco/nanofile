@@ -1,3 +1,13 @@
+//! File serving and transfer handlers.
+//!
+//! Three route groups live here. [`web_page_routes`] serves the HTML pages a
+//! browser opens for a share or an upload link. [`web_api_routes`] serves the
+//! fileserver/seahub wire paths: the URLs the API hands out and the official
+//! clients POST to, so they stay exactly where Seafile registers them.
+//! [`nanofile_transfer_routes`] is the Nanofile-only remainder, mounted under
+//! `/api/transfers/` (see `crate::routes::nanofile_routes`) so the root surface
+//! keeps reading as Seafile's own route table.
+
 use axum::Router;
 use axum::routing::{get, post};
 use std::sync::Arc;
@@ -46,14 +56,15 @@ pub fn web_page_routes() -> Router<Arc<AppState>> {
         )
 }
 
-/// The endpoints the frontend calls itself (chunked uploads, block uploads, progress,
-/// the zip task); they keep their wire bodies because the browser parses them.
+/// The endpoints the frontend calls itself (chunked uploads, block uploads, the
+/// zip task); they keep their wire bodies because the browser parses them.
+///
+/// Every path here is also registered by Seafile's fileserver or seahub; the
+/// Nanofile-only transfer endpoints live in [`nanofile_transfer_routes`].
 pub fn web_api_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/upload-aj/", post(upload::upload_aj))
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
-        .route("/download-api/{token}", get(download::download_api))
         // Raw file content, opened by a file-list link or the media preview element; it
         // belongs to the wire group because the page group's error middleware rewrites
         // 4xx bodies to HTML, which dropped `Content-Range` on a 416.
@@ -75,12 +86,8 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
         // Upstream seahub's `update-blks-link/` mints this path; the token op
         // (`update-blks`) makes the shared handler replace an existing file.
         .route("/update-blks-api/{token}", post(upload::upload_blks_api))
-        .route("/update-aj/", post(upload::update_aj))
         .route("/update-aj/{token}", post(upload::update_aj_token))
-        .route("/update-api/", post(upload::update_api))
         .route("/update-api/{token}", post(upload::update_api_handler))
-        .route("/upload_progress", get(progress::upload_progress))
-        .route("/idx_progress", get(progress::idx_progress))
         .route(
             "/api/v2.1/repos/{repo_id}/zip-task/",
             // Pure metadata: a parent dir plus a bounded list of names, so cap the
@@ -90,4 +97,28 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
             )),
         )
         .route("/zip/{token}", get(zip_download::zip_download_handler))
+}
+
+/// The Nanofile-only transfer endpoints, mounted under `/api/transfers/`.
+///
+/// None of these paths exists in Seafile's fileserver or seahub route tables:
+/// the session upload/update forms, the token download (the fileserver serves
+/// `/files/{token}/{filename}` instead) and the two progress shims are this
+/// server's own additions. The token-upload family (`/upload-api/{token}`,
+/// `/upload-aj/{token}`, `/update-api/{token}`, the block endpoints) stays on the
+/// root because Seafile's own link endpoints mint those URLs and the official
+/// clients POST to them verbatim.
+pub fn nanofile_transfer_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        .route("/download/{token}", get(download::download_api))
+        // The no-token browser form: the session is the credential, so it has no
+        // Seafile counterpart.
+        .route("/upload/", post(upload::upload_aj))
+        // The session counterpart of `/update-api/{token}` and
+        // `/update-aj/{token}`; it accepts either target spelling.
+        .route("/update/", post(upload::update_session))
+        // Compatibility shims for the web interface's progress polling. Uploads
+        // are synchronous per request, so both always answer 100%.
+        .route("/upload-progress/", get(progress::upload_progress))
+        .route("/index-progress/", get(progress::idx_progress))
 }

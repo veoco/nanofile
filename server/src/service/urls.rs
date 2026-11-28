@@ -1,12 +1,12 @@
 //! Absolute URL construction for every capability and share link.
 //!
-//! The pieces used to be spelled out at each mint point (`/download-api/{token}`,
+//! The pieces used to be spelled out at each mint point (`/upload-api/{token}`,
 //! `/blks/{token}/{file_id}/{block_id}`, `/f/{token}/`, `/u/{token}/`, …). They
 //! live here so a shape change is one edit, and so the "always trim the base"
 //! rule cannot be forgotten.
 
-/// `{base}/{op}/{token}` — the shape of the upload, update, download and block
-/// capability URLs.
+/// `{base}/{op}/{token}` — the shape of the upload, update and block capability
+/// URLs.
 pub fn capability(base: &str, op: &str, token: &str) -> String {
     format!("{}/{op}/{token}", base.trim_end_matches('/'))
 }
@@ -17,6 +17,16 @@ pub fn capability_rest(base: &str, op: &str, token: &str, rest: &str) -> String 
         "{}/{op}/{token}/{}",
         base.trim_end_matches('/'),
         rest.trim_start_matches('/')
+    )
+}
+
+/// `{base}/api/transfers/download/{token}` — the Nanofile-only file download
+/// capability. The fileserver serves `/files/{token}/{filename}` instead, so this
+/// one lives under Nanofile's own `/api/` namespace.
+pub fn nanofile_download(base: &str, token: &str) -> String {
+    format!(
+        "{}/api/transfers/download/{token}",
+        base.trim_end_matches('/')
     )
 }
 
@@ -45,8 +55,20 @@ mod tests {
             "http://h:8082/upload-api/abc"
         );
         assert_eq!(
-            capability("http://h:8082", "download-api", "abc"),
-            "http://h:8082/download-api/abc"
+            capability("http://h:8082", "update-api", "abc"),
+            "http://h:8082/update-api/abc"
+        );
+    }
+
+    #[test]
+    fn the_nanofile_download_token_lives_under_the_api_namespace() {
+        assert_eq!(
+            nanofile_download("http://h:8082/", "abc"),
+            "http://h:8082/api/transfers/download/abc"
+        );
+        assert_eq!(
+            nanofile_download("http://h:8082", "abc"),
+            "http://h:8082/api/transfers/download/abc"
         );
     }
 

@@ -158,6 +158,14 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/admin/users/"),
     ("PUT",    "/api/admin/users/{user_id}/"),
     ("DELETE", "/api/admin/users/{user_id}/"),
+    // The Nanofile-only transfer endpoints: the token download and the progress
+    // shims are public to the table (they authenticate themselves or serve no
+    // user data); the session forms accept only a browser session.
+    ("GET",    "/api/transfers/download/{token}"),
+    ("POST",   "/api/transfers/upload/"),
+    ("POST",   "/api/transfers/update/"),
+    ("GET",    "/api/transfers/upload-progress/"),
+    ("GET",    "/api/transfers/index-progress/"),
     ("GET",    "/api/keys/"),
     ("POST",   "/api/keys/"),
     ("GET",    "/api/keys/catalog/"),
@@ -290,6 +298,16 @@ fn sensitive_routes_have_the_expected_access() {
         Some(RouteAccess::Capability(
             server::domain::capability::Capability::SearchReindex
         ))
+    );
+    // The Nanofile-only transfer endpoints: the token download validates its own
+    // one-hour credential, the session forms take only the browser's session.
+    assert_eq!(
+        required_access("GET", "/api/transfers/download/abc"),
+        Some(RouteAccess::Public)
+    );
+    assert_eq!(
+        required_access("POST", "/api/transfers/upload/"),
+        Some(RouteAccess::SessionOnly)
     );
     // A WebDAV preset grants only `webdav.*`, so no `/api2` route may be
     // satisfiable by a WebDAV capability.

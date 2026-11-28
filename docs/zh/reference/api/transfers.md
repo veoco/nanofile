@@ -1,6 +1,6 @@
 # 上传与下载
 
-搬运字节的接口。多数不直接用账号令牌认证：API 先签发短命的**能力 URL**（`/download-api/<token>`、`/upload-api/<token>`、`/blks/<token>/…`），客户端再去取或 POST。生成链接的接口在 [资料库](/zh/reference/api/libraries#get-api2-repos-repo-id-upload-link)。
+搬运字节的接口。多数不直接用账号令牌认证：API 先签发短命的**能力 URL**（`/api/transfers/download/<token>`、`/upload-api/<token>`、`/blks/<token>/…`），客户端再去取或 POST。生成链接的接口在 [资料库](/zh/reference/api/libraries#get-api2-repos-repo-id-upload-link)。
 
 源码：`server/src/handler/web/upload.rs`、`server/src/handler/web/download.rs`、`server/src/handler/web/zip_download.rs`、`server/src/handler/file.rs`；测试：`server/tests/sync_test.rs`、`server/tests/upload_link_test.rs`。
 
@@ -8,7 +8,9 @@
 
 1. 客户端调用 `GET /api2/repos/{repo_id}/upload-link/?p=/dir`（或 `.../update-link/`），拿到绑定资料库、用户与目录的绝对 URL。
 2. 客户端向该 URL POST `multipart/form-data`。链接接口接受相同表单：可选的 `parent_dir`（上传）或 `target_file`（更新）、`relative_path`、`replace`，以及每个文件一个 `file` 段。
-3. 下载时，`GET /api2/repos/{repo_id}/file/?p=…` 返回 `/download-api/<token>` URL；取它会流式返回字节，支持 `Range` 与 `If-None-Match`。
+3. 下载时，`GET /api2/repos/{repo_id}/file/?p=…` 返回 `/api/transfers/download/<token>` URL；取它会流式返回字节，支持 `Range` 与 `If-None-Match`。
+
+下文的会话表单、令牌下载与进度桩是 Nanofile 自有接口，位于 `/api/` 下；根路径只保留 Seafile 兼容的传输路径。
 
 令牌在内存里、寿命很短，使用时重新核对当前成员关系，因此吊销权限会让未使用的链接失效。
 
@@ -22,7 +24,7 @@
 
 ## 通过链接下载 {#get-download-api-token}
 
-`GET /download-api/{token}`
+`GET /api/transfers/download/{token}`
 
 流式返回签发令牌时指定的文件。`Range` 与 `If-None-Match` 处理同上。每次请求都会重新核对令牌权限；无效或过期令牌返回 `400`。
 
@@ -55,7 +57,7 @@
 [{ "id": "…", "name": "notes.txt", "size": 1204 }]
 ```
 
-**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。分块请求只能带一个文件。`/upload-aj/`、`/upload-aj/{token}`、`/upload-api/{token}`、`/update-aj/`、`/update-aj/{token}`、`/update-api/`、`/update-api/{token}` 都实现了它；`/api2/repos/{repo_id}/file/` 收到 `Content-Range` 仍返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
+**断点续传** —— 发送 `Content-Range: bytes <start>-<end>/<total>` 与 `Content-Length`；每个分块暂存到临时文件，最后一个分块提交。分块请求只能带一个文件。`/api/transfers/upload/`、`/upload-aj/{token}`、`/upload-api/{token}`、`/api/transfers/update/`、`/update-aj/{token}`、`/update-api/{token}` 都实现了它；`/api2/repos/{repo_id}/file/` 收到 `Content-Range` 仍返回 `400`。见[已上传字节](#get-api-v2-1-repos-repo-id-file-uploaded-bytes)。
 
 需要写令牌。加密资料库要先缓存库密钥：通过 `?op=setpassword`（或 v2.1 `set-password/`）提供库密码；签发仓库上传链接本身不会做这件事。可分享的上传链接（`/api/v2.1/upload-links/`）对加密库直接拒绝。
 
@@ -65,9 +67,9 @@
 
 浏览器表单目标，multipart 字段与响应同 [`POST /upload-api/{token}`](#post-upload-api-token)。网页界面通过 `from=web` 的上传链接到达这里。
 
-`POST /upload-aj/`
+`POST /api/transfers/upload/`
 
-同一 handler 的无令牌变体，用浏览器会话认证，通过 `repo_id` 字段指明资料库。没有 minted 令牌就没有绑定目录，所以省略 `parent_dir` 时是资料库根。
+同一 handler 的 Nanofile 会话表单，用浏览器会话认证，通过 `repo_id` 字段指明资料库。没有 minted 令牌就没有绑定目录，所以省略 `parent_dir` 时是资料库根。网页界面在无法签发上传链接时走到这里。
 
 ## 更新文件 {#post-update-api-token}
 
@@ -85,17 +87,15 @@
 
 `replace` 为对称保留；更新总是替换。缺少 `file`（或 `target_file`）返回 `400`，且不改变目标。默认成功体是纯文本文件 id；带 `ret-json` 时返回 `[{"id": "…", "name": "…", "size": 1204}]`。
 
-`POST /update-aj/{token}` 与会话形式 `POST /update-aj/` 使用相同字段，返回 JSON 数组。
+`POST /update-aj/{token}` 使用相同字段，返回 JSON 数组。
 
-`POST /update-api/` 是会话版本：用 `p` / `path` 而不是 `target_file` 指定文件，返回 JSON 数组。它属于 Nanofile 浏览器扩展，不在上游 fileserver 接口面内。
+`POST /api/transfers/update/` 是 Nanofile 自有的会话版本：接收 `repo_id`、`csrf_token` 与一个 `file` 段，用 `target_file` 或 `p` / `path` 指定目标，返回 JSON 数组。
 
-`/update-api/{token}`、`/update-aj/{token}`、`/update-aj/` 与 `/update-api/` 也支持断点续传（带一个 file 段的 `Content-Range`）；见[上传文件](#post-upload-api-token)。
+`/update-api/{token}`、`/update-aj/{token}` 与 `/api/transfers/update/` 也支持断点续传（带一个 file 段的 `Content-Range`）；见[上传文件](#post-upload-api-token)。
 
 `POST /update-aj/{token}`
 
-`POST /update-aj/`
-
-`POST /update-api/`
+`POST /api/transfers/update/`
 
 ## 上传块 {#post-upload-blks-api-token}
 
@@ -135,13 +135,13 @@
 
 ## 上传进度 {#get-upload-progress}
 
-`GET /upload_progress`
+`GET /api/transfers/upload-progress/`
 
-网页界面轮询进度用的兼容接口。永远返回 `{"progress": 100}`：上传按请求同步完成。
+网页界面轮询进度用的 Nanofile 兼容接口。永远返回 `{"progress": 100}`：上传按请求同步完成。
 
 ## 索引进度 {#get-idx-progress}
 
-`GET /idx_progress`
+`GET /api/transfers/index-progress/`
 
 索引进度的兼容接口；全文索引开启时永远返回 `{"progress": 100}`。
 
@@ -163,4 +163,4 @@
 
 流式返回压缩包并消耗令牌。条目清单在签发令牌时已确定；使用时只重新核对用户权限，因此被吊销的用户无法下载之前生成的包。一个令牌只能下载一次。
 
-**Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；仅有会话的 `/upload-aj/`、`/update-aj/`、`/update-api/` 是 Nanofile 扩展；省略 `parent_dir` 时回退到令牌绑定的目录，fileserver 则直接拒绝；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。
+**Seafile** —— 传输流程与字段名与 seahub 相同。差异：返回的上传/更新 URL 是 `/upload-api/<token>` 与 `/update-api/<token>`，而不是 `/seafhttp/upload-api/<token>`（客户端原样使用返回的 URL）；`POST /api2/repos/{repo_id}/file/` 还接受直接的 multipart 上传，官方参考没有记录；会话表单、令牌下载与进度桩是 Nanofile 自有接口，位于 `/api/transfers/` 下；省略 `parent_dir` 时回退到令牌绑定的目录，fileserver 则直接拒绝；更新请求里的 `head` 会被接受，但提交串行发生在当前 HEAD 上；`replace` 另外接受 `true`。
