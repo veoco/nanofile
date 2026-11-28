@@ -297,18 +297,24 @@ impl BlockStorageBackend for EncryptingBlockStore {
     }
 
     async fn convert_legacy_block(&self, repo_id: &str, block_id: &str) -> Result<bool, io::Error> {
-        // Read raw on-disk bytes, not through `read_decrypted` (which would hide plaintext).
-        let raw = self.inner.read_block(repo_id, block_id).await?;
+        // The header is all that decides the format, and a converted block is what a
+        // resumed or repeated pass mostly finds: probing the body made a re-scan read
+        // every byte of the store again.
+        let prefix = self
+            .inner
+            .read_block_prefix(repo_id, block_id, HEADER_LEN)
+            .await?;
         // A versioned block is already converted — or corrupt. Re-encrypting would launder
         // the corruption into a "valid" block.
-        if BlockCipher::looks_encrypted(&raw) {
+        if BlockCipher::looks_encrypted(&prefix) {
             return Ok(false);
         }
         // Header-less: either legacy *plaintext* or legacy *ciphertext*. Only the tag probe
-        // can tell them apart, and it decides what to re-encrypt: a body that decrypts is
-        // ciphertext, so its plaintext gets re-encrypted (a format change, not content);
-        // anything else is plaintext and is encrypted as-is. Encrypting raw ciphertext
-        // would double-encrypt it.
+        // over the whole body can tell them apart, and it decides what to re-encrypt: a body
+        // that decrypts is ciphertext, so its plaintext gets re-encrypted (a format change,
+        // not content); anything else is plaintext and is encrypted as-is. Encrypting raw
+        // ciphertext would double-encrypt it.
+        let raw = self.inner.read_block(repo_id, block_id).await?;
         let cipher = self.cipher.clone();
         let ct = tokio::task::spawn_blocking(move || {
             let plaintext = cipher.decrypt(&raw).unwrap_or(raw);
@@ -654,6 +660,23 @@ mod tests {
     async fn convert_legacy_plaintext_encrypts_it_once() {
         let (dir, store, raw) = temp_store(BlockEncryptionMode::On);
         let data = pseudo_block(13, 512);
+        let id = raw.write_block(REPO, &data).await.unwrap();
+        raw.invalidate_exists_cache();
+
+        assert!(store.convert_legacy_block(REPO, &id).await.unwrap());
+        assert_eq!(store.read_block(REPO, &id).await.unwrap(), data);
+        let stored = raw.read_block(REPO, &id).await.unwrap();
+        assert_eq!(&stored[..4], MAGIC.as_slice());
+        assert_eq!(stored.len(), data.len() + HEADER_LEN + TAG_LEN);
+        drop(dir);
+    }
+
+    /// A block shorter than the versioned header cannot carry one; the header read hands
+    /// back fewer bytes than asked for, and the plaintext path must still take it.
+    #[tokio::test]
+    async fn convert_handles_a_block_shorter_than_the_header() {
+        let (dir, store, raw) = temp_store(BlockEncryptionMode::Lazy);
+        let data = b"hi".to_vec();
         let id = raw.write_block(REPO, &data).await.unwrap();
         raw.invalidate_exists_cache();
 
