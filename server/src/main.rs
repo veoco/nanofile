@@ -1161,16 +1161,7 @@ async fn run_server(
 
     // A writer killed mid-block leaves a `{block_id}.{uuid}.tmp` beside the block:
     // writes publish atomically, so it is never the block itself, but it would linger
-    // forever. Swept once, before requests are served.
-    {
-        let store =
-            infra::storage::block_store::BlockStorage::new(config.storage.block_dir.clone());
-        match store.purge_layout_temp_files().await {
-            Ok(0) => {}
-            Ok(removed) => tracing::info!("removed {removed} stale block temp file(s)"),
-            Err(e) => tracing::warn!("could not sweep stale block temp files: {e}"),
-        }
-    }
+    // forever. The layout migration above already swept them on both of its paths.
 
     // The DB half runs in the `purge_legacy_thumbnail_sizes` migration; the bytes on
     // disk can only go here, where the cache directory is known, and only once (a
