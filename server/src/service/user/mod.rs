@@ -3,7 +3,7 @@ pub mod avatar;
 pub mod device;
 pub mod invitation;
 
-pub use account::{AccountInfo, AccountService};
+pub use account::{AccountInfo, AccountService, effective_quota_total};
 pub use avatar::AvatarService;
 pub use device::DeviceService;
 pub use invitation::{InvitationInfo, InvitationService};

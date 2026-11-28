@@ -195,4 +195,4 @@ permission on the source library.
 upstream routes. `dir/shared_items/` now manages administrator library sharing
 and is documented under [Sharing](/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items).
 A directory is renamed through the `dir/` POST's `operation=rename` and moved
-through [`POST /api2/repos/{repo_id}/fileops/move/`](#post-api2-repos-repo-id-fileops-move).
+through [`POST /api2/repos/{repo_id}/fileops/move/`](/reference/api/files#post-api2-repos-repo-id-fileops-move).

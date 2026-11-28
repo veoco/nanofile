@@ -19,10 +19,10 @@ A `Same` row is a route contract, not a byte-for-byte promise: check the linked 
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 20 | 50 | 95 | 0 |
-| Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
+| Account Operations - User | 165 | 21 | 49 | 95 | 0 |
+| Account Operations - System Admin | 57 | 0 | 5 | 52 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **29** | **63** | **175** | **37** |
+| **Total** | **304** | **30** | **63** | **174** | **37** |
 
 ## authentication
 
@@ -449,12 +449,12 @@ Nanofile has no wiki.
 
 | Official operation | Status | Nanofile | Notes |
 | --- | --- | --- | --- |
-| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#get-api2-admin-users) | Nanofile's own administration API (`/api/admin/users/`) returns a different shape. |
-| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#post-api2-admin-users) | Use `/api/admin/users/` (JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`). |
+| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#get-api-v2-1-admin-users) | No LDAP source and no custom roles; `login_id` is empty, `contact_email` mirrors `email`, `role` is always `default`, `social_auth` is empty. |
+| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | Differs | [our endpoint](/reference/api/accounts#post-api-v2-1-admin-users) | Only `role=default`; `quota_total` is MB in the request and bytes in the response; no notification email. |
 | [Search user](https://seafile-api.readme.io/reference/get_api-v2-1-admin-search-user)<br>`GET /api/v2.1/admin/search-user/` | Missing | — |  |
-| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | Missing | — | No single-user GET; list `/api/admin/users/` and filter. |
-| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#put-api2-admin-users-user-id) | Use `/api/admin/users/{id}/`; the id is numeric. |
-| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#delete-api2-admin-users-user-id) | Use `/api/admin/users/{id}/`; the id is numeric. |
+| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#get-api-v2-1-admin-users-user-id) | The path segment is the account email. |
+| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#put-api-v2-1-admin-users-user-id) | The path segment is the account email; `login_id`/`contact_email`/`institution`/rate limits are ignored; `keep_sharing` is not read. |
+| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | Differs | [our endpoint](/reference/api/accounts#delete-api-v2-1-admin-users-user-id) | The path segment is the account email; the owner of a shared/public library is refused with `400` until the sharing is revoked. |
 
 ### Departments
 
@@ -715,7 +715,7 @@ These routes are served but are not an operation in the official reference. Most
 
 Route-level rows cannot capture everything. These differences apply across the surface; the endpoint pages and [Seafile compatibility](/dev/protocol#deliberate-deviations) give the protocol-level detail.
 
-- **Breaking change.** 0.1.24: Nanofile's own endpoints live under `/api/`; the spellings released up to 0.1.23 that mixed them into `/api2/`, `/api/v2.1/` or the root transfer surface answer 404. Rename and move go through `operation=` on the Seafile file/dir routes; a revision is downloaded from `/api2/repos/{repo_id}/file/revision/` and restored with the file endpoint's `operation=revert`; downloads are minted as `/files/{token}/{filename}`; the session upload/update forms, the progress shims and the legacy link collections are gone (use `/api/v2.1/`); the block URL keeps Seafile's two-segment `/blks/{token}/{block_id}` shape, with the earlier spelling at `/api/transfers/blks/{token}/{file_id}/{block_id}`. The `/avatars/…` image spelling answers a permanent redirect. The Seafile-compatible routes themselves are unchanged.
+- **Breaking change.** 0.1.24: Nanofile's own endpoints live under `/api/`; the spellings released up to 0.1.23 that mixed them into `/api2/`, `/api/v2.1/` or the root transfer surface answer 404. Rename and move go through `operation=` on the Seafile file/dir routes; a revision is downloaded from `/api2/repos/{repo_id}/file/revision/` and restored with the file endpoint's `operation=revert`; downloads are minted as `/files/{token}/{filename}`; the session upload/update forms, the progress shims and the legacy link collections are gone (use `/api/v2.1/`); the block URL keeps Seafile's two-segment `/blks/{token}/{block_id}` shape, with the earlier spelling at `/api/transfers/blks/{token}/{file_id}/{block_id}`. The `/avatars/…` image spelling answers a permanent redirect. The Nanofile administration surface was replaced by `/api/v2.1/admin/users/`, where the path segment is the account email. The Seafile-compatible routes themselves are unchanged.
 - **Credentials.** Besides the account token, Nanofile accepts API keys (capability-scoped, library-scoped) and, on `/seafhttp/`, repository sync tokens. Repo-Token callers use a library-scoped API key; the `/via-repo-token/` mirror is not routed.
 - **Authorization header.** Both `Bearer` and the legacy `Token` prefix are accepted on every API route, so clients written for pre-11 and post-11 Seafile both work.
 - **Errors.** Authentication failures carry both `detail` and `error_msg`; other errors carry `error_msg`. Login failures use DRF's `non_field_errors`. A lock conflict is `403` with the plain-text body `File <path> is locked` on sync commits, the lock endpoint and the revision revert; REST/WebDAV deletes of a file locked by another user answer `423` with a JSON `error_msg`. Seafile's 440–446 and 520 status codes are used where the wire protocol needs them.

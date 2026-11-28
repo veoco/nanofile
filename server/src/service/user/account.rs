@@ -48,17 +48,7 @@ impl AccountService {
             .ok_or(AppError::Unauthorized)?;
 
         let usage = self.compute_usage(user_id).await?;
-        let total = match user_record.storage_quota {
-            Some(0) => -1, // explicitly unlimited
-            Some(n) => n,  // the account's own quota
-            None => {
-                if default_quota > 0 {
-                    default_quota as i64
-                } else {
-                    -1 // the default quota is unlimited
-                }
-            }
-        };
+        let total = effective_quota_total(user_record.storage_quota, default_quota);
 
         let nickname = user_record.nickname();
         let email = user_record.email.clone();
@@ -104,17 +94,7 @@ impl AccountService {
             .ok_or(AppError::Unauthorized)?;
 
         let usage = self.compute_usage(user_id).await?;
-        let total = match user_record.storage_quota {
-            Some(0) => -1, // explicitly unlimited
-            Some(n) => n,  // the account's own quota
-            None => {
-                if default_quota > 0 {
-                    default_quota as i64
-                } else {
-                    -1 // the default quota is unlimited
-                }
-            }
-        };
+        let total = effective_quota_total(user_record.storage_quota, default_quota);
 
         let nickname = user_record.nickname();
         let email = user_record.email.clone();
@@ -134,24 +114,25 @@ impl AccountService {
         })
     }
 
-    /// Register a new user. The password should already be hashed by the caller.
-    pub async fn register_user(
-        &self,
-        email: String,
-        password_hash: String,
-    ) -> Result<(), AppError> {
-        let existing = self.repos.user.find_by_email(&email).await?;
-
-        if existing.is_some() {
-            return Err(AppError::BadRequest("user already exists".into()));
-        }
-
-        self.repos.user.create(email, password_hash).await?;
-        Ok(())
-    }
-
     async fn compute_usage(&self, user_id: i32) -> Result<i64, AppError> {
         self.repos.compute_user_usage(user_id).await
+    }
+}
+
+/// The effective storage quota in bytes: an explicit `0` means unlimited (`-1`),
+/// a value is that many bytes, and `None` falls back to the server default
+/// (`-1` when that is unlimited too). Shared by the account and admin responses.
+pub fn effective_quota_total(storage_quota: Option<i64>, default_quota: u64) -> i64 {
+    match storage_quota {
+        Some(0) => -1,
+        Some(n) => n,
+        None => {
+            if default_quota > 0 {
+                default_quota as i64
+            } else {
+                -1
+            }
+        }
     }
 }
 

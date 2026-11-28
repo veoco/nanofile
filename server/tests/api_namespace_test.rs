@@ -1,25 +1,24 @@
-//! Contract for the Nanofile-only `/api/` namespace.
+//! Contract for the Nanofile-only `/api/` namespace and the routes it replaced.
 //!
 //! Historical background: this server used to serve its own additions (API keys,
 //! reindex controls, rename/move helpers, library visibility, …) on the Seafile
 //! prefixes `/api2/` and `/api/v2.1/`. That mixed two contracts on one namespace:
 //! a client reading the official Seafile API could not tell an upstream route from
-//! a Nanofile invention. The routes now live under `/api/`.
-//!
-//! The transfer surface got the same treatment: the session upload/update forms,
-//! the token download and the progress shims used to sit at the root beside the
-//! fileserver's own paths; they live under `/api/transfers/` now. Two shape
-//! fixes followed the same rule: the avatar image moved to `/api/avatars/` (it
-//! is not a Seafile path), and the block URL took the fileserver's two-segment
-//! shape, with the earlier self-contained spelling moved to
-//! `/api/transfers/blks/`.
+//! a Nanofile invention. Those routes moved to `/api/`, and the additions that
+//! duplicated an upstream operation have since been deleted in favour of it:
+//! rename/move use `operation=` on the file/dir routes, revisions are served from
+//! `/api2/repos/{repo_id}/file/revision/` (restore is the file endpoint's
+//! `operation=revert`), downloads mint `/files/{token}/{filename}`, the link
+//! collections use `/api/v2.1/`, the session transfer forms and progress shims are
+//! gone, avatar bytes live on seahub's `/avatar/render_primary/` view, and user
+//! administration is `/api/v2.1/admin/users/`.
 //!
 //! These tests pin both splits:
 //! * every moved method+path answers `404` (no alias, no redirect); the avatar
-//!   image is the exception, answering a permanent redirect because its URLs are
-//!   embedded in pages and clients,
+//!   bytes are the exception, answering a permanent redirect because their URLs
+//!   are embedded in pages and clients,
 //! * none of them is still listed in the capability route table,
-//! * every new method+path exists and still demands its credential,
+//! * every replacement route exists and still demands its credential,
 //! * the Seafile paths that merely shared a prefix (`/api2/account/info/`,
 //!   `/api2/repo-tokens/`, …) or the root (`/upload-api/{token}`, …) are untouched.
 
@@ -84,11 +83,6 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/repos/{repo_id}/file/index-text/"),
     ("POST", "/api/repos/{repo_id}/file/reindex/"),
     ("GET", "/api/repos/{repo_id}/file/exif/"),
-    ("POST", "/api/accounts/"),
-    ("GET", "/api/admin/users/"),
-    ("POST", "/api/admin/users/"),
-    ("PUT", "/api/admin/users/{user_id}/"),
-    ("DELETE", "/api/admin/users/{user_id}/"),
     ("PUT", "/api/repos/{repo_id}/visibility/"),
 ];
 
@@ -110,6 +104,11 @@ const REPLACED_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/transfers/update/"),
     ("GET", "/api/transfers/upload-progress/"),
     ("GET", "/api/transfers/index-progress/"),
+    ("POST", "/api/accounts/"),
+    ("GET", "/api/admin/users/"),
+    ("POST", "/api/admin/users/"),
+    ("PUT", "/api/admin/users/{user_id}/"),
+    ("DELETE", "/api/admin/users/{user_id}/"),
 ];
 
 /// The Seafile-compatible routes those paths were replaced by. Each is added as
@@ -118,6 +117,11 @@ const REPLACED_ROUTES: &[(&str, &str)] = &[
 const REPLACEMENT_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api2/repos/{repo_id}/file/revision/"),
     ("POST", "/api2/repos/{repo_id}/file/"),
+    ("GET", "/api/v2.1/admin/users/"),
+    ("POST", "/api/v2.1/admin/users/"),
+    ("GET", "/api/v2.1/admin/users/{user_id}/"),
+    ("PUT", "/api/v2.1/admin/users/{user_id}/"),
+    ("DELETE", "/api/v2.1/admin/users/{user_id}/"),
 ];
 
 /// Every method+path that moved off the root transfer surface.
@@ -288,15 +292,15 @@ async fn new_namespace_serves_the_old_handlers() {
         "GET /api/credentials/ must list the credential inventory"
     );
 
-    // Account creation is admin-only; this fixture's account is a normal user,
+    // Account creation is admin-only: this fixture's account is a normal user,
     // so the handler rejects it — which still proves the route was reached.
     let resp = f
         .client
-        .post_form("/api/accounts/", Some(&f.api_token), &[])
+        .get("/api/v2.1/admin/users/", Some(&f.api_token))
         .await;
     assert!(
         resp.status().is_client_error() && resp.status() != 404,
-        "POST /api/accounts/ must reach the account-creation handler, got {}",
+        "GET /api/v2.1/admin/users/ must reach the administration handler, got {}",
         resp.status()
     );
 }

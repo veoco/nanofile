@@ -176,10 +176,10 @@ async fn admin_api_registration_enforces_the_password_policy() {
         .to_string();
 
     let resp = client
-        .post_form(
-            "/api/accounts/",
+        .post_json(
+            "/api/v2.1/admin/users/",
             Some(&token),
-            &[("email", "weak@example.com"), ("password", "x")],
+            &serde_json::json!({"email": "weak@example.com", "password": "x"}),
         )
         .await;
     assert_eq!(
@@ -190,10 +190,10 @@ async fn admin_api_registration_enforces_the_password_policy() {
     );
 
     let resp = client
-        .post_form(
-            "/api/accounts/",
+        .post_json(
+            "/api/v2.1/admin/users/",
             Some(&token),
-            &[("email", "ok@example.com"), ("password", "goodpassword1")],
+            &serde_json::json!({"email": "ok@example.com", "password": "goodpassword1"}),
         )
         .await;
     assert_eq!(resp.status(), 200, "a compliant password must be accepted");

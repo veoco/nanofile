@@ -906,7 +906,7 @@ mod tests {
             (Method::DELETE, "/api2/repos/{repo_id}/"),
             (Method::GET, "/api2/repos/{repo_id}/dir/"),
             (Method::POST, "/api/v2.1/repos/{repo_id}/file/"),
-            (Method::GET, "/api/admin/users/"),
+            (Method::GET, "/api/v2.1/admin/users/"),
             // Session-only routes are exactly where a session is required.
             (Method::GET, "/api/keys/"),
             (Method::POST, "/api/keys/"),

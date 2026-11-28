@@ -17,7 +17,7 @@ Nanofile 自己的凭据模型：给脚本与第三方工具用的受限 API 密
 | library | `library.read`、`library.create`、`library.update`、`library.delete`、`library.password` |
 | file | `file.read`、`file.write`、`file.delete` |
 | trash | `trash.read`、`trash.write` |
-| history | `history.read`、`history.write` |
+| history | `history.read` |
 | sharing | `share_link.read`、`share_link.write`、`upload_link.read`、`upload_link.write` |
 | metadata | `metadata.read`、`metadata.write`、`tag.read`、`tag.write` |
 | discovery | `star.read`、`star.write`、`activity.read`、`search.read`、`search.write`、`search.reindex` |

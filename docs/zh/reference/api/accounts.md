@@ -42,24 +42,6 @@
 
 需要 `account.write`；带该能力的密钥可以调用。
 
-## 创建账号 {#post-api2-account}
-
-`POST /api/accounts/`
-
-仅管理员。用 `email` 与 `password` 表单字段创建账号，密码策略照常生效。Nanofile 只提供这个复数拼写：seahub 另有一个单数路由，这里没有挂载，用过它的客户端需要改发到本接口。
-
-**请求体** —— URL 编码表单：
-
-| 字段 | 必填 | 含义 |
-| --- | --- | --- |
-| `email` | 是 | 登录地址，必须唯一。 |
-| `password` | 是 | 必须满足 `auth.password_min_length` 与强度策略。 |
-
-**响应 `200`** —— 空正文。非管理员返回 `403`。
-
-自助注册是网页流程（`/accounts/register/`），不走这个接口：它要处理注册模式、邀请码、邮箱验证与限流。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
 
 ## 获取头像 {#get-api2-avatars-user-email-resized-size}
 
@@ -97,73 +79,102 @@
 { "avatar_url": "/avatar/render_primary/user@example.com/256/" }
 ```
 
-## 列出用户 {#get-api2-admin-users}
+## 列出所有用户信息 {#get-api-v2-1-admin-users}
 
-`GET /api/admin/users/`
+`GET /api/v2.1/admin/users/?page=&per_page=&is_active=&role=&source=&order_by=&direction=`
 
-仅管理员。返回全部账号。
-
-**响应 `200`**
+仅管理员。以 seahub 的信封返回账号：
 
 ```json
-[
-  {
-    "id": 2,
-    "email": "user@example.com",
-    "is_active": true,
-    "is_admin": false,
-    "storage_quota": 30000000,
-    "usage": 22020651,
-    "created_at": 1760000000,
-    "last_login_at": 1760000000
-  }
-]
+{
+  "data": [
+    {
+      "avatar_url": "https://files.example.com/avatar/render_primary/user@example.com/80/",
+      "email": "user@example.com",
+      "name": "user",
+      "contact_email": "user@example.com",
+      "login_id": "",
+      "is_staff": false,
+      "is_active": true,
+      "quota_usage": 22020651,
+      "quota_total": 30000000,
+      "role": "default",
+      "create_time": "2026-10-24T09:00:00+00:00",
+      "last_login": "2026-10-24T09:00:00+00:00",
+      "last_access_time": "2026-10-24T09:00:00+00:00",
+      "social_auth": []
+    }
+  ],
+  "total_count": 1
+}
 ```
 
-需要 `admin.user.read`。这是 Nanofile 自己的管理接口，不是 seahub 的 `/api/v2.1/admin/users/`，字段名与选项都不同。
+`page` 默认 1，`per_page` 默认 25（上限 500）。`is_active` 接受 `1` 或 `0`。`source` 接受 `db`（默认）与 `ldapimport`（永远返回空页：没有 LDAP 后端）。`role` 接受 `default`；其他值匹配不到账号。`order_by=quota_usage` 配 `direction=asc|desc` 按用量排序，账号超过 500 个时拒绝排序。
 
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+列表项字段照 seahub 的 `get_user_info()` 再加 `avatar_url`；差异：`login_id` 永远为空、`contact_email` 等于 `email`、`role` 永远是 `default`、`social_auth` 永远为空。`quota_total` 是字节数（`-1` 表示不限），`quota_usage` 是已用字节，时间戳是 ISO 8601。
 
-## 创建用户 {#post-api2-admin-users}
+需要 `admin.user.read`。
 
-`POST /api/admin/users/`
+**Seafile** —— 路由与信封相同；差异即上面列出的字段取值。
 
-仅管理员。
+## 添加用户 {#post-api-v2-1-admin-users}
 
-**请求体**（JSON）
+`POST /api/v2.1/admin/users/`
+
+仅管理员。接受 JSON 或 `application/x-www-form-urlencoded`（seahub 的 DRF 视图两种都收）。
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
-| `email` | 是 | 登录地址。 |
+| `email` | 是 | 登录地址，必须合法且唯一。 |
 | `password` | 是 | 必须满足 `auth.password_min_length` 与 `require_strong_password`，与其他建号路径一致。 |
-| `is_admin` | 否 | 默认 `false`。 |
+| `is_staff` | 否 | 默认 `false`；存为账号的管理员标记。 |
 | `is_active` | 否 | 默认 `true`。 |
-| `storage_quota` | 否 | 字节数；`null` 用服务器默认值。 |
+| `name` | 否 | 昵称，最多 64 字符且不能含 `/`。 |
+| `quota_total` | 否 | 兆字节；`0` 表示不限，省略则用服务器默认值。 |
+| `role` | 否 | 只接受 `""` 或 `default`；Nanofile 没有自定义角色。 |
 
-**响应 `200`** —— 创建的用户，形状同列表项。需要 `admin.user.write`。
+**响应 `200`** —— 创建出的账号，形状同列表项。
 
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+邮箱非法、账号已存在（`User <email> already exists.`）或密码不合策略时返回 `400`。需要 `admin.user.write`。
 
-## 更新用户 {#put-api2-admin-users-user-id}
+自助注册是独立的网页流程（`/accounts/register/`）：它处理注册模式、邀请码、邮箱验证与限流。
 
-`PUT /api/admin/users/{user_id}/`
+**Seafile** —— 路由、请求体字段与响应相同；`role` 按上文限制。
 
-仅管理员。整体替换管理标记。
+## 获取某个用户的信息 {#get-api-v2-1-admin-users-user-id}
 
-**请求体**（JSON）—— `is_admin`、`is_active`、`storage_quota` 都会被读取；发送你想要的完整状态。`user_id` 是列表里的数字 `id`。
+`GET /api/v2.1/admin/users/{user_id}/`
 
-**响应 `200`** —— 更新后的用户。需要 `admin.user.write`。
+仅管理员。路径段是账号的**邮箱**：seahub 的 URL 正则在这里匹配邮箱，虽然参考文档把参数写作 `{user_id}`。
 
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+**响应 `200`** —— 一个列表项（含 `last_login`、`last_access_time` 与 `social_auth`）。账号不存在返回 `404`（`User <email> not found.`）。需要 `admin.user.read`。
 
-## 删除用户 {#delete-api2-admin-users-user-id}
+## 更新用户信息 {#put-api-v2-1-admin-users-user-id}
 
-`DELETE /api/admin/users/{user_id}/`
+`PUT /api/v2.1/admin/users/{user_id}/`
 
-仅管理员。删除账号及其数据。**响应 `200`** —— `{"success": true}`。需要 `admin.user.write`。
+仅管理员；路径段是邮箱。**部分更新**：未给的字段保持当前值。
 
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+| 字段 | 含义 |
+| --- | --- |
+| `is_staff` | 管理员标记。 |
+| `is_active` | 停用会立即撤销该账号的会话、同步令牌、API 密钥与未到期的能力 URL。 |
+| `quota_total` | 兆字节；`0` 表示不限。 |
+| `name` | 昵称；空字符串清除。 |
+| `password` | 新密码，须符合配置的策略。 |
+| `role` | 只接受 `""` 或 `default`。 |
 
+**响应 `200`** —— 更新后的列表项，另带 `"update_status_tip": ""`（本服务不发通知邮件）。需要 `admin.user.write`。
+
+`login_id`、`contact_email`、`institution` 与 Pro 的限速字段在本服务没有存储，会被忽略；没有 `keep_sharing` 开关（停用会保留分享，与 seahub 默认模式一致）。
+
+## 删除用户 {#delete-api-v2-1-admin-users-user-id}
+
+`DELETE /api/v2.1/admin/users/{user_id}/`
+
+仅管理员；路径段是邮箱。删除账号及其数据。**响应 `200`** —— `{"success": true}`。需要 `admin.user.write`。
+
+拥有共享或公开资料库的账号在把资料库恢复为私有前不能删除（返回 `400`）；本服务宁可拒绝，也不静默撤销所有接收者的访问。
 ## 未读消息 {#get-api2-unseen-messages}
 
 `GET /api2/unseen_messages/`

@@ -236,13 +236,13 @@ export async function createUser(
   email: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api/accounts/`, {
+  const res = await fetch(`${baseURL}/api/v2.1/admin/users/`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${adminToken}`,
-      "content-type": "application/x-www-form-urlencoded",
+      "content-type": "application/json",
     },
-    body: new URLSearchParams({ email, password }),
+    body: JSON.stringify({ email, password, is_staff: false, is_active: true }),
   });
   if (!res.ok) throw new Error(`create user ${email} failed: ${res.status} ${await res.text()}`);
 }
@@ -260,13 +260,13 @@ export async function createAdminUser(
   email: string,
   password: string,
 ): Promise<void> {
-  const res = await fetch(`${baseURL}/api/admin/users/`, {
+  const res = await fetch(`${baseURL}/api/v2.1/admin/users/`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${adminToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify({ email, password, is_admin: false, is_active: true }),
+    body: JSON.stringify({ email, password, is_staff: false, is_active: true }),
   });
   if (!res.ok) throw new Error(`create admin user ${email} failed: ${res.status} ${await res.text()}`);
 }

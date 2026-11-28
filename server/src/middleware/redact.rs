@@ -12,7 +12,6 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "u",
     "zip",
     "blks",
-    "files",
     "upload-api",
     "upload-aj",
     "update-api",
@@ -42,7 +41,11 @@ pub fn redact_request_path(path: &str) -> String {
             out.push('/');
         }
         let prev = if i > 0 { segs[i - 1] } else { "" };
-        if !seg.is_empty() && TOKEN_PATH_PREFIXES.contains(&prev) {
+        // `/files/{token}/{filename}` is the fileserver's download URL. The
+        // prefix is matched against the leading segment rather than the previous
+        // one so a share page's `/d/{token}/files/…` path is not over-redacted.
+        let files_token = i == 2 && segs.get(1) == Some(&"files");
+        if !seg.is_empty() && (TOKEN_PATH_PREFIXES.contains(&prev) || files_token) {
             out.push_str("{token}");
         } else {
             out.push_str(seg);

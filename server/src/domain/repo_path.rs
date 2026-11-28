@@ -127,7 +127,7 @@ mod tests {
     fn find_repo_id_ignores_non_repo_parameters() {
         for path in [
             "/api2/account/info/",
-            "/api/admin/users/7/",
+            "/api/v2.1/admin/users/user@example.com/",
             "/api2/repos/{repo_id}/metadata/tag-files/3/",
             "/api/v2.1/share-links/AbCdEfGhIjKlMnOpQrStUv",
             "/api2/server-info/",

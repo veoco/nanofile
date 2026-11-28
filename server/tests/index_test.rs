@@ -458,10 +458,10 @@ async fn test_dir_rename_and_move_update_index() {
     // it became searchable).
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/dir/rename/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/dir/?p=/docs", f.repo_id),
             Some(token),
-            &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
+            &[("operation", "rename"), ("newname", "manuals")],
         )
         .await;
     assert_eq!(resp.status(), 200, "dir rename failed");
@@ -483,14 +483,14 @@ async fn test_dir_rename_and_move_update_index() {
     );
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/dir/move/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/fileops/move/?p=/", f.repo_id),
             Some(token),
-            &serde_json::json!({
-                "repo_id": f.repo_id,
-                "p": "/manuals",
-                "new_parent_dir": "/dst",
-            }),
+            &[
+                ("file_names", "manuals"),
+                ("dst_repo", f.repo_id.as_str()),
+                ("dst_dir", "/dst"),
+            ],
         )
         .await;
     assert_eq!(resp.status(), 200, "dir move failed");
@@ -546,10 +546,10 @@ async fn a_dir_rename_never_hides_the_document() {
 
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/dir/rename/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/dir/?p=/docs", f.repo_id),
             Some(token),
-            &serde_json::json!({"repo_id": f.repo_id, "p": "/docs", "new_name": "manuals"}),
+            &[("operation", "rename"), ("newname", "manuals")],
         )
         .await;
     assert_eq!(resp.status(), 200, "dir rename failed");

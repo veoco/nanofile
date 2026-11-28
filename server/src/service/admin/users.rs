@@ -7,6 +7,9 @@ use base::error::AppError;
 pub struct UserAdminInfo {
     pub id: i32,
     pub email: String,
+    /// Display name (`display_name` → `name` → email local part), used by the
+    /// seahub-shaped admin list.
+    pub name: String,
     pub is_active: bool,
     pub is_admin: bool,
     pub email_verified: bool,
@@ -55,9 +58,11 @@ impl AdminUserService {
         let mut result = Vec::with_capacity(users.len());
         for u in users {
             let usage = usage_by_owner.get(&u.id).copied().unwrap_or(0);
+            let name = u.nickname();
             result.push(UserAdminInfo {
                 id: u.id,
                 email: u.email,
+                name,
                 is_active: u.is_active,
                 is_admin: u.is_admin,
                 email_verified: u.email_verified,

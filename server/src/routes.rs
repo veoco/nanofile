@@ -5,7 +5,8 @@
 //! route tables (the official reference or the seahub server): a client written
 //! for Seafile must never find a Nanofile invention on those prefixes.
 //! [`nanofile_routes()`] is the home of everything this server adds itself
-//! (API keys, reindex controls, rename/move helpers, library visibility, …).
+//! (API keys, credential inventory, reindex controls, library visibility and the
+//! pre-move block URL).
 
 use axum::Router;
 use axum::routing::{delete, get, post, put};
@@ -92,6 +93,16 @@ fn v1_routes() -> Router<Arc<AppState>> {
 
 fn v2_routes() -> Router<Arc<AppState>> {
     Router::new()
+        .route(
+            "/api/v2.1/admin/users/",
+            get(crate::handler::users::list_users).post(crate::handler::users::create_user),
+        )
+        .route(
+            "/api/v2.1/admin/users/{user_id}/",
+            get(crate::handler::users::get_user)
+                .put(crate::handler::users::update_user)
+                .delete(crate::handler::users::delete_user),
+        )
         .route(
             "/api/v2.1/repos/",
             get(crate::handler::repos::list_repos_v21),
@@ -314,13 +325,12 @@ pub fn api_routes() -> Router<Arc<AppState>> {
 /// Every Nanofile-specific route, under its own `/api/` namespace.
 ///
 /// Nothing here exists in Seafile's official reference or in the seahub server:
-/// these are this project's own API (API keys and credentials, search/index
-/// controls, rename/move helpers, library visibility, the legacy v1 link
-/// collections, the account-administration helpers, and the transfer endpoints
-/// the fileserver route table has no path for). Keeping them on a prefix of
-/// their own is what lets `/api2/` and `/api/v2.1/` be read as "the Seafile API"
-/// without a Nanofile invention mixed in, and the same rule now holds for the
-/// fileserver surface at the root.
+/// these are this project's own API (API keys and the credential inventory,
+/// search/index controls, EXIF, library visibility, and the pre-move block URL
+/// kept for links minted before 0.1.24). Keeping them on a prefix of their own is
+/// what lets `/api2/` and `/api/v2.1/` be read as "the Seafile API" without a
+/// Nanofile invention mixed in, and the same rule holds for the fileserver
+/// surface at the root.
 ///
 /// `/api/` deliberately has no version segment: it did not exist upstream, so
 /// there is nothing to stay compatible with, and a future breaking change can
@@ -361,20 +371,12 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
             "/api/index-file-text/",
             post(crate::handler::reindex::index_file_text),
         )
-        // Admin-only account creation (the form flavour; `/api/admin/users/`
-        // below is the JSON flavour).
-        .route(
-            "/api/accounts/",
-            post(crate::handler::account::register_user),
-        )
         // Per-library helpers: file extras and library visibility.
         .nest("/api/repos", crate::handler::file::nanofile_file_routes())
         .nest(
             "/api/repos",
             crate::handler::library_share::nanofile_repo_routes(),
         )
-        // Legacy v1 link collections and the account-administration surface.
-        .nest("/api/admin", crate::handler::users::admin_user_routes())
         // The pre-move block URL, kept for links minted before the move (a
         // capability URL lives an hour). Nothing else belongs to the transfer
         // group: the session forms and the token download are gone.

@@ -218,7 +218,7 @@ async fn test_account_info_quota_fallback_default() {
 
 // Account registration requires admin authentication
 
-/// Security: anonymous registration via POST /api/accounts/ must be rejected
+/// Security: anonymous account creation via the admin user API must be rejected
 /// (it previously bypassed the invitation system and rate limits entirely).
 #[tokio::test]
 async fn test_register_anonymous_rejected() {
@@ -226,10 +226,10 @@ async fn test_register_anonymous_rejected() {
     let client = server.client();
 
     let resp = client
-        .post_form(
-            "/api/accounts/",
+        .post_json(
+            "/api/v2.1/admin/users/",
             None,
-            &[("email", "anon@example.com"), ("password", "secret123")],
+            &serde_json::json!({"email": "anon@example.com", "password": "secret123"}),
         )
         .await;
     assert_eq!(resp.status(), 401);
@@ -247,10 +247,10 @@ async fn test_register_non_admin_rejected() {
     let token = body["token"].as_str().unwrap().to_string();
 
     let resp = client
-        .post_form(
-            "/api/accounts/",
+        .post_json(
+            "/api/v2.1/admin/users/",
             Some(&token),
-            &[("email", "new@example.com"), ("password", "secret123")],
+            &serde_json::json!({"email": "new@example.com", "password": "secret123"}),
         )
         .await;
     assert_eq!(resp.status(), 403);
@@ -279,10 +279,10 @@ async fn test_register_admin_allowed() {
     let token = body["token"].as_str().unwrap().to_string();
 
     let resp = client
-        .post_form(
-            "/api/accounts/",
+        .post_json(
+            "/api/v2.1/admin/users/",
             Some(&token),
-            &[("email", "created@example.com"), ("password", "secret123")],
+            &serde_json::json!({"email": "created@example.com", "password": "secret123"}),
         )
         .await;
     assert_eq!(resp.status(), 200);

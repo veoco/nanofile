@@ -1,8 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::{Form, State},
-    http::StatusCode,
-};
+use axum::{Json, Router, extract::State};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -10,12 +6,6 @@ use crate::AppState;
 use crate::middleware::auth::AuthUser;
 use crate::service::user::{AccountInfo, AccountService};
 use base::error::AppError;
-
-#[derive(Deserialize)]
-pub struct RegisterForm {
-    pub email: String,
-    pub password: String,
-}
 
 #[derive(Deserialize)]
 pub struct UpdateAccountInfo {
@@ -61,46 +51,4 @@ pub async fn update_account_info(
         )
         .await?;
     Ok(Json(info))
-}
-
-/// `POST /api/accounts/` — admin-only account creation (URL-encoded form).
-///
-/// Nanofile-only route: Seafile's `/api2/accounts/` is a GET list, and its
-/// account-creation API is `/api/v2.1/admin/users/` (a different shape).
-pub async fn register_user(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Form(form): Form<RegisterForm>,
-) -> Result<StatusCode, AppError> {
-    // Account creation via the API is admin-only (seahub's `IsAdminUser`); anonymous
-    // self-registration goes through the UI flow, which enforces the registration
-    // mode, invitation codes, email verification and rate limits.
-    let user_record = state
-        .repos
-        .user
-        .find_by_id(auth.user_id)
-        .await?
-        .ok_or(AppError::Forbidden)?;
-    if !user_record.is_admin {
-        return Err(AppError::Forbidden);
-    }
-
-    // The configured password policy applies here too, as on every other password
-    // path; this admin-only one must not be an exception.
-    crate::service::auth::password::validate_password(
-        &form.password,
-        state.config().auth.password_min_length,
-        state.config().auth.require_strong_password,
-    )
-    .map_err(AppError::BadRequest)?;
-
-    let iterations = state.config().auth.password_hash_iterations;
-    let password_hash =
-        crate::service::auth::password::hash_password_async(form.password.clone(), iterations)
-            .await;
-
-    let svc = AccountService::new(state.repos.clone());
-    svc.register_user(form.email, password_hash).await?;
-
-    Ok(StatusCode::OK)
 }

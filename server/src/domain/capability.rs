@@ -40,7 +40,6 @@ pub enum Capability {
     TrashRead,
     TrashWrite,
     HistoryRead,
-    HistoryWrite,
     ShareLinkRead,
     ShareLinkWrite,
     UploadLinkRead,
@@ -132,7 +131,7 @@ impl Capability {
     ///
     /// Only capabilities with an enforcement point appear here: offering a grant
     /// nothing consults would be a lie (removed ids live in [`RETIRED_IDS`]).
-    pub const ALL: [Capability; 40] = [
+    pub const ALL: [Capability; 39] = [
         Capability::AccountRead,
         Capability::AccountWrite,
         Capability::DeviceRead,
@@ -148,7 +147,6 @@ impl Capability {
         Capability::TrashRead,
         Capability::TrashWrite,
         Capability::HistoryRead,
-        Capability::HistoryWrite,
         Capability::ShareLinkRead,
         Capability::ShareLinkWrite,
         Capability::UploadLinkRead,
@@ -192,7 +190,6 @@ impl Capability {
             Capability::TrashRead => "trash.read",
             Capability::TrashWrite => "trash.write",
             Capability::HistoryRead => "history.read",
-            Capability::HistoryWrite => "history.write",
             Capability::ShareLinkRead => "share_link.read",
             Capability::ShareLinkWrite => "share_link.write",
             Capability::UploadLinkRead => "upload_link.read",
@@ -245,7 +242,7 @@ impl Capability {
                 CapabilityDomain::File
             }
             Capability::TrashRead | Capability::TrashWrite => CapabilityDomain::Trash,
-            Capability::HistoryRead | Capability::HistoryWrite => CapabilityDomain::History,
+            Capability::HistoryRead => CapabilityDomain::History,
             Capability::ShareLinkRead
             | Capability::ShareLinkWrite
             | Capability::UploadLinkRead
@@ -309,9 +306,11 @@ impl Capability {
 ///
 /// A capability is offered only while something enforces it: `invitation.*` was
 /// a session-only admin feature with no route, `history.manage` had nothing
-/// beyond `history.read`/`history.write`, and `member.*`/`group.read` guarded
-/// sharing and groups that are gone (the remaining group routes are stubs gated
-/// on `library.read`, as is `related-users`).
+/// beyond `history.read`/`history.write` (and `history.write` retired when the
+/// revision restore became `operation=revert` on the file endpoint), and
+/// `member.*`/`group.read` guarded sharing and groups that are gone (the
+/// remaining group routes are stubs gated on `library.read`, as is
+/// `related-users`).
 ///
 /// A stored list may still name them: a key minted from `full` or `readonly_all`
 /// before this build carries them. Stored lists drop such ids
@@ -322,6 +321,7 @@ pub const RETIRED_IDS: &[&str] = &[
     "invitation.read",
     "invitation.write",
     "history.manage",
+    "history.write",
     "member.read",
     "member.write",
     "group.read",
@@ -344,7 +344,6 @@ const IMPLICATIONS: &[(Capability, &[Capability])] = &[
         &[Capability::TrashRead, Capability::FileDelete],
     ),
     (Capability::HistoryRead, &[Capability::FileRead]),
-    (Capability::HistoryWrite, &[Capability::HistoryRead]),
     (Capability::ShareLinkWrite, &[Capability::ShareLinkRead]),
     (Capability::UploadLinkWrite, &[Capability::UploadLinkRead]),
     (Capability::MetadataRead, &[Capability::LibraryRead]),
@@ -531,12 +530,6 @@ const ROUTES: &[RouteEntry] = &[
         "PUT",
         "/api2/account/info/",
         RouteAccess::Capability(Capability::AccountWrite),
-    ),
-    // Account creation over the API is admin-only (the handler enforces it).
-    (
-        "POST",
-        "/api/accounts/",
-        RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
         "GET",
@@ -1167,22 +1160,27 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api/admin/users/",
+        "/api/v2.1/admin/users/",
         RouteAccess::Capability(Capability::AdminUserRead),
     ),
     (
         "POST",
-        "/api/admin/users/",
+        "/api/v2.1/admin/users/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
+        "GET",
+        "/api/v2.1/admin/users/{user_id}/",
+        RouteAccess::Capability(Capability::AdminUserRead),
+    ),
+    (
         "PUT",
-        "/api/admin/users/{user_id}/",
+        "/api/v2.1/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     (
         "DELETE",
-        "/api/admin/users/{user_id}/",
+        "/api/v2.1/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
     // The pre-move block URL (file id in the path), kept for the links minted
@@ -1452,7 +1450,6 @@ pub const PRESETS: &[Preset] = &[
             Capability::TrashRead,
             Capability::TrashWrite,
             Capability::HistoryRead,
-            Capability::HistoryWrite,
             Capability::ShareLinkRead,
             Capability::ShareLinkWrite,
             Capability::UploadLinkRead,
@@ -1507,7 +1504,7 @@ mod tests {
 
     #[test]
     fn catalog_ids_are_unique_and_round_trip() {
-        assert_eq!(Capability::ALL.len(), 40);
+        assert_eq!(Capability::ALL.len(), 39);
         let mut ids: Vec<&str> = Capability::ALL.iter().map(|c| c.id()).collect();
         ids.sort_unstable();
         ids.dedup();

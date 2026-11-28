@@ -509,22 +509,45 @@ impl FileOpsService {
 
         // Update full-text search index: deleting the old paths is cheap and
         // stays synchronous; writing the new ones is scheduled (it reads content).
+        // A moved directory needs the subtree pass instead: its documents are
+        // keyed by path, so each file under it moves to the new path (the file
+        // entry itself has no document).
         if let Some(indexer) = &self.indexer {
             for entry in &entries_to_move {
+                if entry.mode & S_IFDIR != 0 {
+                    continue;
+                }
                 let old_fp = join_path(src_parent_dir, &entry.name);
                 if let Err(e) = indexer.delete_file_async(repo_id, &old_fp).await {
                     tracing::warn!("Failed to delete old index on batch move: {e}");
                 }
             }
         }
-        if self.scheduler.is_enabled() {
-            let targets: Vec<IndexTarget> = entries_to_add
-                .iter()
-                .map(|entry| {
-                    IndexTarget::new(join_path(dst_dir, &entry.name), Some(entry.id.clone()))
-                })
-                .collect();
-            self.scheduler.schedule(repo_id, targets, "move").await;
+        let mut scheduled: Vec<IndexTarget> = Vec::new();
+        for (source, added) in entries_to_move.iter().zip(&entries_to_add) {
+            let old_fp = join_path(src_parent_dir, &source.name);
+            let new_fp = join_path(dst_dir, &added.name);
+            if added.mode & S_IFDIR != 0 {
+                if let Err(e) = crate::service::fs::index_sync::reindex_dir_change(
+                    &self.repos,
+                    self.indexer.as_ref(),
+                    &self.scheduler,
+                    repo_id,
+                    Some(&old_fp),
+                    Some(&new_fp),
+                    Some(&base_root_id),
+                    &new_root,
+                )
+                .await
+                {
+                    tracing::warn!("Failed to move directory index on batch move: {e}");
+                }
+            } else if self.scheduler.is_enabled() {
+                scheduled.push(IndexTarget::new(new_fp, Some(added.id.clone())));
+            }
+        }
+        if !scheduled.is_empty() {
+            self.scheduler.schedule(repo_id, scheduled, "move").await;
         }
 
         Ok(results)

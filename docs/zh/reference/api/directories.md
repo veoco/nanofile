@@ -151,4 +151,4 @@
 
 新资料库带一个提交。需要 `library.create` 与源资料库的写权限。
 
-**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/shared_items/` 现在用于管理员共享库，见[分享](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items)。目录重命名通过 `dir/` POST 的 `operation=rename`，移动通过 [`POST /api2/repos/{repo_id}/fileops/move/`](#post-api2-repos-repo-id-fileops-move)。
+**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/shared_items/` 现在用于管理员共享库，见[分享](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items)。目录重命名通过 `dir/` POST 的 `operation=rename`，移动通过 [`POST /api2/repos/{repo_id}/fileops/move/`](/zh/reference/api/files#post-api2-repos-repo-id-fileops-move)。

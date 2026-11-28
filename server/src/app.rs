@@ -328,6 +328,10 @@ mod tests {
             redact_request_path("/repos/abc/files/"),
             "/repos/abc/files/"
         );
+        assert_eq!(
+            redact_request_path("/d/abc123/files/a.txt"),
+            "/d/{token}/files/a.txt"
+        );
         assert_eq!(redact_request_path("/"), "/");
     }
 

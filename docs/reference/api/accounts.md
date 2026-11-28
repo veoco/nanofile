@@ -52,29 +52,6 @@ user edits their nickname.
 
 Requires `account.write`; keys carrying it may call this.
 
-## Create an account {#post-api2-account}
-
-`POST /api/accounts/`
-
-Administrator only. Creates an account from `email` and `password` form fields;
-the password policy applies. Nanofile serves only this plural spelling: seahub's
-separate singular route is not mounted here, so a client that used it must send
-the request here instead.
-
-**Body** — URL-encoded form:
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `email` | yes | Login address; must be unique. |
-| `password` | yes | Must satisfy `auth.password_min_length` and the strength policy. |
-
-**Response `200`** — empty body. `403` for a non-administrator.
-
-Self-registration is a web flow (`/accounts/register/`), not this endpoint: it
-enforces the registration mode, invitation codes, email verification and rate
-limits.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
 
 ## Get an avatar {#get-api2-avatars-user-email-resized-size}
 
@@ -127,77 +104,126 @@ Uploads a new primary avatar for the authenticated account.
 { "avatar_url": "/avatar/render_primary/user@example.com/256/" }
 ```
 
-## List users {#get-api2-admin-users}
+## List all users' info {#get-api-v2-1-admin-users}
 
-`GET /api/admin/users/`
+`GET /api/v2.1/admin/users/?page=&per_page=&is_active=&role=&source=&order_by=&direction=`
 
-Administrator only. Returns every account.
-
-**Response `200`**
+Administrator only. Returns accounts in seahub's envelope:
 
 ```json
-[
-  {
-    "id": 2,
-    "email": "user@example.com",
-    "is_active": true,
-    "is_admin": false,
-    "storage_quota": 30000000,
-    "usage": 22020651,
-    "created_at": 1760000000,
-    "last_login_at": 1760000000
-  }
-]
+{
+  "data": [
+    {
+      "avatar_url": "https://files.example.com/avatar/render_primary/user@example.com/80/",
+      "email": "user@example.com",
+      "name": "user",
+      "contact_email": "user@example.com",
+      "login_id": "",
+      "is_staff": false,
+      "is_active": true,
+      "quota_usage": 22020651,
+      "quota_total": 30000000,
+      "role": "default",
+      "create_time": "2026-10-24T09:00:00+00:00",
+      "last_login": "2026-10-24T09:00:00+00:00",
+      "last_access_time": "2026-10-24T09:00:00+00:00",
+      "social_auth": []
+    }
+  ],
+  "total_count": 1
+}
 ```
 
-Requires `admin.user.read`. This is Nanofile's own administration surface; it is
-not seahub's `/api/v2.1/admin/users/` API, whose field names and options differ.
+`page` defaults to 1 and `per_page` to 25 (at most 500). `is_active` accepts `1`
+or `0`. `source` accepts `db` (the default) and `ldapimport` (an always-empty
+page: there is no LDAP backend). `role` accepts `default`; any other value
+matches no account. `order_by=quota_usage` with `direction=asc|desc` sorts by
+usage, and is refused once there are more than 500 accounts.
 
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+Item fields follow seahub's `get_user_info()` plus `avatar_url`; differences:
+`login_id` is always empty, `contact_email` mirrors `email`, `role` is always
+`default`, and `social_auth` is always empty. `quota_total` is bytes (`-1` means
+unlimited), `quota_usage` is bytes in use, and the timestamps are ISO 8601.
 
-## Create a user {#post-api2-admin-users}
+Requires `admin.user.read`.
 
-`POST /api/admin/users/`
+**Seafile** — same route and envelope; the differences are the field values
+listed above.
 
-Administrator only.
+## Add user {#post-api-v2-1-admin-users}
 
-**Body** (JSON)
+`POST /api/v2.1/admin/users/`
+
+Administrator only. Accepts JSON or `application/x-www-form-urlencoded`
+(seahub's DRF view accepts both).
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `email` | yes | Login address. |
+| `email` | yes | Login address; must be valid and unique. |
 | `password` | yes | Must satisfy `auth.password_min_length` and `require_strong_password`, like every other account-creation path. |
-| `is_admin` | no | Default `false`. |
+| `is_staff` | no | Default `false`; stored as the account's administrator flag. |
 | `is_active` | no | Default `true`. |
-| `storage_quota` | no | Bytes; `null` uses the server default. |
+| `name` | no | Nickname, at most 64 characters and without `/`. |
+| `quota_total` | no | Megabytes; `0` means unlimited, omitted uses the server default. |
+| `role` | no | Only `""` or `default`; Nanofile has no custom roles. |
 
-**Response `200`** — the created user in the list shape. Requires
+**Response `200`** — the created account in the list-item shape.
+
+`400` for an invalid email, an existing account (`User <email> already exists.`)
+or a password below the policy. Requires `admin.user.write`.
+
+Self-registration is a separate web flow (`/accounts/register/`): it enforces
+the registration mode, invitation codes, email verification and rate limits.
+
+**Seafile** — same route, body fields and response; `role` is restricted as
+described.
+
+## Get a user's info {#get-api-v2-1-admin-users-user-id}
+
+`GET /api/v2.1/admin/users/{user_id}/`
+
+Administrator only. The path segment is the account's **email**: seahub's URL
+regex matches an email there even though the reference names the parameter
+`{user_id}`.
+
+**Response `200`** — one list item (including `last_login`,
+`last_access_time` and `social_auth`). An unknown account is `404`
+(`User <email> not found.`). Requires `admin.user.read`.
+
+## Update user info {#put-api-v2-1-admin-users-user-id}
+
+`PUT /api/v2.1/admin/users/{user_id}/`
+
+Administrator only; the segment is the email. A **partial** update: omitted
+fields keep their current values.
+
+| Field | Meaning |
+| --- | --- |
+| `is_staff` | Administrator flag. |
+| `is_active` | Deactivating revokes the account's sessions, sync tokens, API keys and outstanding capability URLs immediately. |
+| `quota_total` | Megabytes; `0` means unlimited. |
+| `name` | Nickname; an empty string clears it. |
+| `password` | New password, subject to the configured policy. |
+| `role` | Only `""` or `default`. |
+
+**Response `200`** — the updated list item plus
+`"update_status_tip": ""` (this server sends no notification email). Requires
 `admin.user.write`.
 
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
+`login_id`, `contact_email`, `institution` and the Pro rate-limit fields have no
+storage here and are ignored; there is no `keep_sharing` switch (deactivation
+keeps shares, as it does in seahub's default mode).
 
-## Update a user {#put-api2-admin-users-user-id}
+## Delete user {#delete-api-v2-1-admin-users-user-id}
 
-`PUT /api/admin/users/{user_id}/`
+`DELETE /api/v2.1/admin/users/{user_id}/`
 
-Administrator only. Replaces the account's administration flags.
+Administrator only; the segment is the email. Deletes the account and its data.
+**Response `200`** — `{"success": true}`. Requires `admin.user.write`.
 
-**Body** (JSON) — `is_admin`, `is_active` and `storage_quota` are all read; send
-the full state you want. `user_id` is the numeric `id` from the list.
-
-**Response `200`** — the updated user. Requires `admin.user.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
-## Delete a user {#delete-api2-admin-users-user-id}
-
-`DELETE /api/admin/users/{user_id}/`
-
-Administrator only. Deletes the account and its data. **Response `200`** —
-`{"success": true}`. Requires `admin.user.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
+An account that owns a shared or public library cannot be deleted until that
+library is made private again (`400`); this server refuses rather than silently
+revoking every recipient.
 ## Unseen messages {#get-api2-unseen-messages}
 
 `GET /api2/unseen_messages/`

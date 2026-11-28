@@ -19,10 +19,10 @@
 | --- | --- | --- | --- | --- | --- |
 | authentication | 2 | 1 | 1 | 0 | 0 |
 | Via Repo-Token | 40 | 0 | 3 | 0 | 37 |
-| Account Operations - User | 165 | 20 | 50 | 95 | 0 |
-| Account Operations - System Admin | 57 | 0 | 4 | 53 | 0 |
+| Account Operations - User | 165 | 21 | 49 | 95 | 0 |
+| Account Operations - System Admin | 57 | 0 | 5 | 52 | 0 |
 | Metadata Operations - User | 40 | 8 | 5 | 27 | 0 |
-| **Total** | **304** | **29** | **63** | **175** | **37** |
+| **Total** | **304** | **30** | **63** | **174** | **37** |
 
 ## authentication
 
@@ -449,12 +449,12 @@ Nanofile 没有 Wiki。
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#get-api2-admin-users) | Nanofile 自己的管理接口（`/api/admin/users/`）返回不同的结构。 |
-| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#post-api2-admin-users) | 使用 `/api/admin/users/`（JSON `email`/`password`/`is_admin`/`is_active`/`storage_quota`）。 |
+| [List all users' info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users)<br>`GET /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#get-api-v2-1-admin-users) | 没有 LDAP source 与自定义角色；`login_id` 为空，`contact_email` 等于 `email`，`role` 永远是 `default`，`social_auth` 为空。 |
+| [Add user](https://seafile-api.readme.io/reference/post_api-v2-1-admin-users)<br>`POST /api/v2.1/admin/users/` | 有差异 | [本地接口](/zh/reference/api/accounts#post-api-v2-1-admin-users) | 只支持 `role=default`；`quota_total` 请求里是 MB、响应里是字节；不发通知邮件。 |
 | [Search user](https://seafile-api.readme.io/reference/get_api-v2-1-admin-search-user)<br>`GET /api/v2.1/admin/search-user/` | 未实现 | — |  |
-| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | 未实现 | — | 没有单用户 GET；列出 `/api/admin/users/` 后过滤。 |
-| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#put-api2-admin-users-user-id) | 使用 `/api/admin/users/{id}/`；id 是数字。 |
-| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#delete-api2-admin-users-user-id) | 使用 `/api/admin/users/{id}/`；id 是数字。 |
+| [Get a user's info](https://seafile-api.readme.io/reference/get_api-v2-1-admin-users-user-id)<br>`GET /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#get-api-v2-1-admin-users-user-id) | 路径段是账号邮箱。 |
+| [Update user info](https://seafile-api.readme.io/reference/put_api-v2-1-admin-users-user-id)<br>`PUT /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#put-api-v2-1-admin-users-user-id) | 路径段是账号邮箱；`login_id`/`contact_email`/`institution`/限速字段被忽略；不读取 `keep_sharing`。 |
+| [Delete user](https://seafile-api.readme.io/reference/delete_api-v2-1-admin-users-user-id)<br>`DELETE /api/v2.1/admin/users/{user_id}/` | 有差异 | [本地接口](/zh/reference/api/accounts#delete-api-v2-1-admin-users-user-id) | 路径段是账号邮箱；拥有共享/公开资料库的账号在撤销共享前拒绝删除（`400`）。 |
 
 ### Departments
 
@@ -711,7 +711,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 
 路由级的表格无法覆盖全部差异。以下差异适用于整个接口面；协议层细节见各接口页与 [Seafile 兼容性](/zh/dev/protocol#刻意保留的偏差)。
 
-- **破坏性变更。** 0.1.24：Nanofile 自有接口都位于 `/api/` 下；0.1.23 及更早版本混在 `/api2/`、`/api/v2.1/` 或根传输面上的旧拼写一律返回 404。重命名与移动改用 Seafile 文件/目录路由上的 `operation=`；版本下载在 `/api2/repos/{repo_id}/file/revision/`，恢复用文件端点的 `operation=revert`；下载 URL 改为签发 `/files/{token}/{filename}`；会话上传/更新表单、进度桩与旧版链接集合已删除（改用 `/api/v2.1/`）；块 URL 保持 Seafile 的两段形状 `/blks/{token}/{block_id}`，旧拼写在 `/api/transfers/blks/{token}/{file_id}/{block_id}`。头像的 `/avatars/…` 拼写永久重定向。Seafile 兼容路由本身不变。
+- **破坏性变更。** 0.1.24：Nanofile 自有接口都位于 `/api/` 下；0.1.23 及更早版本混在 `/api2/`、`/api/v2.1/` 或根传输面上的旧拼写一律返回 404。重命名与移动改用 Seafile 文件/目录路由上的 `operation=`；版本下载在 `/api2/repos/{repo_id}/file/revision/`，恢复用文件端点的 `operation=revert`；下载 URL 改为签发 `/files/{token}/{filename}`；会话上传/更新表单、进度桩与旧版链接集合已删除（改用 `/api/v2.1/`）；块 URL 保持 Seafile 的两段形状 `/blks/{token}/{block_id}`，旧拼写在 `/api/transfers/blks/{token}/{file_id}/{block_id}`。头像的 `/avatars/…` 拼写永久重定向。Nanofile 的管理接口改为 `/api/v2.1/admin/users/`，路径段是账号邮箱。Seafile 兼容路由本身不变。
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
 - **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交、加锁接口与版本恢复上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。

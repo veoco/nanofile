@@ -580,9 +580,9 @@ async fn administrator_cannot_demote_itself_while_owning_a_shared_library() {
         .server
         .client()
         .put_json(
-            &format!("/api/admin/users/{}/", f.admin_id),
+            "/api/v2.1/admin/users/admin@example.com/",
             Some(&f.admin_token),
-            &json!({"is_admin": false, "is_active": true}),
+            &json!({"is_staff": false}),
         )
         .await;
     assert_eq!(resp.status(), 400);
@@ -592,9 +592,9 @@ async fn administrator_cannot_demote_itself_while_owning_a_shared_library() {
         .server
         .client()
         .put_json(
-            &format!("/api/admin/users/{}/", f.admin_id),
+            "/api/v2.1/admin/users/admin@example.com/",
             Some(&f.admin_token),
-            &json!({"is_admin": false, "is_active": true}),
+            &json!({"is_staff": false}),
         )
         .await;
     // The test's admin token may lose its admin privileges after this succeeds;

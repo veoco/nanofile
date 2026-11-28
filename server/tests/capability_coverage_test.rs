@@ -23,7 +23,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api2/client-login/"),
     ("GET",    "/api2/account/info/"),
     ("PUT",    "/api2/account/info/"),
-    ("POST",   "/api/accounts/"),
     ("GET",    "/api2/avatars/user/a@b.c/resized/96/"),
     ("POST",   "/api/v2.1/user-avatar/"),
     ("GET",    "/api2/devices/"),
@@ -145,10 +144,11 @@ const ROUTES: &[(&str, &str)] = &[
     // only route there that authenticates with `AuthUser`, so it needs a
     // classification like any other. Nothing else in this inventory pins it.
     ("GET",    "/repos/{repo_id}/files/{*path}"),
-    ("GET",    "/api/admin/users/"),
-    ("POST",   "/api/admin/users/"),
-    ("PUT",    "/api/admin/users/{user_id}/"),
-    ("DELETE", "/api/admin/users/{user_id}/"),
+    ("GET",    "/api/v2.1/admin/users/"),
+    ("POST",   "/api/v2.1/admin/users/"),
+    ("GET",    "/api/v2.1/admin/users/{user_id}/"),
+    ("PUT",    "/api/v2.1/admin/users/{user_id}/"),
+    ("DELETE", "/api/v2.1/admin/users/{user_id}/"),
     // The pre-move self-contained block URL (upstream's is
     // `/blks/{token}/{block_id}`).
     ("GET",    "/api/transfers/blks/{token}/{file_id}/{block_id}"),
