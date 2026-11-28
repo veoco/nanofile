@@ -67,7 +67,7 @@ quietly served a different database on a different port.
 | `server.addr` / `server.port` | Listener. Default `0.0.0.0:8082`. |
 | `server.secret_key` | The master key. File-only; see [Security](/guide/admin/security). |
 | `storage.block_dir`, `storage.temp_dir`, `storage.thumbnail_dir`, `storage.avatar_dir`, `index.index_dir` | State directories. Relative paths resolve against the binary's directory; absolute paths place state elsewhere. Compatibility exception: if a relative path in this group already exists under the current working directory, the whole relative group is kept as configured, so an older deployment keeps its data where it is. |
-| `storage.block_encryption_mode` | `off`, `on` or `lazy`. File-only: it decides how existing ciphertext is read. |
+| `storage.block_encryption_mode` | `off`, `on` or `lazy`. File-only. Turning it on is a one-time conversion of the existing blocks, and `on` requires that conversion to be complete. See [At-rest block encryption](/guide/admin/security#at-rest-block-encryption). |
 | `storage.block_flush` | `os` (the default) leaves flushing to the OS, as Seafile does. `always` fsyncs every block, so each upload waits for a device-level flush and concurrent clients can stall for minutes. File-only. |
 
 Storage caps: open resumable uploads may declare 32 GiB in total and one archive

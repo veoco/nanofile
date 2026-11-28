@@ -87,6 +87,11 @@ together. The key is never written into `config.toml`: it comes from
 from `server.secret_key`, so restoring the master secret restores it. See
 [Security](/guide/admin/security).
 
+`blocks/` also carries the bookkeeping dotfiles the migrations write into it:
+`.block_layout`, and with at-rest encryption `.encryption_converted`. Copy them
+with the directory; a restore that loses the conversion marker costs one
+`nanofile convert-blocks` run, not data.
+
 ## Upgrade
 
 1. **Back up first.**
@@ -109,6 +114,11 @@ Worth knowing:
 - **Renamed settings migrate themselves.** The old key names are still read, and
   saved values move to the new keys on upgrade; you do not edit the configuration
   file by hand.
+- **At-rest encryption:** a store that has always run in `on` mode has no
+  conversion marker, and this version refuses to serve it until one exists. If the
+  start is refused, run `nanofile convert-blocks` once with the service stopped: it
+  verifies the blocks and writes the marker without rewriting ciphertext. See
+  [At-rest block encryption](/guide/admin/security#at-rest-block-encryption).
 - **For a service**: `systemctl restart` after replacing the binary, see
   [Running in the background](/guide/deploy/running-in-background); a Windows service is
   stopped and replaced the same way, see

@@ -60,6 +60,8 @@ sudo systemctl start nanofile
 
 **静态加密的部署**：`blocks/` 依赖块密钥与 `storage.block_encryption_mode`，这两者与块必须一起备份、一起恢复。块密钥从不写进 `config.toml`：它来自 `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`，两者都没设置时由 `server.secret_key` 派生，因此恢复主密钥也就恢复了块密钥。详见[安全](/zh/guide/admin/security)。
 
+`blocks/` 里还有迁移写下的记账 dotfile：`.block_layout`，启用静态加密时还有 `.encryption_converted`。它们随目录一起备份；恢复时丢了完成标记，代价是跑一次 `nanofile convert-blocks`，不是丢数据。
+
 ## 升级
 
 1. **先备份。**
@@ -72,6 +74,7 @@ sudo systemctl start nanofile
 
 - **别指望降级。** 数据库迁移只向前走，用旧版本打开新库可能直接起不来——所以第 1 步的备份不是可选项。
 - **改名的设置会自动迁移。** 旧键名仍会被读取，已保存的值在升级时迁到新键，不需要手工改配置文件。
+- **静态加密**：一直以 `on` 模式运行的部署没有转换完成标记，本版本在标记缺失时拒绝启动。启动被拒时，停机跑一次 `nanofile convert-blocks`：它校验块并写下标记，不改写密文。见[静态加密块存储](/zh/guide/admin/security#at-rest-block-encryption)。
 - **后台运行的部署**：换完二进制 `systemctl restart`（见[后台运行与自启动](/zh/guide/deploy/running-in-background)）；Windows 服务同样要先停再换，见[Windows 服务与桌面托盘](/zh/guide/deploy/desktop-and-service)。
 - **容器**：`docker compose pull && docker compose up -d`，数据卷保持不变；升级后若权限不对，先 `chown -R 1000:1000 data`（见[Docker 部署](/zh/guide/deploy/docker)）。
 

@@ -64,6 +64,27 @@ debug 构建在**显式给出**配置却缺少密钥时仍会临时生成：每�
 
 不要把它写进镜像或仓库；生成与挂载方式见[Docker 部署](/zh/guide/deploy/docker)。
 
+## 静态加密块存储 {#at-rest-block-encryption}
+
+`storage.block_encryption_mode`（只能写在文件里）决定块在磁盘上怎么存：
+
+| 模式 | 新写入 | 读取 |
+|---|---|---|
+| `off`（默认） | 明文 | 按原样读出 |
+| `lazy` | 密文 | 两者都接受 |
+| `on` | 密文 | 只接受密文 |
+
+开启是一次性的**转换**，只有转换完成后 `on` 才安全：
+
+1. **准备好密钥。** `storage.encryption_key` 来自 `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`；都没设置时由 `server.secret_key` 派生。无论哪种，密钥都必须跨重启保持不变：解不开自己块的服务器等于没有数据。见[主密钥](#主密钥)。
+2. **把 `storage.block_encryption_mode` 设为 `"lazy"` 并重启。** 服务器会启动**块加密迁移**作业：逐块读一遍，把明文块（以及旧版本写下的无 header 密文块）按同一个 id 重写为带版本头的密文，并报告检查了多少块。它分批执行、在服务器繁忙时暂停，每完成一个库就把进度记到磁盘，重启或取消后从那里继续。它出现在**任务管理**里，不是启动迁移。
+3. **等转换完成。** `nanofile convert-blocks --status` 会打印状态，未完成时退出码非 0；完成标记是 `{block_dir}/.encryption_converted`。
+4. **把 `storage.block_encryption_mode` 设为 `"on"` 并重启。**
+
+`on` 读不了转换前的明文，过早切换会让已有文件不可读。因此块目录里已经有库、却没有完成标记时，服务器在 `on` 模式下拒绝启动；空块目录会自动记为已转换。停机执行 `nanofile convert-blocks` 可以补完或校验转换并写下标记——一直以 `on` 模式运行的部署只需要跑一次。
+
+转换之后不要再回到 `off`：磁盘上是密文，`off` 会把它们当作文件内容发出去。若从备份把明文块恢复进已转换的块目录，需要删掉标记并重跑转换。
+
 ## 相关
 
 - [HTTPS 与反向代理](/zh/guide/deploy/https-and-reverse-proxy) —— TLS、nginx/Caddy 与受信代理。

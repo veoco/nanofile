@@ -39,6 +39,12 @@ data/
 └── index/             # full-text search index
 ```
 
+`blocks/` also holds a few dotfiles the migrations write: `.block_layout` (the block
+layout is current), and with at-rest encryption `.encryption_converted` (the block
+conversion finished) plus, while it runs, `.encryption_convert.log` (its progress).
+Copy them with the directory; losing the conversion marker costs one
+`nanofile convert-blocks` run, not data.
+
 The parts are not alike, which matters when you back up or clean up:
 
 | Item | Losing it | Rebuildable |

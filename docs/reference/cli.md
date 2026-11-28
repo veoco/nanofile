@@ -56,6 +56,28 @@ first request. Use the command to pre-flight the copy volume (`--dry-run`) or to
 run it explicitly with the server stopped.
 
 ```
+nanofile convert-blocks [--status]
+```
+
+Converts pre-encryption blocks to the versioned at-rest format
+(`NFE1 || key id || ciphertext || tag`) under their existing content-addressed ids,
+records every finished library, and writes the completion marker
+`{block_dir}/.encryption_converted`. It is the same pass the server runs in the
+background in `lazy` mode; run it with the server stopped to finish the conversion
+or to record the marker for a store that has always run in `on` mode.
+
+- Stop the server first: two writers on one block directory are not supported.
+- The pass is resumable: an interrupted run continues with the library it had not
+  finished, and a block that is already converted is only inspected by its header.
+- `--status` reports whether the conversion is complete and how many libraries are
+  still pending. It changes nothing and exits non-zero while the conversion is
+  unfinished, so a script can gate the switch to `on` on it.
+- `storage.block_encryption_mode` must be `lazy` or `on` with the key available;
+  `off` is refused because there is no cipher to convert with.
+- A store that has always run in `on` mode needs one run: every block is already
+  ciphertext, so it only verifies them and writes the marker.
+
+```
 nanofile verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
 ```
 

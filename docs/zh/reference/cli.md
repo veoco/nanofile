@@ -39,6 +39,18 @@ nanofile migrate-blocks [--dry-run]
 把旧版"所有库共用一个块目录"的布局（`blocks/<2hex>/<id>`）迁移成"每个库独立目录"。一般启动时会在服务第一个请求之前自动做。用这个命令可以预先估算复制量（`--dry-run`），或在服务停止时显式执行。
 
 ```
+nanofile convert-blocks [--status]
+```
+
+把转换前的块就地改成带版本头的静态加密格式（`NFE1 || key id || ciphertext || tag`），内容寻址 id 保持不变；每完成一个资料库就记下进度，全部完成后写下完成标记 `{block_dir}/.encryption_converted`。它与服务器在 `lazy` 模式下后台跑的是同一趟转换：停机执行可以补完转换，也可以为一直以 `on` 模式运行的部署补写标记。
+
+- 先停服务：同一个块目录不支持两个写入者。
+- 转换可续跑：中断后从没做完的那个库继续；已经转换的块只读块头确认格式，不会重写。
+- `--status` 报告转换是否完成、还剩多少个资料库。它不写任何东西，未完成时退出码非 0，脚本可以据此判断能否切到 `on`。
+- 要求 `storage.block_encryption_mode` 为 `lazy` 或 `on` 且密钥可用；`off` 会被拒绝，因为没有可用的加密器。
+- 一直以 `on` 模式运行的部署只需要跑一次：所有块已经是密文，这趟只是校验并写下标记。
+
+```
 nanofile verify-blocks [--dry-run] [--repair] [--repo <id>] [--json]
 ```
 

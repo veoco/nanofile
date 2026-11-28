@@ -119,6 +119,46 @@ from it.
 Keep it out of the image and out of the repository; see
 [Docker](/guide/deploy/docker) for generating and mounting it.
 
+## At-rest block encryption {#at-rest-block-encryption}
+
+`storage.block_encryption_mode` (file-only) decides how blocks are stored on disk:
+
+| Mode | New writes | Reads |
+|---|---|---|
+| `off` (default) | plaintext | bytes as stored |
+| `lazy` | ciphertext | both |
+| `on` | ciphertext | ciphertext only |
+
+Turning it on is a **one-time conversion**, and `on` is only safe once that
+conversion has finished:
+
+1. **Make the key available.** `storage.encryption_key` comes from
+   `NANOFILE_STORAGE_ENCRYPTION_KEY`/`_FILE`, or — when unset — is derived from
+   `server.secret_key`. Either way the key must survive a restart: a server that
+   cannot decrypt its own blocks has no data. See [the master secret](#the-master-secret).
+2. **Set `storage.block_encryption_mode = "lazy"` and restart.** The server starts
+   the **block encryption conversion** job: it reads every block once, rewrites the
+   plaintext ones (and the header-less ciphertext an older build wrote) as versioned
+   ciphertext under the same id, and reports how many blocks it checked. It works in
+   batches, pauses while the server is busy, records every finished library on disk,
+   and resumes from there after a restart or a cancel. It is in **Task Management**,
+   not a startup migration.
+3. **Wait until the conversion is complete.** `nanofile convert-blocks --status`
+   prints the state and exits non-zero while it is unfinished; the completion marker
+   is `{block_dir}/.encryption_converted`.
+4. **Set `storage.block_encryption_mode = "on"` and restart.**
+
+`on` cannot read pre-conversion plaintext, so switching early makes existing files
+unreadable. The server therefore refuses to start in `on` when the block store holds
+libraries but the completion marker is missing; an empty store is marked converted
+automatically. `nanofile convert-blocks`, run with the server stopped, completes or
+verifies the conversion and writes the marker — a deployment that has always run in
+`on` mode needs that command once.
+
+Do not go back to `off` after the conversion: the stored bytes are ciphertext, and
+`off` would serve them as file content. A restore that brings plaintext blocks back
+into a converted store needs the marker removed and the conversion run again.
+
 ## Related
 
 - [HTTPS and reverse proxy](/guide/deploy/https-and-reverse-proxy) — TLS, nginx/Caddy

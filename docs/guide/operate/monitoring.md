@@ -66,8 +66,10 @@ process applies them.
 Upgrades do not appear here: database and block-layout migrations run at startup,
 before the server listens, and a failed one prevents startup. What an upgrade can
 leave behind is the background work this page lists — for example the lazy at-rest
-encryption conversion. A failed run carries its own error; the run id, summary and
-full error are one disclosure away.
+encryption conversion, which shows how many blocks it has checked, records every
+finished library so a restart resumes, and is reported as complete by
+`nanofile convert-blocks --status`. A failed run carries its own error; the run id,
+summary and full error are one disclosure away.
 
 ## Load and disk
 
