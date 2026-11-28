@@ -84,10 +84,6 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/repos/{repo_id}/file/index-text/"),
     ("POST", "/api/repos/{repo_id}/file/reindex/"),
     ("GET", "/api/repos/{repo_id}/file/exif/"),
-    ("POST", "/api/repos/{repo_id}/file/rename/"),
-    ("POST", "/api/repos/{repo_id}/file/move/"),
-    ("POST", "/api/repos/{repo_id}/dir/rename/"),
-    ("POST", "/api/repos/{repo_id}/dir/move/"),
     ("DELETE", "/api/shared-links/{token}"),
     ("GET", "/api/upload-links"),
     ("POST", "/api/upload-links"),
@@ -101,6 +97,20 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/repos/{repo_id}/file/revision/restore/"),
     ("PUT", "/api/repos/{repo_id}/visibility/"),
 ];
+
+/// Routes this server invented and has since deleted in favour of the Seafile
+/// route that already does the same thing. They answer 404: no alias.
+const REPLACED_ROUTES: &[(&str, &str)] = &[
+    ("POST", "/api/repos/{repo_id}/file/rename/"),
+    ("POST", "/api/repos/{repo_id}/file/move/"),
+    ("POST", "/api/repos/{repo_id}/dir/rename/"),
+    ("POST", "/api/repos/{repo_id}/dir/move/"),
+];
+
+/// The Seafile-compatible routes those paths were replaced by. Each is added as
+/// its replacement lands; the list stays empty only while a phase touches no
+/// classified route.
+const REPLACEMENT_ROUTES: &[(&str, &str)] = &[];
 
 /// Every method+path that moved off the root transfer surface.
 ///
@@ -208,6 +218,36 @@ fn the_route_table_has_no_moved_path() {
         assert!(
             has(method, path),
             "{method} {path} is missing from the capability table"
+        );
+    }
+    for (method, path) in REPLACED_ROUTES {
+        assert!(
+            !has(method, path),
+            "{method} {path} is still classified after it was replaced"
+        );
+    }
+    for (method, path) in REPLACEMENT_ROUTES {
+        assert!(
+            has(method, path),
+            "{method} {path} (the replacement route) is missing from the capability table"
+        );
+    }
+}
+
+/// The replaced routes are gone: the Seafile route that does the same thing is
+/// the only spelling, and a stale client gets the router's 404 rather than a
+/// silent alias.
+#[tokio::test]
+async fn replaced_routes_answer_not_found() {
+    let f = TestFixture::new().await;
+    for (method, template) in REPLACED_ROUTES {
+        let path = expand(template, &f.repo_id);
+        let resp = send(&f, method, &path, Some(&f.api_token)).await;
+        assert_eq!(
+            resp.status(),
+            404,
+            "{method} {path} must be gone after its replacement landed, body: {:?}",
+            resp.text().await
         );
     }
 }

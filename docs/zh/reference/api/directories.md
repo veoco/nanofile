@@ -137,26 +137,6 @@
 
 **Seafile** —— 路由相同；seahub 的 `mtime` 是 ISO 8601 字符串。Android 模型把它声明为数字，而且从不调用该接口。
 
-## 重命名目录 {#post-api2-repos-repo-id-dir-rename}
-
-`POST /api/repos/{repo_id}/dir/rename/`
-
-**请求体**（JSON）—— `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`。资料库 id 在请求体里，与其他目录接口不同。
-
-**响应 `200`** —— 空正文。同目录里已存在该名字时返回 `409`，不做任何修改。需要写权限与 `file.write`。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
-## 移动目录 {#post-api2-repos-repo-id-dir-move}
-
-`POST /api/repos/{repo_id}/dir/move/`
-
-**请求体**（JSON）—— `{"repo_id": "…", "p": "/old/name", "new_parent_dir": "/target"}`。同库内移动是一个提交。需要 `file.write`。
-
-**响应 `200`** —— 空正文。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
 ## 从目录创建资料库 {#get-api2-repos-repo-id-dir-sub-repo}
 
 `GET /api2/repos/{repo_id}/dir/sub_repo/?p=<path>`
@@ -171,4 +151,4 @@
 
 新资料库带一个提交。需要 `library.create` 与源资料库的写权限。
 
-**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/shared_items/` 现在用于管理员共享库，见[分享](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items)。`dir/rename/`、`dir/move/` 与请求体里的 `repo_id` 是 Nanofile 的便利接口；seahub 通过 `fileops` 与 `dir/` POST 重命名。
+**Seafile** —— `dir/`、`dir/detail/`、`dir/shared_items/` 是官方记录的上游路由。`dir/shared_items/` 现在用于管理员共享库，见[分享](/zh/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items)。目录重命名通过 `dir/` POST 的 `operation=rename`，移动通过 [`POST /api2/repos/{repo_id}/fileops/move/`](#post-api2-repos-repo-id-fileops-move)。

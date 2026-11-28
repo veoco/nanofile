@@ -154,31 +154,6 @@ Metadata for one file, including its last modifier and star state.
 
 `comment_total` is always `0` (Nanofile has no comments). Requires `file.read`.
 
-## Rename a file {#post-api2-repos-repo-id-file-rename}
-
-`POST /api/repos/{repo_id}/file/rename/`
-
-**Body** (JSON) — `{"repo_id": "…", "p": "/old.txt", "new_name": "new.txt"}`.
-
-**Response `200`** — empty body. A name that already exists in the same
-directory answers `409` and changes nothing. Requires write permission and
-`file.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
-## Move a file {#post-api2-repos-repo-id-file-move}
-
-`POST /api/repos/{repo_id}/file/move/`
-
-**Body** (JSON) — `{"repo_id": "…", "p": "/a.txt", "new_parent_dir": "/target"}`.
-A move inside one library is a single commit; cross-library moves are not
-supported.
-
-**Response `200`** — empty body. A destination that already contains an entry
-with the same name answers `409` and changes nothing. Requires `file.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
 ## EXIF metadata {#get-api2-repos-repo-id-file-exif}
 
 `GET /api/repos/{repo_id}/file/exif/?p=<path>`

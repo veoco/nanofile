@@ -696,16 +696,6 @@ const ROUTES: &[RouteEntry] = &[
         RouteAccess::Capability(Capability::FileRead),
     ),
     (
-        "POST",
-        "/api/repos/{repo_id}/dir/move/",
-        RouteAccess::Capability(Capability::FileWrite),
-    ),
-    (
-        "POST",
-        "/api/repos/{repo_id}/dir/rename/",
-        RouteAccess::Capability(Capability::FileWrite),
-    ),
-    (
         "GET",
         "/api2/repos/{repo_id}/dir/shared_items/",
         RouteAccess::Capability(Capability::LibraryRead),
@@ -769,16 +759,6 @@ const ROUTES: &[RouteEntry] = &[
         "DELETE",
         "/api/v2.1/repos/{repo_id}/file/",
         RouteAccess::Capability(Capability::FileDelete),
-    ),
-    (
-        "POST",
-        "/api/repos/{repo_id}/file/rename/",
-        RouteAccess::Capability(Capability::FileWrite),
-    ),
-    (
-        "POST",
-        "/api/repos/{repo_id}/file/move/",
-        RouteAccess::Capability(Capability::FileWrite),
     ),
     (
         "GET",

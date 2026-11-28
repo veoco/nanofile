@@ -174,30 +174,6 @@ not accepted.
 **Seafile** — same route; seahub reports `mtime` as an ISO 8601 string. The
 Android model declares it as a number and never calls this endpoint.
 
-## Rename a directory {#post-api2-repos-repo-id-dir-rename}
-
-`POST /api/repos/{repo_id}/dir/rename/`
-
-**Body** (JSON) — `{"repo_id": "…", "p": "/old/name", "new_name": "new-name"}`.
-The library id is part of the body, unlike the other directory endpoints.
-
-**Response `200`** — empty body. A name that already exists in the same
-directory answers `409` and changes nothing. Requires write permission and
-`file.write`.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
-## Move a directory {#post-api2-repos-repo-id-dir-move}
-
-`POST /api/repos/{repo_id}/dir/move/`
-
-**Body** (JSON) — `{"repo_id": "…", "p": "/old/name", "new_parent_dir": "/target"}`.
-Moving to the same library is one commit. Requires `file.write`.
-
-**Response `200`** — empty body.
-
-**Nanofile** — this route is served under `/api/`; it is not part of Seafile's API.
-
 ## Create a library from a directory {#get-api2-repos-repo-id-dir-sub-repo}
 
 `GET /api2/repos/{repo_id}/dir/sub_repo/?p=<path>`
@@ -218,5 +194,5 @@ permission on the source library.
 **Seafile** — `dir/`, `dir/detail/` and `dir/shared_items/` are the documented
 upstream routes. `dir/shared_items/` now manages administrator library sharing
 and is documented under [Sharing](/reference/api/sharing#get-api2-repos-repo-id-dir-shared-items).
-`dir/rename/`, `dir/move/` and the body-shaped `repo_id` are
-Nanofile conveniences; seahub renames through `fileops` and its `dir/` POST.
+A directory is renamed through the `dir/` POST's `operation=rename` and moved
+through [`POST /api2/repos/{repo_id}/fileops/move/`](#post-api2-repos-repo-id-fileops-move).

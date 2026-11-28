@@ -218,48 +218,44 @@ async fn body_and_query_repo_ids_cannot_escape_a_bound_key() {
     let mkdir = f.client.create_dir(&f.api_token, &other, "/keepdir").await;
     assert_eq!(mkdir.status(), 201, "seed B directory");
 
-    // The path says A; the body says B. The key covers A only, so the body
-    // cannot be used to smuggle B past the guard. The handler rejects the
-    // mismatch before any mutation.
+    // The path says A; the destination says B. The key covers A only, and a
+    // move writes the destination library, so the handler rejects the request
+    // before any mutation.
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/file/move/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/keep.txt", f.repo_id),
             Some(&key),
-            &json!({"repo_id": other, "p": "/keep.txt", "new_parent_dir": "/moved"}),
+            &[
+                ("operation", "move"),
+                ("dst_repo", other.as_str()),
+                ("dst_dir", "/moved"),
+            ],
         )
         .await;
-    assert_eq!(resp.status(), 400, "file move path/body mismatch");
+    assert_eq!(
+        resp.status(),
+        400,
+        "file move into a library outside the scope"
+    );
 
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/file/rename/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/fileops/move/?p=/", f.repo_id),
             Some(&key),
-            &json!({"repo_id": other, "p": "/keep.txt", "new_name": "renamed.txt"}),
+            &[
+                ("file_names", "keepdir"),
+                ("dst_repo", other.as_str()),
+                ("dst_dir", "/moved"),
+            ],
         )
         .await;
-    assert_eq!(resp.status(), 400, "file rename path/body mismatch");
-
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api/repos/{}/dir/move/", f.repo_id),
-            Some(&key),
-            &json!({"repo_id": other, "p": "/keepdir", "new_parent_dir": "/moved"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 400, "dir move path/body mismatch");
-
-    let resp = f
-        .client
-        .post_json(
-            &format!("/api/repos/{}/dir/rename/", f.repo_id),
-            Some(&key),
-            &json!({"repo_id": other, "p": "/keepdir", "new_name": "renameddir"}),
-        )
-        .await;
-    assert_eq!(resp.status(), 400, "dir rename path/body mismatch");
+    assert_eq!(
+        resp.status(),
+        400,
+        "directory move into a library outside the scope"
+    );
 
     let listing = f
         .client

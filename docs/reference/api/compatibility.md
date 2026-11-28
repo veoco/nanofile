@@ -170,7 +170,7 @@ No groups or group-owned libraries.
 | [Revert directory to a history status](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-revert)<br>`PUT /api2/repos/{repo_id}/dir/revert/` | Missing | — | Use the trash or a file revision restore instead. |
 | [Get task directory token](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-zip-task)<br>`GET /api/v2.1/repos/{repo_id}/zip-task/` | Differs | [our endpoint](/reference/api/transfers#post-api-v2-1-repos-repo-id-zip-task) | Nanofile mints the archive token with `POST` (the web interface's shape). |
 | [Query task progress](https://seafile-api.readme.io/reference/get_api-v2-1-query-zip-progress)<br>`GET /api/v2.1/query-zip-progress/` | Missing | — | `zip-task` is synchronous; poll the task list in the web interface instead. |
-| [Move directory with items merged](https://seafile-api.readme.io/reference/post_api-v2-1-move-folder-merge)<br>`POST /api/v2.1/move-folder-merge/` | Missing | — | Use `dir/move/`; a directory is moved as a whole, without merging. |
+| [Move directory with items merged](https://seafile-api.readme.io/reference/post_api-v2-1-move-folder-merge)<br>`POST /api/v2.1/move-folder-merge/` | Missing | — | Use `fileops/move/`; a directory is moved as a whole, without merging. |
 
 ### File comments
 

@@ -170,7 +170,7 @@
 | [Revert directory to a history status](https://seafile-api.readme.io/reference/put_api2-repos-repo-id-dir-revert)<br>`PUT /api2/repos/{repo_id}/dir/revert/` | 未实现 | — | 请改用回收站或文件版本恢复。 |
 | [Get task directory token](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-zip-task)<br>`GET /api/v2.1/repos/{repo_id}/zip-task/` | 有差异 | [本地接口](/zh/reference/api/transfers#post-api-v2-1-repos-repo-id-zip-task) | Nanofile 用 `POST` 生成压缩包令牌（网页界面的形状）。 |
 | [Query task progress](https://seafile-api.readme.io/reference/get_api-v2-1-query-zip-progress)<br>`GET /api/v2.1/query-zip-progress/` | 未实现 | — | `zip-task` 是同步的；网页界面通过任务列表查看进度。 |
-| [Move directory with items merged](https://seafile-api.readme.io/reference/post_api-v2-1-move-folder-merge)<br>`POST /api/v2.1/move-folder-merge/` | 未实现 | — | 请用 `dir/move/`；目录整体移动，不做合并。 |
+| [Move directory with items merged](https://seafile-api.readme.io/reference/post_api-v2-1-move-folder-merge)<br>`POST /api/v2.1/move-folder-merge/` | 未实现 | — | 请用 `fileops/move/`；目录整体移动，不做合并。 |
 
 ### File comments
 

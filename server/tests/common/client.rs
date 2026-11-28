@@ -1345,6 +1345,8 @@ impl TestClient {
         .await
     }
 
+    /// Rename a file through Seafile's overloaded file endpoint:
+    /// `POST /api2/repos/{repo_id}/file/?p=…` with `operation=rename`.
     pub async fn rename_file(
         &self,
         token: &str,
@@ -1352,26 +1354,38 @@ impl TestClient {
         path: &str,
         new_name: &str,
     ) -> reqwest::Response {
-        self.post_json(
-            &format!("/api/repos/{}/file/rename/", repo_id),
+        let encoded =
+            percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+                .to_string();
+        self.post_form(
+            &format!("/api2/repos/{repo_id}/file/?p={encoded}"),
             Some(token),
-            &serde_json::json!({"repo_id": repo_id, "p": path, "new_name": new_name}),
+            &[("operation", "rename"), ("newname", new_name)],
         )
         .await
     }
 
+    /// Move a file through Seafile's overloaded file endpoint:
+    /// `POST /api2/repos/{repo_id}/file/?p=…` with `operation=move`.
     pub async fn move_file(
         &self,
         token: &str,
         src_repo: &str,
         path: &str,
-        _dst_repo: &str,
+        dst_repo: &str,
         dst_dir: &str,
     ) -> reqwest::Response {
-        self.post_json(
-            &format!("/api/repos/{}/file/move/", src_repo),
+        let encoded =
+            percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+                .to_string();
+        self.post_form(
+            &format!("/api2/repos/{src_repo}/file/?p={encoded}"),
             Some(token),
-            &serde_json::json!({"repo_id": src_repo, "p": path, "new_parent_dir": dst_dir}),
+            &[
+                ("operation", "move"),
+                ("dst_repo", dst_repo),
+                ("dst_dir", dst_dir),
+            ],
         )
         .await
     }

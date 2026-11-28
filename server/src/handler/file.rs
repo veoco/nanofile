@@ -47,8 +47,8 @@ pub fn file_routes() -> Router<Arc<AppState>> {
 
 /// The Nanofile-only file routes under `/api/repos/{repo_id}/file/`.
 ///
-/// Seafile does not have these paths: rename/move go through `op=` on the file
-/// endpoint, and exif/index-text/reindex are this server's own additions.
+/// Seafile serves rename/move through `op=` on the file endpoint; exif,
+/// index-text and reindex are this server's own additions.
 /// [`file_routes`] is the Seafile-compatible half.
 pub fn nanofile_file_routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -61,8 +61,6 @@ pub fn nanofile_file_routes() -> Router<Arc<AppState>> {
             axum::routing::post(reindex_file_handler),
         )
         .route("/{repo_id}/file/exif/", axum::routing::get(get_exif))
-        .route("/{repo_id}/file/rename/", axum::routing::post(rename_file))
-        .route("/{repo_id}/file/move/", axum::routing::post(move_file))
 }
 
 pub async fn download_file(
@@ -406,78 +404,6 @@ pub async fn delete_file(
     svc.delete_file(repo_id, &path, &access.user.email, access.user.user_id)
         .await?;
     Ok(ok_json())
-}
-
-#[derive(Deserialize)]
-pub struct MoveRequest {
-    pub repo_id: String,
-    pub p: String,
-    pub new_parent_dir: String,
-}
-
-pub async fn move_file(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(path_repo_id): Path<String>,
-    Json(req): Json<MoveRequest>,
-) -> Result<(), AppError> {
-    // The route guard only sees the repo id in the URI; a key must also cover
-    // the repo the body actually names. The two are the same repo by protocol.
-    if path_repo_id != req.repo_id {
-        return Err(AppError::BadRequest(
-            "repo_id does not match the path".into(),
-        ));
-    }
-    auth.require_repo_write(&state, &req.repo_id).await?;
-
-    let path = safe_normalize_path(&req.p)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let new_parent_dir = safe_normalize_path(&req.new_parent_dir)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    let svc = state.file_service();
-    svc.move_file(
-        &req.repo_id,
-        &path,
-        &new_parent_dir,
-        &auth.email,
-        auth.user_id,
-    )
-    .await
-}
-
-#[derive(Deserialize)]
-pub struct RenameRequest {
-    pub repo_id: String,
-    pub p: String,
-    pub new_name: String,
-}
-
-pub async fn rename_file(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(path_repo_id): Path<String>,
-    Json(req): Json<RenameRequest>,
-) -> Result<(), AppError> {
-    if path_repo_id != req.repo_id {
-        return Err(AppError::BadRequest(
-            "repo_id does not match the path".into(),
-        ));
-    }
-    auth.require_repo_write(&state, &req.repo_id).await?;
-
-    let path = safe_normalize_path(&req.p)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    let svc = state.file_service();
-    svc.rename_file(
-        &req.repo_id,
-        &path,
-        &req.new_name,
-        &auth.email,
-        auth.user_id,
-    )
-    .await
 }
 
 pub async fn file_detail(

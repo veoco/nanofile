@@ -302,14 +302,10 @@ async fn test_activity_after_dir_rename() {
 
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/dir/rename/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/dir/?p=/olddirname", f.repo_id),
             Some(&f.api_token),
-            &serde_json::json!({
-                "repo_id": f.repo_id,
-                "p": "/olddirname",
-                "new_name": "newdirname"
-            }),
+            &[("operation", "rename"), ("newname", "newdirname")],
         )
         .await;
     assert_eq!(
@@ -336,14 +332,14 @@ async fn test_activity_after_dir_move() {
 
     let resp = f
         .client
-        .post_json(
-            &format!("/api/repos/{}/dir/move/", f.repo_id),
+        .post_form(
+            &format!("/api2/repos/{}/fileops/move/?p=/", f.repo_id),
             Some(&f.api_token),
-            &serde_json::json!({
-                "repo_id": f.repo_id,
-                "p": "/sourcedir",
-                "new_parent_dir": "/target"
-            }),
+            &[
+                ("file_names", "sourcedir"),
+                ("dst_repo", f.repo_id.as_str()),
+                ("dst_dir", "/target"),
+            ],
         )
         .await;
     assert_eq!(

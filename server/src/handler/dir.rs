@@ -2,7 +2,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::Request,
     response::{IntoResponse, Response},
 };
@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
-use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::fs::dir::fill_lock_fields;
 use base::error::AppError;
@@ -146,16 +145,6 @@ pub fn dir_routes() -> Router<Arc<AppState>> {
             "/{repo_id}/dir/sub_repo/",
             axum::routing::get(create_sub_repo),
         )
-}
-
-/// The Nanofile-only directory routes under `/api/repos/{repo_id}/dir/`.
-///
-/// Seafile renames/moves a directory through `op=` on the directory endpoint;
-/// separate rename/move routes are this server's own additions.
-pub fn nanofile_dir_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route("/{repo_id}/dir/move/", axum::routing::post(move_dir))
-        .route("/{repo_id}/dir/rename/", axum::routing::post(rename_dir))
 }
 
 pub async fn list_dir(
@@ -334,73 +323,6 @@ pub async fn delete_dir(
         .await;
     }
     Ok(ok_json().into_response())
-}
-
-#[derive(Deserialize)]
-pub struct MoveDirRequest {
-    pub repo_id: String,
-    pub p: String,
-    pub new_parent_dir: String,
-}
-
-pub async fn move_dir(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(path_repo_id): Path<String>,
-    Json(req): Json<MoveDirRequest>,
-) -> Result<(), AppError> {
-    if path_repo_id != req.repo_id {
-        return Err(AppError::BadRequest(
-            "repo_id does not match the path".into(),
-        ));
-    }
-    auth.require_repo_write(&state, &req.repo_id).await?;
-
-    let path = safe_normalize_path(&req.p)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-
-    let svc = state.dir_service();
-    svc.move_dir(
-        &req.repo_id,
-        &path,
-        &req.new_parent_dir,
-        &auth.email,
-        auth.user_id,
-    )
-    .await
-}
-
-#[derive(Deserialize)]
-pub struct RenameDirRequest {
-    pub repo_id: String,
-    pub p: String,
-    pub new_name: String,
-}
-
-pub async fn rename_dir(
-    auth: AuthUser,
-    State(state): State<Arc<AppState>>,
-    Path(path_repo_id): Path<String>,
-    Json(req): Json<RenameDirRequest>,
-) -> Result<(), AppError> {
-    if path_repo_id != req.repo_id {
-        return Err(AppError::BadRequest(
-            "repo_id does not match the path".into(),
-        ));
-    }
-    auth.require_repo_write(&state, &req.repo_id).await?;
-
-    let path = safe_normalize_path(&req.p)
-        .map_err(|e| AppError::BadRequest(format!("Invalid path: {e}")))?;
-    let svc = state.dir_service();
-    svc.rename_dir_entry(
-        &req.repo_id,
-        &path,
-        &req.new_name,
-        &auth.email,
-        auth.user_id,
-    )
-    .await
 }
 
 /// GET /api2/repos/{repo_id}/dir/sub_repo/ — create a library from a folder.
