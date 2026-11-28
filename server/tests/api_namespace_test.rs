@@ -93,8 +93,6 @@ const NEW_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/admin/users/"),
     ("PUT", "/api/admin/users/{user_id}/"),
     ("DELETE", "/api/admin/users/{user_id}/"),
-    ("GET", "/api/repos/{repo_id}/file/revision/"),
-    ("POST", "/api/repos/{repo_id}/file/revision/restore/"),
     ("PUT", "/api/repos/{repo_id}/visibility/"),
 ];
 
@@ -105,12 +103,17 @@ const REPLACED_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/repos/{repo_id}/file/move/"),
     ("POST", "/api/repos/{repo_id}/dir/rename/"),
     ("POST", "/api/repos/{repo_id}/dir/move/"),
+    ("GET", "/api/repos/{repo_id}/file/revision/"),
+    ("POST", "/api/repos/{repo_id}/file/revision/restore/"),
 ];
 
 /// The Seafile-compatible routes those paths were replaced by. Each is added as
 /// its replacement lands; the list stays empty only while a phase touches no
 /// classified route.
-const REPLACEMENT_ROUTES: &[(&str, &str)] = &[];
+const REPLACEMENT_ROUTES: &[(&str, &str)] = &[
+    ("GET", "/api2/repos/{repo_id}/file/revision/"),
+    ("POST", "/api2/repos/{repo_id}/file/"),
+];
 
 /// Every method+path that moved off the root transfer surface.
 ///

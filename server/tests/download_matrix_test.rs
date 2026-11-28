@@ -482,7 +482,7 @@ async fn test_revision_download() {
         .client
         .get(
             &format!(
-                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
+                "/api2/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
                 f.repo_id
             ),
             Some(&f.api_token),

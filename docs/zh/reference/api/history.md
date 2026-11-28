@@ -60,25 +60,13 @@
 
 没有改变文件内容的提交会被跳过。需要 `history.read`。
 
-## 下载某个版本 {#get-api-v2-1-repos-repo-id-file-revision}
+## 下载某个版本 {#get-api2-repos-repo-id-file-revision}
 
-`GET /api/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
+`GET /api2/repos/{repo_id}/file/revision/?p=<path>&commit_id=<id>`
 
 以 `Content-Disposition: attachment` 流式返回该提交中的文件字节。支持 `Range`、`Content-Length` 与 `If-None-Match`（验证器匹配时在判断 `Range` 之前返回 `304`）。需要 `history.read`。
 
-**Seafile** —— 官方参考把该操作记录在旧版 `/api2/repos/{repo_id}/file/revision/`；Nanofile 提供在 `/api/` 下（网页界面使用的路径）。字节与查询参数相同。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
-
-## 恢复某个版本 {#post-api-v2-1-repos-repo-id-file-revision-restore}
-
-`POST /api/repos/{repo_id}/file/revision/restore/?p=<path>&commit_id=<id>`
-
-把文件指回该版本的内容并提交这次变更，不重写历史。
-
-**响应 `200`** —— `{"success": true}`。需要 `history.write`。
-
-**Nanofile** —— 此接口位于 `/api/` 下，不属于 Seafile 的 API。
+要恢复这个版本，向 [`POST /api2/repos/{repo_id}/file/`](/zh/reference/api/files#post-api2-repos-repo-id-file) 发送 `operation=revert&commit_id=<id>`。
 
 ## 列出文件回收站 {#get-api-v2-1-repos-repo-id-trash}
 

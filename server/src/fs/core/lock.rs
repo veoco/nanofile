@@ -137,6 +137,28 @@ pub async fn check_delete_locked_paths(
     Ok(())
 }
 
+/// Reject a REST file mutation on a file locked by another user.
+///
+/// The revision-revert operation (`operation=revert` on the file endpoint) maps
+/// to seahub's `FileView.post` revert case, which answers `403 File is locked`
+/// when another user holds the lock. The sync path and delete have their own
+/// error shapes; this helper keeps the lock endpoint's `AppError::Locked`.
+pub async fn check_file_locked(
+    repos: &Repositories,
+    repo_id: &str,
+    path: &str,
+    user_id: i32,
+) -> Result<(), AppError> {
+    let key = canonical_lock_path(path)?;
+    let locks = load_locks(repos, repo_id).await?;
+    if let Some(owners) = locks.get(key.as_str())
+        && owners.iter().any(|owner| *owner != user_id)
+    {
+        return Err(AppError::Locked(key));
+    }
+    Ok(())
+}
+
 /// Delete lock rows whose path is absent from the library's current HEAD.
 ///
 /// A commit that deletes or renames a file leaves its row behind; such a row

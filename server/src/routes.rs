@@ -367,12 +367,8 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
             "/api/accounts/",
             post(crate::handler::account::register_user),
         )
-        // Per-library helpers: file/directory extras, revisions, visibility.
+        // Per-library helpers: file extras and library visibility.
         .nest("/api/repos", crate::handler::file::nanofile_file_routes())
-        .nest(
-            "/api/repos",
-            crate::handler::history::nanofile_history_routes(),
-        )
         .nest(
             "/api/repos",
             crate::handler::library_share::nanofile_repo_routes(),

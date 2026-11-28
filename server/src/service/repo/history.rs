@@ -10,7 +10,7 @@ use crate::fs::core::{
 };
 use crate::repository::Repositories;
 use crate::repository::activity_log;
-use base::common::{EMPTY_SHA1, FsFileData};
+use base::common::{DirEntryData, EMPTY_SHA1, FsFileData};
 use base::error::AppError;
 use infra::common::util::parent_path_from;
 use infra::serialization::S_IFREG;
@@ -345,13 +345,16 @@ impl HistoryService {
         // the same parent snapshot the update is based on, then commit the change
         // and the size in one statement.
         let parent_data = crate::fs::core::read_fs_dir_data(repos, repo_id, &parent_fs_id).await?;
-        let current_size = parent_data
-            .dirents
-            .iter()
-            .find(|d| d.name == name)
-            .map(|d| d.size)
-            .unwrap_or(0);
+        let existing = parent_data.dirents.iter().find(|d| d.name == name);
+        let current_size = existing.map(|d| d.size).unwrap_or(0);
+        // A file that another user locked must not be reverted (seahub's revert
+        // case answers 403 `File is locked`); a deleted path has no lock to
+        // honour, so the check only applies while the dirent exists.
+        if existing.is_some() {
+            crate::fs::core::lock::check_file_locked(repos, repo_id, path, user_id).await?;
+        }
         let size_delta = target_size - current_size;
+        let creating = existing.is_none();
 
         let quota = QuotaGuard::begin(repos, repo_id, default_quota).await?;
         FileOps::update_dir_tree_and_commit_sized(
@@ -370,6 +373,17 @@ impl HistoryService {
                     d.size = target_size;
                     d.mtime = now;
                     d.modifier = modifier.to_string();
+                } else if creating {
+                    // The path was deleted after that version; reverting it
+                    // recreates the entry, like seahub's `revert_file` does.
+                    dirents.push(DirEntryData {
+                        id: target_fs_id.clone(),
+                        mode: S_IFREG,
+                        modifier: modifier.to_string(),
+                        mtime: now,
+                        name: name.clone(),
+                        size: target_size,
+                    });
                 }
                 Ok(())
             },

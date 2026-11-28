@@ -190,13 +190,13 @@ Nanofile 没有评论功能。
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
 | [Get file history](https://seafile-api.readme.io/reference/get_api-v2-1-repos-repo-id-file-history)<br>`GET /api/v2.1/repos/{repo_id}/file/history/` | 有差异 | [本地接口](/zh/reference/api/history#get-api-v2-1-repos-repo-id-file-history) | 外层结构是 `{data, page, page_next}`；没有 `next_start_commit`，且只返回一页。 |
-| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | 有差异 | [本地接口](/zh/reference/api/history#get-api-v2-1-repos-repo-id-file-revision) | 由 `/api/repos/{repo_id}/file/revision/` 提供。 |
+| [Download file from a revision](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file-revision)<br>`GET /api2/repos/{repo_id}/file/revision/` | 一致 | [本地接口](/zh/reference/api/history#get-api2-repos-repo-id-file-revision) |  |
 
 ### Files
 
 | 官方操作 | 状态 | Nanofile | 说明 |
 | --- | --- | --- | --- |
-| [Create/Rename/Move/Copy/Revert a file](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-file)<br>`POST /api/v2.1/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-repo-id-file) | 只支持 `create` 与 `rename`；移动走旧版 `/api2/.../file/` 表单，复制用 `fileops`，回退用版本恢复。 |
+| [Create/Rename/Move/Copy/Revert a file](https://seafile-api.readme.io/reference/post_api-v2-1-repos-repo-id-file)<br>`POST /api/v2.1/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#post-api-v2-1-repos-repo-id-file) | v2.1 路由只处理 `create` 与 `rename`；旧版 `/api2/repos/{repo_id}/file/` 表单处理 `create`/上传、`rename`、`move` 与 `revert`，复制用 `fileops` |
 | [Lock/Unlock file](https://seafile-api.readme.io/reference/put_api-v2-1-repos-repo-id-file)<br>`PUT /api/v2.1/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#put-api2-repos-repo-id-file) | 加锁/解锁在旧版 `/api2/repos/{repo_id}/file/` 的 PUT，`operation=lock\|unlock`。 |
 | [Delete file](https://seafile-api.readme.io/reference/delete_api-v2-1-repos-repo-id-file)<br>`DELETE /api/v2.1/repos/{repo_id}/file/` | 一致 | [本地接口](/zh/reference/api/files#delete-api-v2-1-repos-repo-id-file) |  |
 | [Download file](https://seafile-api.readme.io/reference/get_api2-repos-repo-id-file)<br>`GET /api2/repos/{repo_id}/file/` | 有差异 | [本地接口](/zh/reference/api/files#get-api2-repos-repo-id-file) | `p` 必填，`reuse` 只接受 `0`/`1`；未实现 `op=sharelink`（请用 `/api/v2.1/share-links/`）。 |
@@ -713,7 +713,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 - **破坏性变更。** 0.1.x：Nanofile 自有接口从 `/api2/`/`/api/v2.1/` 迁到 `/api/`；旧路径返回 404。Nanofile 自有的传输接口同样迁移：会话上传/更新表单、`/download-api/{token}` 与进度桩移到 `/api/transfers/`，旧的根路径返回 404。头像图片从 `/avatars/user/{email}/resized/{size}/` 迁到 `/api/avatars/…`（旧路径永久重定向）；块下载 URL 改为 Seafile 的两段形状 `/blks/{token}/{block_id}`，旧的三段拼写移到 `/api/transfers/blks/{token}/{file_id}/{block_id}`，旧根路径返回 404。Seafile 兼容路由本身不变。
 - **凭据。** 除了账号令牌，Nanofile 还接受 API 密钥（按能力与资料库受限），`/seafhttp/` 上使用资料库同步令牌。Repo-Token 调用方请用绑定资料库的 API 密钥；不路由 `/via-repo-token/` 镜像。
 - **Authorization 头。** 所有 API 路由同时接受 `Bearer` 与旧式 `Token` 前缀，兼容 11 前后两个时代的客户端。
-- **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交与加锁接口上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
+- **错误。** 认证失败同时带 `detail` 与 `error_msg`；其他错误带 `error_msg`。登录失败用 DRF 的 `non_field_errors`。锁冲突在同步提交、加锁接口与版本恢复上是 `403` 纯文本 `File <path> is locked`；REST/WebDAV 删除他人锁定的文件返回 `423` 与 JSON `error_msg`。协议需要的地方使用 Seafile 的 440–446 与 520 状态码。
 - **版本字符串。** `/api2/server-info/` 返回 `server.version`（默认 `8.0.0`），客户端据此裁剪功能；本页描述实际存在的路由，与该字符串无关。
 - **时间。** 多数是 Unix 秒。`search-file` 的 `mtime` 与 `file/detail/` 的 `last_modified` 用 RFC 3339，而 `file/detail/` 的 `mtime` 仍是 Unix 秒；`dir/detail/` 返回数字，而 seahub 返回字符串。
 - **列表。** 旧版目录列表隐藏 `_Internal`，目录在前并按小写名称排序，报告真实的 `dir_perm`/`permission`；未实现 `?oid=` 校验。

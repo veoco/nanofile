@@ -38,10 +38,11 @@
 Seafile 重载的文件接口。请求体形状决定操作：
 
 - **`multipart/form-data` 带 `file` 字段** —— 直接上传字节（网页界面与 Android）。`parent_dir` 指定目标目录，`replace=1` 覆盖，`operation=rename` 配 `newname` 则重命名 `p`。
-- **URL 编码表单** —— 以下之一：
+- **URL 编码表单** —— 以下几种之一：
   - `operation=create` —— 在 `?p=` 创建空文件。
   - `operation=rename` + `newname` —— 重命名 `?p=`。
-  - `operation=move` + `dst_repo` + `dst_dir` —— 把 `?p=` 移到另一个目录。
+  - `operation=move` + `dst_repo` + `dst_dir` —— 把 `?p=` 移到另一个目录（仅同一资料库）。
+  - `operation=revert` + `commit_id` —— 把 `?p=` 恢复为该提交里的版本并提交这次变更；文件已删除时会重建。文件被其他账号锁定时返回 `403` 与 `File <path> is locked`。
 
 `reloaddir=true` 时返回受影响目录的列表（移动时是目标目录），而不是 `"success"`。
 

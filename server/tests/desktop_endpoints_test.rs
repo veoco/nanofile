@@ -429,7 +429,7 @@ async fn test_file_revision_v21_downloads_old_version() {
         .client
         .get(
             &format!(
-                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id={}",
+                "/api2/repos/{}/file/revision/?p=/hist.txt&commit_id={}",
                 f.repo_id, old_commit
             ),
             Some(&f.api_token),
@@ -458,7 +458,7 @@ async fn test_file_revision_v21_supports_ranges_and_validators() {
     let commit = body["data"][1]["commit_id"].as_str().unwrap().to_string();
 
     let url = format!(
-        "{}/api/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
+        "{}/api2/repos/{}/file/revision/?p=/hist.txt&commit_id={commit}",
         f.server.base_url, f.repo_id
     );
     let http = reqwest::Client::builder().no_proxy().build().unwrap();
@@ -518,7 +518,7 @@ async fn test_file_revision_v21_invalid_commit() {
         .client
         .get(
             &format!(
-                "/api/repos/{}/file/revision/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
+                "/api2/repos/{}/file/revision/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
                 f.repo_id
             ),
             Some(&f.api_token),
@@ -547,13 +547,10 @@ async fn test_restore_file_revision_v21() {
 
     let resp = f
         .client
-        .post_json(
-            &format!(
-                "/api/repos/{}/file/revision/restore/?p=/hist.txt&commit_id={}",
-                f.repo_id, old_commit
-            ),
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", f.repo_id),
             Some(&f.api_token),
-            &serde_json::json!({}),
+            &[("operation", "revert"), ("commit_id", old_commit.as_str())],
         )
         .await;
     assert_eq!(
@@ -598,14 +595,129 @@ async fn test_restore_file_revision_v21_requires_write() {
     let other_token = body["token"].as_str().unwrap().to_string();
 
     let resp = client
-        .post_json(
-            &format!(
-                "/api/repos/{}/file/revision/restore/?p=/hist.txt&commit_id=0000000000000000000000000000000000000000",
-                repo_id
-            ),
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", repo_id),
             Some(&other_token),
-            &serde_json::json!({}),
+            &[
+                ("operation", "revert"),
+                ("commit_id", "0000000000000000000000000000000000000000"),
+            ],
         )
         .await;
     assert_eq!(resp.status(), 403);
+}
+
+#[tokio::test]
+async fn test_revert_recreates_a_deleted_file() {
+    let f = TestFixture::new().await;
+    upload_hist_version(&f, b"first-content").await;
+    upload_hist_version(&f, b"second-content").await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/file/history/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let old_commit = body["data"][1]["commit_id"].as_str().unwrap().to_string();
+
+    let resp = f
+        .client
+        .delete(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    assert!(resp.status().is_success(), "delete failed");
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "revert"), ("commit_id", old_commit.as_str())],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        200,
+        "reverting a deleted path must recreate it: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/hist.txt")
+        .await;
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"first-content");
+}
+
+#[tokio::test]
+async fn test_revert_rejects_a_file_locked_by_another_user() {
+    let f = TestFixture::new().await;
+    upload_hist_version(&f, b"first-content").await;
+    upload_hist_version(&f, b"second-content").await;
+
+    let resp = f
+        .client
+        .get(
+            &format!("/api/v2.1/repos/{}/file/history/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+        )
+        .await;
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let old_commit = body["data"][1]["commit_id"].as_str().unwrap().to_string();
+
+    let other_id = common::create_test_user(&f.server.db, "locker@example.com", "password").await;
+    f.server
+        .repos
+        .locked_file
+        .create(
+            &f.repo_id,
+            "hist.txt",
+            other_id,
+            chrono::Utc::now().timestamp(),
+            "locker@example.com",
+        )
+        .await
+        .unwrap();
+
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "revert"), ("commit_id", old_commit.as_str())],
+        )
+        .await;
+    assert_eq!(
+        resp.status(),
+        403,
+        "a foreign lock must reject the revert: {}",
+        resp.text().await.unwrap_or_default()
+    );
+
+    f.server
+        .repos
+        .locked_file
+        .delete_by_repo_and_path(&f.repo_id, "hist.txt")
+        .await
+        .unwrap();
+    let resp = f
+        .client
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/hist.txt", f.repo_id),
+            Some(&f.api_token),
+            &[("operation", "revert"), ("commit_id", old_commit.as_str())],
+        )
+        .await;
+    assert_eq!(resp.status(), 200, "revert must work once the lock is gone");
+    let resp = f
+        .client
+        .download_file(&f.api_token, &f.repo_id, "/hist.txt")
+        .await;
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"first-content");
 }

@@ -8,8 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::AppState;
-use crate::handler::ok_json;
-use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
+use crate::middleware::repo_extractor::RepoPathRead;
 use crate::service::repo::history::HistoryService;
 use base::error::AppError;
 
@@ -33,10 +32,15 @@ pub async fn repo_history_changes(
 }
 
 pub fn repo_history_routes() -> Router<Arc<AppState>> {
-    Router::new().route(
-        "/repo_history_changes/{repo_id}/",
-        axum::routing::get(repo_history_changes),
-    )
+    Router::new()
+        .route(
+            "/repo_history_changes/{repo_id}/",
+            axum::routing::get(repo_history_changes),
+        )
+        .route(
+            "/repos/{repo_id}/file/revision/",
+            axum::routing::get(get_file_revision),
+        )
 }
 
 #[derive(Deserialize)]
@@ -73,9 +77,9 @@ pub struct RevisionQuery {
     pub commit_id: Option<String>,
 }
 
-/// `GET /api/repos/{repo_id}/file/revision/?p=&commit_id=` — the file content
+/// `GET /api2/repos/{repo_id}/file/revision/?p=&commit_id=` — the file content
 /// at the given commit, for download or preview (seahub's `FileRevision`).
-pub async fn get_file_revision_v21(
+pub async fn get_file_revision(
     path: RepoPathRead,
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -124,62 +128,9 @@ pub async fn get_file_revision_v21(
     ))
 }
 
-#[derive(Deserialize)]
-pub struct RestoreQuery {
-    pub p: Option<String>,
-    pub commit_id: Option<String>,
-}
-
-/// `POST .../file/revision/restore/?p=&commit_id=` — point the file's dirent at the
-/// target commit's fs_id and commit that change.
-pub async fn restore_file_revision_v21(
-    path: RepoPathWrite,
-    State(state): State<Arc<AppState>>,
-    Query(query): Query<RestoreQuery>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    let repo_id = path.repo_id;
-    let p = query
-        .p
-        .ok_or_else(|| AppError::BadRequest("path required".into()))?;
-    let commit_id = query
-        .commit_id
-        .ok_or_else(|| AppError::BadRequest("commit_id required".into()))?;
-
-    HistoryService::restore_file_revision(
-        &state.db,
-        &state.repos,
-        &repo_id,
-        &commit_id,
-        &p,
-        &path.user.email,
-        path.user.user_id,
-        state.config().storage.default_user_quota_bytes,
-    )
-    .await?;
-
-    Ok(ok_json())
-}
-
 pub fn file_history_routes() -> Router<Arc<AppState>> {
     Router::new().route(
         "/repos/{repo_id}/file/history/",
         axum::routing::get(get_file_history_v21),
     )
-}
-
-/// The Nanofile-only revision routes under `/api/repos/{repo_id}/file/`.
-///
-/// Seafile serves a revision under `/api2/repos/{repo_id}/file/revision/` (a
-/// path this server does not route); the restore endpoint has no upstream
-/// counterpart at all. Both live on the Nanofile prefix.
-pub fn nanofile_history_routes() -> Router<Arc<AppState>> {
-    Router::new()
-        .route(
-            "/{repo_id}/file/revision/",
-            axum::routing::get(get_file_revision_v21),
-        )
-        .route(
-            "/{repo_id}/file/revision/restore/",
-            axum::routing::post(restore_file_revision_v21),
-        )
 }

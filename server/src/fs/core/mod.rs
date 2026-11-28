@@ -25,7 +25,7 @@ pub use download::{Downloader, stream_blocks};
 pub use file_ops::FileOps;
 pub use gc::{GcManager, GcPolicy};
 pub use lock::{
-    canonical_lock_path, check_commit_file_locks, prune_all_stale_file_locks,
+    canonical_lock_path, check_commit_file_locks, check_file_locked, prune_all_stale_file_locks,
     prune_stale_file_locks, upsert_lock_timestamp,
 };
 pub use size::{

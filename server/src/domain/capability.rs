@@ -930,13 +930,8 @@ const ROUTES: &[RouteEntry] = &[
     ),
     (
         "GET",
-        "/api/repos/{repo_id}/file/revision/",
+        "/api2/repos/{repo_id}/file/revision/",
         RouteAccess::Capability(Capability::HistoryRead),
-    ),
-    (
-        "POST",
-        "/api/repos/{repo_id}/file/revision/restore/",
-        RouteAccess::Capability(Capability::HistoryWrite),
     ),
     (
         "GET",

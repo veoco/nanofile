@@ -54,7 +54,11 @@ Seafile's overloaded file endpoint. The body's shape selects the operation:
 - **URL-encoded form** — one of:
   - `operation=create` — creates an empty file at `?p=`.
   - `operation=rename` + `newname` — renames `?p=`.
-  - `operation=move` + `dst_repo` + `dst_dir` — moves `?p=` to another directory.
+  - `operation=move` + `dst_repo` + `dst_dir` — moves `?p=` to another directory
+    (the same library only).
+  - `operation=revert` + `commit_id` — restores `?p=` to the version from that
+    commit and commits the change; the file is recreated if it was deleted. A
+    file locked by another user answers `403` with `File <path> is locked`.
 
 `reloaddir=true` answers with the affected directory's listing (the destination
 directory for a move) instead of `"success"`.

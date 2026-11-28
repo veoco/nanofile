@@ -18,6 +18,7 @@ use crate::handler::{MAX_SMALL_BODY_BYTES, ok_json, read_body_limited};
 use crate::middleware::auth::AuthUser;
 use crate::middleware::repo_extractor::{RepoPathRead, RepoPathWrite};
 use crate::service::fs::file as file_svc;
+use crate::service::repo::history::HistoryService;
 use base::error::AppError;
 
 pub(crate) use file_svc::rename_entry;
@@ -379,6 +380,25 @@ pub async fn file_post_handler(
                     )
                     .await;
                 }
+                Ok(ok_json().into_response())
+            }
+            Some("revert") => {
+                // seahub's `FileView.post` restore-by-revision case: point the
+                // dirent back at the named commit and commit the change.
+                let commit_id = form
+                    .get("commit_id")
+                    .ok_or_else(|| AppError::BadRequest("commit_id invalid.".to_string()))?;
+                HistoryService::restore_file_revision(
+                    state.db.as_ref(),
+                    &state.repos,
+                    repo_id,
+                    commit_id,
+                    &path,
+                    &access.user.email,
+                    access.user.user_id,
+                    state.config().storage.default_user_quota_bytes,
+                )
+                .await?;
                 Ok(ok_json().into_response())
             }
             _ => Err(AppError::BadRequest("unknown operation".into())),

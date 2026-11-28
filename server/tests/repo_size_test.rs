@@ -308,13 +308,10 @@ async fn file_revision_restore_adjusts_size_by_the_difference() {
 
     let resp = f
         .client
-        .post_json(
-            &format!(
-                "/api/repos/{}/file/revision/restore/?p=/a.txt&commit_id={}",
-                f.repo_id, c1
-            ),
+        .post_form(
+            &format!("/api2/repos/{}/file/?p=/a.txt", f.repo_id),
             Some(&f.api_token),
-            &serde_json::json!({}),
+            &[("operation", "revert"), ("commit_id", c1.as_str())],
         )
         .await;
     assert_eq!(resp.status(), 200, "restore revision failed");

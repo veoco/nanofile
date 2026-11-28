@@ -91,7 +91,7 @@ function renderHistoryList(items, repoId, path) {
     var commitId = item.commit_id || "";
     var fileName = path.split("/").pop() || "";
     var revUrl =
-      "/api/repos/" +
+      "/api2/repos/" +
       encodeURIComponent(repoId) +
       "/file/revision/?p=" +
       encodeURIComponent(path) +
@@ -149,14 +149,19 @@ if (historyListEl) {
     if (!confirmed) return;
 
     try {
+      var restoreForm = new URLSearchParams();
+      restoreForm.append("operation", "revert");
+      restoreForm.append("commit_id", commitId);
       await apiFetch(
-        "/api/repos/" +
+        "/api2/repos/" +
           encodeURIComponent(repoId) +
-          "/file/revision/restore/?p=" +
-          encodeURIComponent(path) +
-          "&commit_id=" +
-          encodeURIComponent(commitId),
-        { method: "POST" }
+          "/file/?p=" +
+          encodeURIComponent(path),
+        {
+          method: "POST",
+          body: restoreForm.toString(),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        }
       );
       Toast.success(__t('ui.restored', { name: name }));
       closeHistoryDialog();
