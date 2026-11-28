@@ -274,7 +274,7 @@ v2.1 收藏列表，按资料库、目录、文件分组。
       "author_name": "User",
       "author_contact_email": "user@example.com",
       "login_id": "",
-      "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/256/",
+      "avatar_url": "https://files.example.com/avatar/render_primary/user@example.com/256/",
       "user_name": "User",
       "user_email": "user@example.com",
       "details": [{ "repo_name": "Docs" }],
@@ -321,7 +321,7 @@ v2.1 收藏列表，按资料库、目录、文件分组。
       "name": "reader@example.com",
       "nickname": "Reader",
       "contact_email": "reader@example.com",
-      "avatar_url": "https://files.example.com/api/avatars/reader@example.com/resized/72/"
+      "avatar_url": "https://files.example.com/avatar/render_primary/reader@example.com/72/"
     },
     "permission": "r",
     "is_admin": false

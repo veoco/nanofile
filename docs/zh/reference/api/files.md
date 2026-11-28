@@ -117,7 +117,7 @@ Seafile 重载的文件接口。请求体形状决定操作：
   "last_modifier_name": "user@example.com",
   "last_modifier_email": "user@example.com",
   "last_modifier_contact_email": "user@example.com",
-  "last_modifier_avatar": "https://files.example.com/api/avatars/user/user@example.com/resized/72/",
+  "last_modifier_avatar": "https://files.example.com/avatar/render_primary/user@example.com/72/",
   "starred": false,
   "comment_total": 0,
   "can_edit": true

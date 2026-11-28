@@ -149,10 +149,8 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/admin/users/"),
     ("PUT",    "/api/admin/users/{user_id}/"),
     ("DELETE", "/api/admin/users/{user_id}/"),
-    // The two extra surfaces that moved onto the Nanofile namespace: the avatar
-    // image bytes (seahub's are under `/media/avatars/…`) and the pre-move
-    // self-contained block URL (upstream's is `/blks/{token}/{block_id}`).
-    ("GET",    "/api/avatars/user/a@b.c/resized/96/"),
+    // The pre-move self-contained block URL (upstream's is
+    // `/blks/{token}/{block_id}`).
     ("GET",    "/api/transfers/blks/{token}/{file_id}/{block_id}"),
     ("GET",    "/api/keys/"),
     ("POST",   "/api/keys/"),

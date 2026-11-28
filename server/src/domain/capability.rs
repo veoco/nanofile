@@ -1185,14 +1185,6 @@ const ROUTES: &[RouteEntry] = &[
         "/api/admin/users/{user_id}/",
         RouteAccess::Capability(Capability::AdminUserWrite),
     ),
-    // The avatar image bytes: unauthenticated like seahub's `/media/avatars/…`
-    // (the URL is guessable from an email address and the response is marked
-    // `private`), so the table only has to admit it.
-    (
-        "GET",
-        "/api/avatars/user/{email}/resized/{size}/",
-        RouteAccess::Public,
-    ),
     // The pre-move block URL (file id in the path), kept for the links minted
     // under it: the token validates itself, like the block endpoint's.
     (

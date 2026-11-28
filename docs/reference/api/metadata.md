@@ -225,7 +225,7 @@ The library's members, for the "modified by" filter.
 ```json
 {
   "user_list": [
-    { "email": "user@example.com", "name": "User", "contact_email": "user@example.com", "avatar_url": "https://files.example.com/api/avatars/user/user@example.com/resized/72/" }
+    { "email": "user@example.com", "name": "User", "contact_email": "user@example.com", "avatar_url": "https://files.example.com/avatar/render_primary/user@example.com/72/" }
   ]
 }
 ```

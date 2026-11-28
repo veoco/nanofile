@@ -32,10 +32,7 @@ async fn upload_avatar(f: &TestFixture, name: &str, bytes: Vec<u8>) -> reqwest::
 
 async fn get_avatar_image(f: &TestFixture, size: u32) -> reqwest::Response {
     f.client
-        .get(
-            &format!("/api/avatars/user/{}/resized/{size}/", f.email),
-            None,
-        )
+        .get(&format!("/avatar/render_primary/{}/{size}/", f.email), None)
         .await
 }
 
@@ -64,7 +61,12 @@ async fn test_avatar_default() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["is_default"].as_bool().unwrap_or(false));
-    assert!(body["url"].as_str().unwrap_or("").contains("avatars"));
+    assert!(
+        body["url"]
+            .as_str()
+            .unwrap_or("")
+            .contains("/avatar/render_primary/")
+    );
 }
 
 #[tokio::test]
@@ -91,10 +93,7 @@ async fn test_avatar_image_oversized_size_rejected() {
 
     let resp = f
         .client
-        .get(
-            &format!("/api/avatars/user/{}/resized/100000/", f.email),
-            None,
-        )
+        .get(&format!("/avatar/render_primary/{}/100000/", f.email), None)
         .await;
     assert_eq!(resp.status(), 400);
 }
@@ -113,13 +112,13 @@ async fn test_avatar_image_legacy_path_redirects() {
         .get(&format!("/avatars/user/{}/resized/80/", f.email), None)
         .await;
     assert_eq!(resp.status(), 308, "the old image path must redirect");
-    let expected = format!("/api/avatars/user/{}/resized/80/", f.email);
+    let expected = format!("/avatar/render_primary/{}/80/", f.email);
     assert_eq!(
         resp.headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
         Some(expected.as_str()),
-        "the redirect must land on the /api/ avatar route"
+        "the redirect must land on the render_primary avatar route"
     );
 }
 
@@ -138,7 +137,12 @@ async fn test_avatar_nonexistent_user() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert!(body["is_default"].as_bool().unwrap_or(false));
-    assert!(body["url"].as_str().unwrap_or("").contains("avatars"));
+    assert!(
+        body["url"]
+            .as_str()
+            .unwrap_or("")
+            .contains("/avatar/render_primary/")
+    );
 }
 
 /// Security: avatar uploads must cap the multipart part at 1 MiB before

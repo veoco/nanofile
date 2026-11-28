@@ -19,7 +19,7 @@ use base::error::AppError;
 ///
 /// Response (JSON):
 ///   ```json
-///   { "avatar_url": "/api/avatars/user/{email}/resized/256/" }
+///   { "avatar_url": "/avatar/render_primary/{email}/256/" }
 ///   ```
 pub async fn upload_avatar(
     auth: AuthUser,

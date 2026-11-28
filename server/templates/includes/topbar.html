@@ -42,7 +42,7 @@
         <!-- User menu dropdown -->
         <div class="relative js-user-menu ml-1" data-is-admin="{{ is_admin }}">
             <button type="button" class="js-user-menu-button flex items-center gap-x-2 h-8 pl-[3px] pr-2 rounded-full text-[12.5px] text-ink-2 hover:bg-raised transition-colors">
-                <img src="/api/avatars/user/{{ user_email }}/resized/32/" alt=""
+                <img src="/avatar/render_primary/{{ user_email }}/32/" alt=""
                      class="h-6 w-6 rounded-full object-cover bg-raised">
                 <span class="hidden lg:block truncate max-w-[180px]">{{ user_email }}</span>
                 {% if is_admin %}

@@ -392,23 +392,13 @@ async fn seafile_transfer_paths_stay_at_the_root() {
     assert_eq!(resp.bytes().await.unwrap().as_ref(), b"seed");
 }
 
-/// The avatar image bytes are this server's own (seahub serves them from
-/// `/media/avatars/…`), so the image route moved under `/api/avatars/`: the JSON
-/// endpoint mints the new path, and the old root spelling answers a permanent
-/// redirect rather than the 404 the other moves answer — the URLs are embedded
-/// in pages and clients, and a browser holding one must keep rendering it.
+/// The avatar bytes are served on seahub's public `render_primary` view: the JSON
+/// endpoint mints that path, the bytes come from it without a credential, and the
+/// root spelling released up to 0.1.23 answers a permanent redirect because avatar
+/// URLs are embedded in pages and clients.
 #[tokio::test]
-async fn the_avatar_image_lives_on_the_api_namespace() {
+async fn the_avatar_image_lives_on_the_seahub_path() {
     let f = TestFixture::new().await;
-
-    let inventory: Vec<(&str, &str)> = route_inventory().collect();
-    let classified = inventory.iter().any(|(method, path)| {
-        *method == "GET" && template(path) == template("/api/avatars/user/{email}/resized/{size}/")
-    });
-    assert!(
-        classified,
-        "the avatar image route must be classified, or the fail-closed guard denies it"
-    );
 
     let resp = f
         .client
@@ -421,8 +411,31 @@ async fn the_avatar_image_lives_on_the_api_namespace() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let url = body["url"].as_str().expect("the response carries the url");
     assert!(
-        url.contains("/api/avatars/user/"),
-        "the avatar URL must live in the API namespace, got: {url}"
+        url.contains("/avatar/render_primary/"),
+        "the avatar URL must live on seahub's render_primary path, got: {url}"
+    );
+
+    // The image itself is public: no credential, and the root path serves bytes.
+    let path = &url[url.find("/avatar/render_primary/").unwrap()..];
+    let resp = f.client.get(path, None).await;
+    assert_eq!(resp.status(), 200, "the avatar image must be public");
+    assert!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|mime| mime.starts_with("image/")),
+        "the response must be an image"
+    );
+
+    // `/api/avatars/…` was an intermediate 0.1.24 spelling that never shipped.
+    let resp = f
+        .client
+        .get(&format!("/api/avatars/user/{}/resized/80/", f.email), None)
+        .await;
+    assert_eq!(
+        resp.status(),
+        404,
+        "the unreleased /api/avatars path is gone"
     );
 
     let ui = common::client::TestClient::new_ui_session(&f.server.base_url);
@@ -430,13 +443,12 @@ async fn the_avatar_image_lives_on_the_api_namespace() {
         .get(&format!("/avatars/user/{}/resized/80/", f.email), None)
         .await;
     assert_eq!(resp.status(), 308, "the old image path must redirect");
-    assert!(
+    assert_eq!(
         resp.headers()
             .get("location")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|location| location.starts_with("/api/avatars/user/")),
-        "the redirect must land on the /api/ avatar route, got: {:?}",
-        resp.headers().get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/avatar/render_primary/{}/80/", f.email).as_str()),
+        "the redirect must land on the render_primary route"
     );
 }
 

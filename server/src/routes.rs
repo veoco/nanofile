@@ -375,9 +375,6 @@ pub fn nanofile_routes() -> Router<Arc<AppState>> {
         )
         // Legacy v1 link collections and the account-administration surface.
         .nest("/api/admin", crate::handler::users::admin_user_routes())
-        // The avatar image bytes: seahub serves them from `/media/avatars/…`, so
-        // the image path is this server's own and lives on the `/api/` namespace.
-        .nest("/api/avatars", crate::handler::avatar::image_routes())
         // The pre-move block URL, kept for links minted before the move (a
         // capability URL lives an hour). Nothing else belongs to the transfer
         // group: the session forms and the token download are gone.
