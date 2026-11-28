@@ -479,9 +479,23 @@ impl AppState {
         tasks.start_schedules();
 
         // In Lazy mode, run the one-shot legacy-block conversion at startup as a job.
+        // A converted store is recognised here rather than in the job body, so it pays
+        // one stat per start and leaves no run record behind.
         if enc_mode == infra::storage::encrypting_block_store::BlockEncryptionMode::Lazy {
             let tasks = tasks.clone();
+            let block_dir = block_dir.clone();
             tokio::spawn(async move {
+                if crate::fs::core::block_encryption_convert::BlockEncryptionConverter::is_converted(
+                    block_dir.as_path(),
+                )
+                .await
+                {
+                    tracing::debug!(
+                        "legacy block conversion already completed; no startup pass needed"
+                    );
+                    return;
+                }
+                tracing::info!("starting the legacy block encryption conversion");
                 // A startup pass: the row names the job from its slug, so no summary is passed.
                 if let Err(e) = tasks
                     .submit_system(

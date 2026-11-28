@@ -6,6 +6,7 @@
 #[path = "common/mod.rs"]
 mod common;
 
+mod block_encryption_convert_test;
 mod block_integrity_test;
 mod block_layout_test;
 mod chunked_upload_test;
