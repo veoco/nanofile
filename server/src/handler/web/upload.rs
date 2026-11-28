@@ -19,7 +19,6 @@ use crate::AppState;
 use crate::handler::{MAX_BLOCK_UPLOAD_BYTES, MAX_SMALL_BODY_BYTES, ok_json};
 use crate::service::sharing::link as upload_link_service;
 use crate::service::upload::cleanup::{UncommittedBlocks, cleanup_block_ids};
-use crate::ui::auth_extractor::WebUser;
 use base::error::AppError;
 
 /// Compute the actual target directory from the base `parent_dir` and an
@@ -192,32 +191,6 @@ impl AuthContext {
             user_id: token.user_id,
             modifier: token.username.clone(),
             token: Some(token),
-            enc_key,
-        })
-    }
-
-    /// A browser session: CSRF → write permission → library key. The handler
-    /// calls this only after its own field checks, so their 400s keep winning.
-    async fn from_session(
-        state: &AppState,
-        user: &WebUser,
-        repo_id: &str,
-        csrf: Option<&str>,
-    ) -> Result<Self, AppError> {
-        crate::middleware::csrf::check_form_csrf(state, &user.session_token, csrf)?;
-        crate::service::permission::check_repo_write_permission(
-            state.repos.member.as_ref(),
-            repo_id,
-            user.user_id,
-        )
-        .await?;
-        let enc_key =
-            super::download::upload_block_key(state, repo_id, user.user_id, false).await?;
-        Ok(Self {
-            repo_id: repo_id.to_string(),
-            user_id: user.user_id,
-            modifier: user.email.clone(),
-            token: None,
             enc_key,
         })
     }
@@ -814,63 +787,6 @@ async fn try_handle_chunked(
         name: committed.name,
         size: committed.size,
     }))
-}
-
-/// Simple multipart/form-data parser that finds a named field's value and
-/// extracts the file (if any) from the body.
-///
-/// Used instead of axum's `Multipart` extractor, which fails with 400 on the Qt
-/// desktop client's uploads.
-/// `POST /api/transfers/upload/` — AJAX file upload from the web UI (no token),
-/// taking `file`, `repo_id`, `parent_dir` and optional `relative_path` fields.
-/// Nanofile-only: the Seafile fileserver's `/upload-aj/{token}` always carries a
-/// minted token, so the session form has no upstream path.
-pub async fn upload_aj(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    uri: axum::http::Uri,
-    headers: HeaderMap,
-    body: axum::body::Body,
-) -> Result<axum::response::Response, AppError> {
-    // No Content-Length precheck: the old size is only known after parsing, so
-    // only the commit-time size delta is a correct quota check.
-    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    let parts = read_upload_body(&state, None, body, &headers).await?;
-    let repo_id = parts
-        .fields
-        .get("repo_id")
-        .cloned()
-        .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let query = query_params(&uri);
-    let target = create_target(None, &parts.fields, &query)?;
-    let auth = AuthContext::from_session(
-        &state,
-        &user,
-        &repo_id,
-        parts.fields.get("csrf_token").map(String::as_str),
-    )
-    .await?;
-    // Everything parsed so far is staged, not ingested, but a chunked request
-    // can already have written blocks; the guard is the request's cleanup list.
-    let mut guard = UncommittedBlocks::new(
-        state.repos.clone(),
-        state.file_service(),
-        auth.repo_id.clone(),
-        parts.written_block_ids(),
-        false,
-    );
-    let finished = finish_create(
-        &state,
-        &auth,
-        parts,
-        &target,
-        range,
-        ReplyStyle::Array,
-        &mut guard,
-    )
-    .await?;
-    guard.disarm();
-    Ok(finished.response)
 }
 
 /// How the final commit names files: uploads take names from the parts, updates
@@ -1738,66 +1654,6 @@ async fn finish_update(
     Ok(finished.response)
 }
 
-/// `POST /api/transfers/update/` — session-authenticated overwrite of an
-/// existing file (the browser form).
-///
-/// The target is named with `target_file` (the spelling the token forms share)
-/// or with `p` / `path` (the path-style spelling the old session form used);
-/// either way it must resolve to an existing file. `repo_id`, one `file` part
-/// and `csrf_token` are required.
-pub async fn update_session(
-    user: WebUser,
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: axum::body::Body,
-) -> Result<axum::response::Response, AppError> {
-    // An update always replaces an existing file, so the bytes it frees are part
-    // of the budget. A Content-Length precheck cannot know that delta and used to
-    // reject a same-size replacement near the quota; the commit-time check in
-    // `upload_file_committed_stream` applies the correct delta instead.
-    let range = headers.get("content-range").and_then(|v| v.to_str().ok());
-    // An update carries exactly one file part.
-    let parts = read_update_body(&state, None, body, &headers).await?;
-
-    let repo_id = parts
-        .fields
-        .get("repo_id")
-        .ok_or_else(|| AppError::BadRequest("repo_id required".into()))?;
-    let (target_file, path_style) = match parts.fields.get("target_file").cloned() {
-        Some(target) => (target, false),
-        None => (
-            parts
-                .fields
-                .get("p")
-                .or_else(|| parts.fields.get("path"))
-                .cloned()
-                .ok_or_else(|| AppError::BadRequest("Path is missing.".into()))?,
-            true,
-        ),
-    };
-    if path_style && !target_file.starts_with('/') {
-        return Err(AppError::BadRequest("Path is missing or invalid.".into()));
-    }
-
-    let auth = AuthContext::from_session(
-        &state,
-        &user,
-        repo_id,
-        parts.fields.get("csrf_token").map(|s| s.as_str()),
-    )
-    .await?;
-    finish_update(
-        &state,
-        &auth,
-        parts,
-        &target_file,
-        "",
-        range,
-        ReplyStyle::Array,
-    )
-    .await
-}
-
 /// `POST /upload-aj/{token}` — upload with an upload-link token, as sent by the
 /// Seahub React frontend after `/api2/repos/{id}/upload-link/?from=web`.
 pub async fn upload_aj_token(
@@ -1811,7 +1667,7 @@ pub async fn upload_aj_token(
 
     // No Content-Length quota pre-check: a normal (non-link) upload token can
     // replace an existing file, so only the commit-time size delta is correct.
-    // This matches `/api/transfers/upload/` and `/upload-api/`; the commit
+    // This matches `/upload-aj/{token}` and `/upload-api/{token}`; the commit
     // removes the blocks it wrote when the delta does not fit.
     let range = headers.get("content-range").and_then(|v| v.to_str().ok());
     let parts = read_upload_body(&state, Some(&auth), body, &headers).await?;

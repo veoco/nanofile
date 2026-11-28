@@ -87,14 +87,11 @@ async fn test_v1_download_returns_url_and_oid() {
     );
     let url: String = resp.json().await.unwrap();
     assert!(
-        url.contains("/api/transfers/download/"),
-        "download URL must target /api/transfers/download, got {url}"
+        url.contains("/files/"),
+        "download URL must target /files, got {url}"
     );
 
-    let resp = f
-        .client
-        .get(path_of(&url, "/api/transfers/download/"), None)
-        .await;
+    let resp = f.client.get(path_of(&url, "/files/"), None).await;
     assert_eq!(resp.status(), 200);
     let disposition = resp
         .headers()
@@ -208,7 +205,7 @@ async fn test_block_download_link_serves_block() {
         .expect("block token");
     let resp = f
         .client
-        .get(&format!("/api/transfers/download/{block_token}"), None)
+        .get(&format!("/files/{block_token}/file.bin"), None)
         .await;
     assert_eq!(resp.status(), 400);
     assert!(
@@ -278,7 +275,7 @@ async fn test_download_api_range_and_416() {
         )
         .await;
     let url: String = resp.json().await.unwrap();
-    let path = path_of(&url, "/api/transfers/download/").to_string();
+    let path = path_of(&url, "/files/").to_string();
 
     let resp = f.client.get_with_range(&path, None, "bytes=10-19").await;
     assert_eq!(resp.status(), 206);

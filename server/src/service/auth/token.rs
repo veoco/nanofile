@@ -294,7 +294,7 @@ pub fn hash_token(token: &str) -> String {
 /// session (seahub's `update_session_auth_hash`).
 ///
 /// `token_manager` additionally drops this user's in-memory one-hour capability
-/// URLs (`/api/transfers/download/…`, `/upload-api/…`, `/blks/…`), so a leaked URL
+/// URLs (`/files/…`, `/upload-api/…`, `/blks/…`), so a leaked URL
 /// does not outlive the password change. Pass `None` only where no manager is
 /// reachable.
 pub async fn revoke_all_credentials(

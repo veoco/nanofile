@@ -2,7 +2,7 @@
 
 The endpoints that move bytes. Most are not authenticated with an account token
 directly: the API mints a short-lived **capability URL**
-(`/api/transfers/download/<token>`, `/upload-api/<token>`, `/blks/<token>/…`)
+(`/files/<token>/<filename>`, `/upload-api/<token>`, `/blks/<token>/…`)
 and the client fetches or posts to it.
 The link endpoints live on [Libraries](/reference/api/libraries#get-api2-repos-repo-id-upload-link).
 
@@ -21,12 +21,8 @@ Source: `server/src/handler/web/upload.rs`,
    the same form: an optional `parent_dir` (upload) or `target_file` (update), a
    `relative_path`, a `replace` flag, and one `file` part per file.
 3. For a download, `GET /api2/repos/{repo_id}/file/?p=…` returns a
-   `/api/transfers/download/<token>` URL; fetching it streams the bytes and
+   `/files/<token>/<filename>` URL; fetching it streams the bytes and
    supports `Range` and `If-None-Match`.
-
-The session forms, the token download and the progress shims below are
-Nanofile-only; they live under `/api/`, beside the Seafile-compatible transfer
-paths at the root.
 
 Tokens are in-memory and short lived. They are re-checked against the library's
 current membership on use, so revoking access invalidates outstanding links.
@@ -45,13 +41,15 @@ validator answers `304` before `Range` is considered. Because the URL is stable,
 the response is `Cache-Control: private, no-cache`: an edit is revalidated, never
 served from a week-old cache. Requires `file.read`.
 
-## Download a file by link {#get-download-api-token}
+## Download a file by link {#get-files-token-filename}
 
-`GET /api/transfers/download/{token}`
+`GET /files/{token}/{filename}`
 
-Streams the file named when the token was minted. Same `Range` and
-`If-None-Match` handling as above. The token's permission is re-checked on every
-request; an invalid or expired token is a `400`.
+Streams the file named when the token was minted; the filename segment only
+feeds `Content-Disposition` and the content type, exactly like seafile-server's
+`accessCB` (the token is the authority). Same `Range` and `If-None-Match`
+handling as above. The token's permission is re-checked on every request; an
+invalid or expired token is a `400`.
 
 The token URL is unique per issuance, so it is cacheable for an hour
 (`Cache-Control: max-age=3600`).
@@ -84,7 +82,7 @@ defaults to the directory bound into the token when omitted. The body is
 | Field | Required | Meaning |
 | --- | --- | --- |
 | `file` | yes | File contents; the part's filename is the entry name. Repeat the part for multiple files. |
-| `parent_dir` | no | Target directory; defaults to the token's directory (the library root in the session form). It must exist or be created below the library root. |
+| `parent_dir` | no | Target directory; defaults to the token's directory. It must exist or be created below the library root. |
 | `relative_path` | no | Sub-path below the target; must not start with `/`. `//` in `parent_dir` is rejected. |
 | `replace` | no | `1`/`true` replaces an existing file; a directory at that path answers `409`. |
 | `last_modify` | no | RFC 3339 mtime for a single file. |
@@ -101,10 +99,9 @@ multi-file request; `ret-json` switches it to the same JSON array.
 **Resumable uploads** — send `Content-Range: bytes <start>-<end>/<total>` and
 `Content-Length`; each chunk is staged in a temp file and the final chunk
 commits. A chunked request carries exactly one file.
-`/api/transfers/upload/`, `/upload-aj/{token}`, `/upload-api/{token}`,
-`/api/transfers/update/`, `/update-aj/{token}` and `/update-api/{token}`
-implement this; `/api2/repos/{repo_id}/file/` rejects a request carrying
-`Content-Range` with `400`. See
+`/upload-aj/{token}`, `/upload-api/{token}`, `/update-aj/{token}` and
+`/update-api/{token}` implement this; `/api2/repos/{repo_id}/file/` rejects a
+request carrying `Content-Range` with `400`. See
 [uploaded bytes](#get-api-v2-1-repos-repo-id-file-uploaded-bytes).
 
 Requires a write token. For an encrypted library the library key must be cached
@@ -120,14 +117,6 @@ library.
 The browser form target, same multipart fields and response as
 [`POST /upload-api/{token}`](#post-upload-api-token). The web interface reaches
 it through the `from=web` upload link.
-
-`POST /api/transfers/upload/`
-
-The Nanofile-only session form of the same handler, authenticated by the browser
-session instead of a token; it names the library through the `repo_id` field.
-Without a minted token there is no bound directory, so a missing `parent_dir`
-means the library root. The web interface reaches this form when it cannot mint
-an upload link.
 
 ## Update a file {#post-update-api-token}
 
@@ -150,17 +139,11 @@ body is the file id as plain text; `ret-json` answers
 
 `POST /update-aj/{token}` takes the same fields and answers the JSON array.
 
-`POST /api/transfers/update/` is the Nanofile-only session counterpart: it takes
-`repo_id`, `csrf_token` and one `file` part, and names the target with
-`target_file` or with `p` / `path`; it answers the JSON array.
-
-`/update-api/{token}`, `/update-aj/{token}` and `/api/transfers/update/` also
-implement resumable uploads (`Content-Range` with one file part); see
+`/update-api/{token}` and `/update-aj/{token}` also implement resumable uploads
+(`Content-Range` with one file part); see
 [Upload a file](#post-upload-api-token).
 
 `POST /update-aj/{token}`
-
-`POST /api/transfers/update/`
 
 ## Upload blocks {#post-upload-blks-api-token}
 
@@ -221,20 +204,6 @@ A staged temp file's offset wins over the count of uploaded blocks.
 
 Requires `file.write`.
 
-## Upload progress {#get-upload-progress}
-
-`GET /api/transfers/upload-progress/`
-
-A Nanofile-only compatibility shim for the web interface's progress polling. The
-answer is always `{"progress": 100}`: uploads are synchronous per request.
-
-## Index progress {#get-idx-progress}
-
-`GET /api/transfers/index-progress/`
-
-The indexing counterpart of the progress shim; always `{"progress": 100}` when
-full-text indexing is enabled.
-
 ## Start a ZIP download {#post-api-v2-1-repos-repo-id-zip-task}
 
 `POST /api/v2.1/repos/{repo_id}/zip-task/`
@@ -264,10 +233,9 @@ download per token.
 **Seafile** — the transfer flow and field names match seahub. Differences:
 the returned upload/update URLs are `/upload-api/<token>` and
 `/update-api/<token>` rather than `/seafhttp/upload-api/<token>` (clients use the
-returned URL verbatim); `POST /api2/repos/{repo_id}/file/` also accepts a direct
-multipart upload, which the official reference does not document; the session
-forms, the token download and the progress shims are Nanofile extensions under
-`/api/transfers/`; a missing `parent_dir` falls back to the directory bound
-into the token, which the fileserver instead rejects; `head` on an update is
-accepted but the commit is serialized on the current HEAD; `replace` also accepts
-`true`.
+returned URL verbatim); the download URL is `/files/<token>/<filename>` at the
+root, the same path the fileserver registers; `POST /api2/repos/{repo_id}/file/`
+also accepts a direct multipart upload, which the official reference does not
+document; a missing `parent_dir` falls back to the directory bound into the
+token, which the fileserver instead rejects; `head` on an update is accepted but
+the commit is serialized on the current HEAD; `replace` also accepts `true`.

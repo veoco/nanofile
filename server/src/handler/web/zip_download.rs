@@ -198,7 +198,7 @@ pub async fn zip_download_handler(
         .ok_or_else(|| AppError::NotFound("Zip task not found or expired".into()))?;
 
     // The token outlives membership, so re-check the requester the same way
-    // `/api/transfers/download/{token}` does: a user removed from the library
+    // `/files/{token}/{filename}` does: a user removed from the library
     // (or deactivated) between `POST /zip-task/` and this GET must not receive
     // the archive.
     let permitted = crate::service::permission::check_repo_read_permission(

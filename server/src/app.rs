@@ -285,12 +285,8 @@ mod tests {
         );
         assert_eq!(redact_request_path("/zip/abc123"), "/zip/{token}");
         assert_eq!(
-            redact_request_path("/download-api/abc123"),
-            "/download-api/{token}"
-        );
-        assert_eq!(
-            redact_request_path("/api/transfers/download/abc123"),
-            "/api/transfers/download/{token}"
+            redact_request_path("/files/abc123/notes.txt"),
+            "/files/{token}/notes.txt"
         );
         // ...and the rest of the path still says where the request was going.
         assert_eq!(
@@ -327,7 +323,10 @@ mod tests {
             "/libraries/abc/files/sub/dir"
         );
         // A segment that merely contains a prefix is not a token position.
-        assert_eq!(redact_request_path("/files/abc/"), "/files/abc/");
+        assert_eq!(
+            redact_request_path("/repos/abc/files/"),
+            "/repos/abc/files/"
+        );
         assert_eq!(redact_request_path("/"), "/");
     }
 

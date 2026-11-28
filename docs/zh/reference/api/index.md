@@ -10,11 +10,11 @@
 | --- | --- |
 | `/api2/` | 旧版 Seafile REST API。官方桌面端与移动端客户端仍大量使用。 |
 | `/api/v2.1/` | 较新的 REST API，网页界面与移动端使用。 |
-| `/api/` | Nanofile 自有 API —— API 密钥、搜索/索引控制、重命名/移动辅助接口、资料库可见性、头像图片字节，以及 Nanofile 自有的传输接口（会话上传/更新表单、令牌下载、进度桩）。不属于 Seafile 的 API。 |
+| `/api/` | Nanofile 自有 API —— API 密钥、凭据清单、搜索/索引控制、EXIF 与资料库可见性。不属于 Seafile 的 API。 |
 | `/seafhttp/` | 客户端守护进程与服务器之间的同步协议，见 [同步协议](/zh/reference/api/sync)。 |
 | `/dav/{repo_id}/` | WebDAV，见 [WebDAV](/zh/reference/api/webdav)。 |
 | `/notification` | 客户端订阅资料库更新的 WebSocket，见 [通知 WebSocket](/zh/reference/api/notification)。 |
-| `/upload-aj/`、`/upload-api/`、`/upload-blks-api/`、`/upload-raw-blks-api/`、`/update-aj/`、`/update-api/`、`/update-blks-api/`、`/blks/`、`/zip/`、`/repos/{repo_id}/files/` | 传输接口。API 返回这些 URL，网页界面也直接调用；见 [上传与下载](/zh/reference/api/transfers)。Nanofile 自有的表单位于 `/api/transfers/`。 |
+| `/files/`、`/upload-aj/`、`/upload-api/`、`/upload-blks-api/`、`/upload-raw-blks-api/`、`/update-aj/`、`/update-api/`、`/update-blks-api/`、`/blks/`、`/zip/`、`/repos/{repo_id}/files/` | 传输接口。API 返回这些 URL，网页界面也直接调用；见 [上传与下载](/zh/reference/api/transfers)。 |
 | `/health` | 运行状态探针，返回 `200` 与进程代号头。不属于 API。 |
 
 `GET /api2/server-info/` 返回本服务器对外声明的 Seafile 版本（`server.version`，默认 `8.0.0`）。客户端据此裁剪功能；本参考描述实际存在的路由，而不只是该版本号隐含的能力。

@@ -26,7 +26,7 @@ Returns a time-limited download URL, not the bytes (the bytes come from
 **Response `200`**
 
 ```json
-"/api/transfers/download/<token>"
+"/files/<token>/<filename>"
 ```
 
 The `oid` response header is the file's FS object id. With

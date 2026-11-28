@@ -115,7 +115,7 @@ pub struct AppState {
     pub block_store: DynBlockStorage,
     pub block_dir: Arc<PathBuf>,
     /// Capability-token manager for the transfer endpoints (`/upload-api/`,
-    /// `/update-api/`, `/api/transfers/download/`, the block endpoints).
+    /// `/update-api/`, `/files/{token}/{filename}`, the block endpoints).
     pub token_manager: Arc<AccessTokenManager>,
     /// WebSocket notification manager. `None` if the notification feature is disabled.
     pub notification_manager: Option<NotificationManager>,

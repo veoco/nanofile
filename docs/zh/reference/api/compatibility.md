@@ -679,6 +679,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/zh/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/zh/reference/api/transfers#get-repos-repo-id-files-path) |
 | `GET /blks/{token}/{block_id}` | [docs](/zh/reference/api/transfers#get-blks-token-block-id) |
+| `GET /files/{token}/{filename}` | [docs](/zh/reference/api/transfers#get-files-token-filename) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |
 | `POST /api2/repos/{repo_id}/upload-blks-link/` | [docs](/zh/reference/api/libraries#post-api2-repos-repo-id-upload-blks-link) |
 | `GET /api2/repos/{repo_id}/update-blks-link/` | [docs](/zh/reference/api/libraries#get-api2-repos-repo-id-update-blks-link) |
@@ -718,7 +719,7 @@ Seafile 的 per-repo OCR metadata 接口没有实现；官方功能标志报告�
 - **时间。** 多数是 Unix 秒。`search-file` 的 `mtime` 与 `file/detail/` 的 `last_modified` 用 RFC 3339，而 `file/detail/` 的 `mtime` 仍是 Unix 秒；`dir/detail/` 返回数字，而 seahub 返回字符串。
 - **列表。** 旧版目录列表隐藏 `_Internal`，目录在前并按小写名称排序，报告真实的 `dir_perm`/`permission`；未实现 `?oid=` 校验。
 - **搜索。** `/api/v2.1/search-file/` 最多 200 条；`/api2/search/` 忽略 Pro 专属过滤参数。
-- **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。Nanofile 自有的会话表单、令牌下载与进度桩位于 `/api/transfers/`。`zip-task` 用 `POST`。
+- **传输。** 上传/更新链接指向 `/upload-api/` 与 `/update-api/`（没有 `/seafhttp/` 前缀），客户端原样使用返回的 URL。下载 URL 是根路径的 fileserver 形状 `/files/{token}/{filename}`。`zip-task` 用 `POST`。
 - **块下载。** `GET /blks/{token}/{block_id}` 保持 fileserver 的两段形状：令牌记录文件，路径只带块 id。此前的自包含拼写 `/blks/{token}/{file_id}/{block_id}` 移到 `/api/transfers/blks/{token}/{file_id}/{block_id}`；旧的根路径返回 404。
 - **头像。** 图片字节由 `/api/avatars/user/{email}/resized/{size}/` 提供；seahub 用的是 `/media/avatars/…`，本服务未实现那个前缀。旧的根路径 `/avatars/…` 永久重定向。
 - **分享与上传页面。** 链接打开的页面是 `/f/{token}`、`/d/{token}`、`/d/{token}/files/{path}` 与 `/u/{token}`；seahub 用的是 `/u/d/{token}/` 与 `/d/{token}/files/?p=`。本服务签发的链接用前一组形状；从 Seafile 部署复制过来的链接不会自动转换。

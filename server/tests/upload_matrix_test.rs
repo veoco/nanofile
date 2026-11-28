@@ -5,12 +5,9 @@
 //! (`docs/reference/api/transfers.md`). Nothing here asserts "whatever the code
 //! happens to do today" without a decision behind it.
 //!
-//! The session endpoints authenticate with a cookie, so the helper below uses the
-//! fixture's cookie-jar client and scrapes the double-submit CSRF token from the
-//! repository browser page. Negative session cases disable redirect following:
-//! `WebUser` answers 302 to `/accounts/login/`, and a client that follows it would
-//! otherwise see the login page's 200 and assert nothing (see `web_access_test`'s
-//! `test_update_aj`, which has that shape).
+//! Every endpoint here authenticates with a minted upload/update token (the
+//! browser's `from=web` link points at the same token family), so no cookie-jar
+//! client is involved.
 
 use crate::common::TestFixture;
 use reqwest::multipart::{Form, Part};
@@ -78,66 +75,6 @@ async fn update_link_web(f: &TestFixture, p: &str) -> String {
         .await;
     assert_eq!(resp.status(), 200, "update-link (web) request failed");
     resp.json::<String>().await.unwrap()
-}
-
-/// Log in through the web form into a cookie-jar client, the way a browser does:
-/// `/api2/auth-token/` returns an API token but sets no session cookie, so the
-/// session endpoints need this login.
-async fn session_client(f: &TestFixture) -> reqwest::Client {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .cookie_store(true)
-        .build()
-        .unwrap();
-    let resp = client
-        .post(format!("{}/accounts/login/", f.server.base_url))
-        .form(&[
-            ("email", f.email.as_str()),
-            ("password", f.password.as_str()),
-        ])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 302, "web login must redirect");
-    client
-}
-
-/// Scrape the double-submit CSRF token the browser session echoes into forms.
-async fn csrf_of(client: &reqwest::Client, f: &TestFixture) -> String {
-    let resp = client
-        .get(format!(
-            "{}/libraries/{}/files",
-            f.server.base_url, f.repo_id
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200, "the browser page must load");
-    let html = resp.text().await.unwrap();
-    let marker = r#"name="csrf_token" value=""#;
-    let start = html
-        .find(marker)
-        .expect("the browser page embeds a csrf_token")
-        + marker.len();
-    let rest = &html[start..];
-    let end = rest.find('"').expect("the csrf token is quoted");
-    rest[..end].to_string()
-}
-
-/// POST a multipart body to a session endpoint with the logged-in client.
-async fn session_post(
-    client: &reqwest::Client,
-    f: &TestFixture,
-    path: &str,
-    form: Form,
-) -> reqwest::Response {
-    client
-        .post(format!("{}{}", f.server.base_url, path))
-        .multipart(form)
-        .send()
-        .await
-        .unwrap()
 }
 
 async fn dir_names(f: &TestFixture, path: &str) -> Vec<String> {
@@ -382,28 +319,6 @@ async fn upload_requires_a_file_part() {
             "{label} must reject a body without a file"
         );
     }
-
-    let client = session_client(&f).await;
-    let csrf = csrf_of(&client, &f).await;
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/upload/",
-        form(
-            &[
-                ("repo_id", f.repo_id.as_str()),
-                ("parent_dir", "/"),
-                ("csrf_token", csrf.as_str()),
-            ],
-            &[],
-        ),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        400,
-        "the session form must reject a body without a file"
-    );
 }
 
 /// `parent_dir` may not contain `//`, and `relative_path` may not start with `/`.
@@ -539,81 +454,6 @@ async fn upload_link_is_add_only() {
     assert_eq!(dir_names(&f, "/sub").await.len(), 2);
 }
 
-/// The session upload requires the double-submit CSRF token; with it the same
-/// body succeeds and answers the array.
-#[tokio::test]
-async fn session_upload_requires_and_accepts_csrf() {
-    let f = TestFixture::new().await;
-    let client = session_client(&f).await;
-
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/upload/",
-        form(
-            &[("repo_id", f.repo_id.as_str()), ("parent_dir", "/")],
-            &[("session.txt", b"x")],
-        ),
-    )
-    .await;
-    assert_eq!(resp.status(), 400, "a missing CSRF token must be a 400");
-
-    let csrf = csrf_of(&client, &f).await;
-    assert!(!csrf.is_empty(), "the page must embed a CSRF token");
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/upload/",
-        form(
-            &[
-                ("repo_id", f.repo_id.as_str()),
-                ("parent_dir", "/"),
-                ("csrf_token", csrf.as_str()),
-            ],
-            &[("session.txt", b"x")],
-        ),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body.is_array());
-    assert!(download(&f, "/session.txt").await.is_some());
-}
-
-/// Without the session cookie the endpoint answers 302 to the login page. The
-/// client must not follow it, or the assertion silently becomes "login page 200".
-#[tokio::test]
-async fn session_upload_without_cookie_redirects() {
-    let f = TestFixture::new().await;
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
-
-    let resp = client
-        .post(format!("{}/api/transfers/upload/", f.server.base_url))
-        .multipart(form(
-            &[("repo_id", f.repo_id.as_str()), ("parent_dir", "/")],
-            &[("nope.txt", b"x")],
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        resp.status().is_redirection(),
-        "a session-less call must redirect, got {}",
-        resp.status()
-    );
-    let location = resp
-        .headers()
-        .get(reqwest::header::LOCATION)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    assert!(location.contains("/accounts/login/"), "got {location:?}");
-}
-
 /// Every update endpoint answers 441 when the target does not exist.
 #[tokio::test]
 async fn update_requires_existing_target() {
@@ -635,24 +475,6 @@ async fn update_requires_existing_target() {
             "{label} must answer 441 for a missing target"
         );
     }
-
-    let client = session_client(&f).await;
-    let csrf = csrf_of(&client, &f).await;
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/update/",
-        form(
-            &[
-                ("repo_id", f.repo_id.as_str()),
-                ("p", "/missing.txt"),
-                ("csrf_token", csrf.as_str()),
-            ],
-            &[("missing.txt", b"x")],
-        ),
-    )
-    .await;
-    assert_eq!(resp.status(), 441, "the session update must answer 441 too");
 }
 
 /// An update carries exactly one file part; a second one is a 400 on every
@@ -678,32 +500,10 @@ async fn update_rejects_a_second_file() {
         )
         .await;
     assert_eq!(resp.status(), 400, "-api must reject a second file");
-
-    let client = session_client(&f).await;
-    let csrf = csrf_of(&client, &f).await;
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/update/",
-        form(
-            &[
-                ("repo_id", f.repo_id.as_str()),
-                ("p", "/one.txt"),
-                ("csrf_token", csrf.as_str()),
-            ],
-            &[("one.txt", b"a"), ("two.txt", b"b")],
-        ),
-    )
-    .await;
-    assert_eq!(
-        resp.status(),
-        400,
-        "the session form must reject a second file"
-    );
 }
 
-/// The session update answers the JSON array, `-api` the plain id and `-aj` the
-/// array — the three shapes the web UI and the desktop client read.
+/// The update endpoints answer the shapes the desktop client and the web UI read:
+/// `-api` the plain id and `-aj` the JSON array.
 #[tokio::test]
 async fn update_reply_shapes() {
     let f = TestFixture::new().await;
@@ -714,26 +514,6 @@ async fn update_reply_shapes() {
             .await;
         assert_eq!(seed.status(), 200);
     }
-
-    let client = session_client(&f).await;
-    let csrf = csrf_of(&client, &f).await;
-    let resp = session_post(
-        &client,
-        &f,
-        "/api/transfers/update/",
-        form(
-            &[
-                ("repo_id", f.repo_id.as_str()),
-                ("p", "/s.txt"),
-                ("csrf_token", csrf.as_str()),
-            ],
-            &[("s.txt", b"new")],
-        ),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
-    let body: serde_json::Value = resp.json().await.unwrap();
-    assert!(body.is_array(), "the session update answers an array");
 
     let api = update_link(&f, "/").await;
     let resp = f

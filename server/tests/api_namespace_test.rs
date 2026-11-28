@@ -105,6 +105,11 @@ const REPLACED_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/upload-links"),
     ("POST", "/api/upload-links"),
     ("DELETE", "/api/upload-links/{token}"),
+    ("GET", "/api/transfers/download/{token}"),
+    ("POST", "/api/transfers/upload/"),
+    ("POST", "/api/transfers/update/"),
+    ("GET", "/api/transfers/upload-progress/"),
+    ("GET", "/api/transfers/index-progress/"),
 ];
 
 /// The Seafile-compatible routes those paths were replaced by. Each is added as
@@ -129,15 +134,11 @@ const MOVED_TRANSFER_ROUTES: &[(&str, &str)] = &[
     ("GET", "/idx_progress"),
 ];
 
-/// The same endpoints under `/api/transfers/`; the two session update spellings
-/// were merged into one handler.
-const NEW_TRANSFER_ROUTES: &[(&str, &str)] = &[
-    ("GET", "/api/transfers/download/{token}"),
-    ("POST", "/api/transfers/upload/"),
-    ("POST", "/api/transfers/update/"),
-    ("GET", "/api/transfers/upload-progress/"),
-    ("GET", "/api/transfers/index-progress/"),
-];
+/// The transfer endpoints this server invented under `/api/transfers/` have been
+/// replaced by the fileserver's own routes (downloads) or deleted (the session
+/// forms and the progress shims). Only the pre-move block URL remains.
+const NEW_TRANSFER_ROUTES: &[(&str, &str)] =
+    &[("GET", "/api/transfers/blks/{token}/{file_id}/{block_id}")];
 
 /// Expand the template placeholders to concrete segments.
 fn expand(path: &str, repo_id: &str) -> String {
@@ -378,9 +379,17 @@ async fn seafile_transfer_paths_stay_at_the_root() {
     assert_eq!(resp.status(), 200, "file download link is a seahub route");
     let download_url: String = resp.json().await.unwrap();
     assert!(
-        download_url.contains("/api/transfers/download/"),
-        "the download URL is minted in the Nanofile namespace, got: {download_url}"
+        download_url.contains("/files/"),
+        "the download URL is minted as the fileserver's /files/{{token}}/{{filename}}, got: {download_url}"
     );
+    assert!(
+        download_url.ends_with("/seed.txt"),
+        "the download URL carries the filename, got: {download_url}"
+    );
+    let path = &download_url[download_url.find("/files/").unwrap()..];
+    let resp = f.client.get(path, None).await;
+    assert_eq!(resp.status(), 200, "the minted /files/ URL must stream");
+    assert_eq!(resp.bytes().await.unwrap().as_ref(), b"seed");
 }
 
 /// The avatar image bytes are this server's own (seahub serves them from
@@ -472,48 +481,23 @@ fn transfer_routes_are_classified_on_the_new_namespace() {
     }
 }
 
-/// Each new transfer route answers on `/api/transfers/` with its own credential
-/// contract: the invalid capability token is a 400 (not the fallback 404), the
-/// session forms redirect to the login page, and the progress shims answer 200.
+/// The one remaining Nanofile transfer route answers on `/api/transfers/` and
+/// validates its own capability token; the session forms and progress shims are
+/// gone, so nothing else lives there.
 #[tokio::test]
 async fn new_transfer_routes_exist_on_the_new_namespace() {
     let f = TestFixture::new().await;
 
     let resp = f
         .client
-        .get("/api/transfers/download/not-a-token", None)
+        .get(
+            "/api/transfers/blks/not-a-token/0000000000000000000000000000000000000000/aa",
+            None,
+        )
         .await;
     assert_eq!(
         resp.status(),
         400,
-        "the download endpoint must validate its capability token"
+        "the legacy block URL must validate its capability token"
     );
-
-    // A browser without a cookie is redirected to the login page; the shared test
-    // client follows redirects, so use the no-redirect flavour here.
-    let ui = common::client::TestClient::new_ui_session(&f.server.base_url);
-    for path in ["/api/transfers/upload/", "/api/transfers/update/"] {
-        let resp = ui.post_form(path, None, &[]).await;
-        assert_eq!(
-            resp.status(),
-            303,
-            "{path} must reject a sessionless request with the login redirect"
-        );
-        assert!(
-            resp.headers()
-                .get("location")
-                .and_then(|v| v.to_str().ok())
-                .is_some_and(|loc| loc.starts_with("/accounts/login/")),
-            "{path} must redirect to the login page, got: {:?}",
-            resp.headers().get("location")
-        );
-    }
-
-    for path in [
-        "/api/transfers/upload-progress/",
-        "/api/transfers/index-progress/",
-    ] {
-        let resp = f.client.get(path, None).await;
-        assert_eq!(resp.status(), 200, "{path} must serve the progress shim");
-    }
 }

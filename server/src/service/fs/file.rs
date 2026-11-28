@@ -557,13 +557,14 @@ impl FileService {
             filename,
         );
 
-        let url = crate::service::urls::nanofile_download(
+        let url = crate::service::urls::file_download(
             self.config
                 .get()
                 .server
                 .download_url_base(host_header)
                 .as_str(),
             &download_token,
+            filename,
         );
         Ok((file_fs_id, url))
     }

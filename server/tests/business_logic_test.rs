@@ -351,7 +351,7 @@ async fn test_download_token_revoked_permission() {
     common::remove_repo_member(&f.server.db, &f.repo_id, uid2).await;
 
     // The download URL is a full absolute URL like
-    // "http://127.0.0.1:{port}/api/transfers/download/{token}".  Use a raw reqwest
+    // "http://127.0.0.1:{port}/files/{token}/{filename}".  Use a raw reqwest
     // client to fetch it directly (TestClient would double-prefix base_url).
     // The URL must stop working: without the membership row the read-permission
     // re-check refuses it.

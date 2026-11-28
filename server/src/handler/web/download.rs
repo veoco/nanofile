@@ -23,10 +23,10 @@ pub(crate) async fn token_user_active(state: &AppState, user_id: i32) -> Result<
 
 /// Reject a capability token whose owner is no longer an active account.
 ///
-/// The `/api/transfers/download/{token}`, `/blks/{token}/…` and
-/// `/upload-api/{token}` endpoints authenticate with an in-memory token rather
-/// than `AuthUser`, so they never saw the `is_active` check every other surface
-/// applies — a deactivated account kept access for the token's remaining TTL.
+/// The `/files/{token}/{filename}`, `/blks/{token}/…` and `/upload-api/{token}`
+/// endpoints authenticate with an in-memory token rather than `AuthUser`, so
+/// they never saw the `is_active` check every other surface applies — a
+/// deactivated account kept access for the token's remaining TTL.
 pub(crate) async fn ensure_token_user_active(
     state: &AppState,
     user_id: i32,
@@ -288,23 +288,22 @@ pub async fn repo_file_download(
     ))
 }
 
-/// GET /api/transfers/download/{token} — token-authenticated file download,
-/// step B of the two-step flow (the client first obtains a download URL, then
-/// GETs this).
-pub async fn download_api(
+/// GET /files/{token}/{filename} — the fileserver's token-authenticated file
+/// download, step B of the two-step flow (the client first obtains a download
+/// URL, then GETs this).
+///
+/// The token names the library and path; the filename segment only feeds the
+/// response headers, matching seafile-server's `accessCB` (`fileop.go`), which
+/// takes `fileName` from the URL without comparing it to the token.
+pub async fn files_download(
     State(state): State<Arc<AppState>>,
-    Path(token): Path<String>,
+    Path((token, filename)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let auth = DownloadAuth::from_token(&state, &token, DownloadTokenKind::File).await?;
 
     let repo_id = auth.repo_id.clone();
     let path = auth.token.parent_dir.clone();
-    let filename = auth
-        .token
-        .file_name
-        .clone()
-        .unwrap_or_else(|| "download".to_string());
 
     let dec_key = get_decryption_key_for_repo(&state, &repo_id, auth.user_id).await?;
 
@@ -314,8 +313,8 @@ pub async fn download_api(
 
     let disposition = crate::http::download::content_disposition(&filename, true);
     let range_header = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    // Canonical `/files/{token}/{name}` sets a validator from the object id, so
-    // repeat previews/downloads can revalidate instead of re-streaming.
+    // The token is unique per request, so the URL can be cached briefly; the
+    // block ids give a validator that changes with the content.
     let etag = crate::http::download::blocks_etag(&block_ids);
     Ok(crate::http::download::file_download_response(
         crate::http::download::FileDownloadParams {
@@ -329,7 +328,7 @@ pub async fn download_api(
             range_header: range_header.map(|s| s.to_string()),
             etag: Some(etag),
             head_only: false,
-            // The token is unique per request, so the URL can be cached briefly.
+            // seafile-server's `accessCB` sets `Cache-Control: max-age=3600`.
             cache: crate::http::download::CachePolicy::MaxAge(3600),
         },
         &headers,

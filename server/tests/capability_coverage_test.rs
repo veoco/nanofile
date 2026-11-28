@@ -149,14 +149,6 @@ const ROUTES: &[(&str, &str)] = &[
     ("POST",   "/api/admin/users/"),
     ("PUT",    "/api/admin/users/{user_id}/"),
     ("DELETE", "/api/admin/users/{user_id}/"),
-    // The Nanofile-only transfer endpoints: the token download and the progress
-    // shims are public to the table (they authenticate themselves or serve no
-    // user data); the session forms accept only a browser session.
-    ("GET",    "/api/transfers/download/{token}"),
-    ("POST",   "/api/transfers/upload/"),
-    ("POST",   "/api/transfers/update/"),
-    ("GET",    "/api/transfers/upload-progress/"),
-    ("GET",    "/api/transfers/index-progress/"),
     // The two extra surfaces that moved onto the Nanofile namespace: the avatar
     // image bytes (seahub's are under `/media/avatars/…`) and the pre-move
     // self-contained block URL (upstream's is `/blks/{token}/{block_id}`).
@@ -295,23 +287,8 @@ fn sensitive_routes_have_the_expected_access() {
             server::domain::capability::Capability::SearchReindex
         ))
     );
-    // The Nanofile-only transfer endpoints: the token download validates its own
-    // one-hour credential, the session forms take only the browser's session.
-    assert_eq!(
-        required_access("GET", "/api/transfers/download/abc"),
-        Some(RouteAccess::Public)
-    );
-    assert_eq!(
-        required_access("POST", "/api/transfers/upload/"),
-        Some(RouteAccess::SessionOnly)
-    );
-    // The avatar image bytes and the pre-move block URL are bearer surfaces: the
-    // image is unauthenticated by design (seahub's is too) and the block URL
-    // validates its own capability token, so neither can require a credential.
-    assert_eq!(
-        required_access("GET", "/api/avatars/user/a@b.c/resized/96/"),
-        Some(RouteAccess::Public)
-    );
+    // The pre-move block URL is a bearer surface: it validates its own
+    // capability token, so it cannot require a credential.
     assert_eq!(
         required_access("GET", "/api/transfers/blks/t/file/block"),
         Some(RouteAccess::Public)

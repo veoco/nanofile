@@ -426,7 +426,7 @@ async fn test_v1_download_reuse_validation() {
             .await;
         assert_eq!(resp.status(), 200, "reuse={reuse} must be accepted");
         let url: String = resp.json().await.unwrap();
-        assert!(url.contains("/api/transfers/download/"), "got {url}");
+        assert!(url.contains("/files/"), "got {url}");
     }
 
     let resp = f

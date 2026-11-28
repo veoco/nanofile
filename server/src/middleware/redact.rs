@@ -12,10 +12,7 @@ const TOKEN_PATH_PREFIXES: &[&str] = &[
     "u",
     "zip",
     "blks",
-    // `/api/transfers/download/{token}`; the generic segment also catches a
-    // logged download path, which is a harmless over-redaction.
-    "download",
-    "download-api",
+    "files",
     "upload-api",
     "upload-aj",
     "update-api",

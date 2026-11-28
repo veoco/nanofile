@@ -683,6 +683,7 @@ These routes are served but are not an operation in the official reference. Most
 | `GET /api/v2.1/repos/{repo_id}/file-uploaded-bytes/` | [docs](/reference/api/transfers#get-api-v2-1-repos-repo-id-file-uploaded-bytes) |
 | `GET /repos/{repo_id}/files/{*path}` | [docs](/reference/api/transfers#get-repos-repo-id-files-path) |
 | `GET /blks/{token}/{block_id}` | [docs](/reference/api/transfers#get-blks-token-block-id) |
+| `GET /files/{token}/{filename}` | [docs](/reference/api/transfers#get-files-token-filename) |
 | `GET /api2/repos/{repo_id}/upload-blks-link/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-upload-blks-link) |
 | `POST /api2/repos/{repo_id}/upload-blks-link/` | [docs](/reference/api/libraries#post-api2-repos-repo-id-upload-blks-link) |
 | `GET /api2/repos/{repo_id}/update-blks-link/` | [docs](/reference/api/libraries#get-api2-repos-repo-id-update-blks-link) |
@@ -722,7 +723,7 @@ Route-level rows cannot capture everything. These differences apply across the s
 - **Timestamps.** Most are Unix seconds. `search-file`'s `mtime` and `file/detail/`'s `last_modified` use RFC 3339, while `file/detail/`'s `mtime` stays Unix seconds; `dir/detail/` returns a number where seahub returns a string.
 - **Listings.** The legacy directory listing hides `_Internal`, sorts directories first by lowercased name, and reports the real `dir_perm`/`permission`; `?oid=` revalidation is not implemented.
 - **Search.** `/api/v2.1/search-file/` caps results at 200; `/api2/search/` ignores the Pro-only filters.
-- **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. The Nanofile-only session forms, the token download and the progress shims live under `/api/transfers/`. `zip-task` mints with `POST`.
+- **Transfers.** Upload/update links point at `/upload-api/` and `/update-api/` (no `/seafhttp/` prefix); clients use the returned URL verbatim. The download URL is the fileserver's `/files/{token}/{filename}` at the root. `zip-task` mints with `POST`.
 - **Block downloads.** `GET /blks/{token}/{block_id}` keeps the fileserver's two-segment shape: the token names the file, the path only the block. The earlier self-contained `/blks/{token}/{file_id}/{block_id}` moved to `/api/transfers/blks/{token}/{file_id}/{block_id}`; the old root spelling answers 404.
 - **Avatars.** The image bytes are served from `/api/avatars/user/{email}/resized/{size}/`; seahub serves them from `/media/avatars/…`, which this server does not implement. The old root `/avatars/…` spelling answers a permanent redirect.
 - **Share and upload pages.** The pages behind a link are `/f/{token}`, `/d/{token}`, `/d/{token}/files/{path}` and `/u/{token}`, where seahub uses `/u/d/{token}/` and `/d/{token}/files/?p=`. Links minted here use these shapes; a link copied from a Seafile deployment is not translated.

@@ -214,13 +214,13 @@ fn internal_links_resolve() {
 #[test]
 fn transfer_endpoints_are_documented() {
     // These routes are served by the root fileserver surface rather than by the
-    // classified `/api2/`/`/api/` namespaces, so `route_inventory()` cannot see
+    // classified `/api2/`/`/api/v2.1/` namespaces, so `route_inventory()` cannot see
     // them. They are the URLs the API hands out, so a page must keep documenting
-    // them. (The Nanofile-only transfer endpoints are classified now, so
-    // `every_classified_route_is_documented` covers them.)
+    // them.
     let expected: &[(&str, &str)] = &[
         ("GET", "/repos/{repo_id}/files/{path}"),
         ("GET", "/blks/{token}/{block_id}"),
+        ("GET", "/files/{token}/{filename}"),
         ("POST", "/upload-api/{token}"),
         ("POST", "/upload-aj/{token}"),
         ("POST", "/update-api/{token}"),

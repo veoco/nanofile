@@ -179,26 +179,36 @@ export function addToQueue(items) {
     });
 
     showProgressDialog();
-    fetchUploadToken(repoId).then(function () { processQueue(); });
+    fetchUploadToken(repoId).then(function () {
+        processQueue();
+    }).catch(function (e) {
+        failQueuedUploads(e);
+    });
+}
+
+function failQueuedUploads(error) {
+    uploadQueue.forEach(function (item) {
+        if (item.state !== 'pending') return;
+        item.state = 'error';
+        item.error = __t('pub.upload_error_init', { error: error.message });
+        item.xhr = null;
+    });
+    updateProgressDialog();
 }
 
 export async function fetchUploadToken(repoId) {
-    try {
-        var csrfToken = getCookie('sfcsrftoken');
-        var headers = {};
-        if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+    var csrfToken = getCookie('sfcsrftoken');
+    var headers = {};
+    if (csrfToken) headers['X-CSRFToken'] = csrfToken;
 
-        var resp = await fetch('/api2/repos/' + repoId + '/upload-link/?from=web', {
-            credentials: 'same-origin',
-            headers: headers,
-        });
-        if (resp.ok) {
-            var data = await resp.json();
-            uploadTokenUrl = data;
-        }
-    } catch (e) {
-        console.warn('Failed to fetch upload token:', e);
+    var resp = await fetch('/api2/repos/' + repoId + '/upload-link/?from=web', {
+        credentials: 'same-origin',
+        headers: headers,
+    });
+    if (!resp.ok) {
+        throw new Error('HTTP ' + resp.status);
     }
+    uploadTokenUrl = await resp.json();
 }
 
 export function processQueue() {
@@ -231,7 +241,7 @@ export function uploadItem(item) {
         return;
     }
 
-    var url = uploadTokenUrl || '/api/transfers/upload/';
+    var url = uploadTokenUrl;
 
     if (item.file.size >= CHUNK_UPLOAD_THRESHOLD) {
         uploadFileInChunks(item, url);
@@ -250,13 +260,7 @@ export function uploadFileDirect(item, url) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', uploadCtx.repoName);
-    if (!uploadTokenUrl) {
-        formData.append('repo_id', uploadCtx.repoId);
-        // No-token fallback authenticates with the session cookie, so it needs
-        // the double-submit CSRF token (the tokenized path carries a token).
-        var csrf = getCookie('sfcsrftoken');
-        if (csrf) formData.append('csrf_token', csrf);
-    }
+
     formData.append('file', item.file, item.name);
     formData.append('xhr', '1');
 
@@ -350,11 +354,7 @@ export function sendNextChunk(item, chunkIndex, totalChunks, retryCount) {
     var formData = new FormData();
     formData.append('parent_dir', item.parentDir);
     formData.append('repo_name', uploadCtx.repoName);
-    if (!uploadTokenUrl) {
-        formData.append('repo_id', uploadCtx.repoId);
-        var csrf = getCookie('sfcsrftoken');
-        if (csrf) formData.append('csrf_token', csrf);
-    }
+
     formData.append('file', chunk, item.name);
     formData.append('xhr', '1');
 

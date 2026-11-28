@@ -16,7 +16,6 @@ use crate::AppState;
 
 pub mod download;
 pub mod link_gate;
-pub mod progress;
 pub mod share_view;
 pub mod upload;
 pub mod upload_link_view;
@@ -65,6 +64,10 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/upload-aj/{token}", post(upload::upload_aj_token))
         .route("/upload-api/{token}", post(upload::upload_api))
+        // The fileserver's token-authenticated download URL: the API's
+        // `op=download` answer points at this path (seafile-server's
+        // `/files/{.*}/{.*}` route), so clients fetch it verbatim.
+        .route("/files/{token}/{filename}", get(download::files_download))
         // Raw file content, opened by a file-list link or the media preview element; it
         // belongs to the wire group because the page group's error middleware rewrites
         // 4xx bodies to HTML, which dropped `Content-Range` on a 416.
@@ -102,28 +105,12 @@ pub fn web_api_routes() -> Router<Arc<AppState>> {
         .route("/zip/{token}", get(zip_download::zip_download_handler))
 }
 
-/// The Nanofile-only transfer endpoints, mounted under `/api/transfers/`.
-///
-/// None of these paths exists in Seafile's fileserver or seahub route tables:
-/// the session upload/update forms, the token download (the fileserver serves
-/// `/files/{token}/{filename}` instead) and the two progress shims are this
-/// server's own additions. The token-upload family (`/upload-api/{token}`,
-/// `/upload-aj/{token}`, `/update-api/{token}`, the block endpoints) stays on the
-/// root because Seafile's own link endpoints mint those URLs and the official
-/// clients POST to them verbatim.
+/// The one surviving Nanofile-only transfer route, mounted under
+/// `/api/transfers/`: the pre-move self-contained block URL. The token download
+/// moved to the fileserver's `/files/{token}/{filename}`, and the session
+/// upload/update forms and progress shims are gone.
 pub fn nanofile_transfer_routes() -> Router<Arc<AppState>> {
     Router::new()
-        .route("/download/{token}", get(download::download_api))
-        // The no-token browser form: the session is the credential, so it has no
-        // Seafile counterpart.
-        .route("/upload/", post(upload::upload_aj))
-        // The session counterpart of `/update-api/{token}` and
-        // `/update-aj/{token}`; it accepts either target spelling.
-        .route("/update/", post(upload::update_session))
-        // Compatibility shims for the web interface's progress polling. Uploads
-        // are synchronous per request, so both always answer 100%.
-        .route("/upload-progress/", get(progress::upload_progress))
-        .route("/index-progress/", get(progress::idx_progress))
         // The self-contained block URL this server used to mint (file id in the
         // path). Seafile's shape is `/blks/{token}/{block_id}`, so the extra
         // segment lives here; links handed out before the move keep working for
